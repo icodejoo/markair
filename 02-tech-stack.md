@@ -75,7 +75,7 @@
 
 ---
 
-## 4. 代码块语法高亮选型 **[是否做 = 待用户确认]**
+## 4. 代码块语法高亮选型 **[已裁决 2026-09-16:做,M2 自研极简方案,见 01-requirements.md §8 #3]**
 
 | 选项 | 评估 | 结论 |
 |---|---|---|
@@ -96,7 +96,7 @@
 | 文件监听 | **ReadDirectoryChangesW** + 去抖 | 轮询 `GetFileTime`(功耗差)、FileSystemWatcher(非原生) |
 | 配置存储 | `%LOCALAPPDATA%\mdvn\state.ini`,自写 20 行 KV 解析 | 注册表(污染)、JSON 库(依赖)、TOML 库(依赖) |
 | 命令行/路径 | Win32 `PathCchCanonicalize` 等 shlwapi/pathcch | 自写路径规范化(易错) |
-| 单元测试 | **待定,倾向自写极简断言宏 + 一个 `mdvn_tests.exe`** | gtest/catch2 会给开发环境引入依赖,但只影响测试产物、不影响主 exe。**[待确认:是否接受引入测试框架]** |
+| 单元测试 | **自写极简断言宏 + 一个 `mdvn_tests.exe`**(已裁决 2026-09-16) | 引入 gtest/catch2 需要 vcpkg 或 submodule,会破坏本表最后一行"构建零外部依赖"的结论。见 01-requirements.md §8 #11 |
 | 构建 | CMake ≥ 3.20 + MSVC,`/MT` 静态 CRT,`/O2 /GL /Gy /Gw`,链接 `/OPT:REF /OPT:ICF /LTCG` | vcpkg/conan(项目零外部依赖,不需要) |
 
 ---
