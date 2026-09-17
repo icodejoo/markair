@@ -237,6 +237,18 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     // (parser.cpp 只在 is_task 为真时才 Push 该侧表,detailIdx 非法即非任务项)。
     // 勾选框画在原始左边界 x 处,自身文字整体右移让出空间;子块(嵌套列表/
     // 段落)缩进不受影响,仍从 childX(未右移的 x)起排。
+    // 松散列表(项间有空行)时,ListItem 自身没有直属行内内容,文字改由子
+    // Paragraph 块承载(见下方 hasOwnLeafContent 的判据)。勾选框/列表符号
+    // 占用的水平空间(下面写进 g.indent 或 g.listMarkerPad)只作用于"本块自己
+    // 画文字"这一种情况——子块默认仍从未偏移的 childX 起排,否则松散列表的
+    // 首段文字会紧贴在符号右边,毫无间距(T44 之后发现的真实 bug)。这里额外
+    // 记一份 listItemOwnContentPad,子块递归那一步按"是不是嵌套列表容器"分流:
+    // 嵌套列表(BulletList/OrderedList)保持不偏移(嵌套缩进只看 kListIndentUnitDip,
+    // 不应该再叠加父项符号的宽度,否则会破坏既有的嵌套缩进验收);其余子块
+    // (松散列表的延续段落、代码块等)按这份 pad 右移,对齐"紧凑列表本该有"的
+    // 文字起点。
+    float listItemOwnContentPad = 0.0f;
+
     bool isTaskItem = b.type == BlockType::ListItem && b.detailIdx != kInvalidIndex;
     if (isTaskItem) {
         const ListItemDetail& lid = doc_->listItemDetails[b.detailIdx];
@@ -247,6 +259,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
         g.taskCheckbox = LayoutRect{x, boxY, size, size};
         g.taskChecked = lid.taskChecked;
         g.indent = x + size + kCheckboxGapDip * fontScale_;
+        listItemOwnContentPad = size + kCheckboxGapDip * fontScale_;
     }
 
     // T44:列表符号——非任务列表项的 ListItem 才画(任务列表项已经在上面画了
@@ -267,6 +280,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
             float columnWidth = kOrderedMarkerColumnDip * fontScale_;
             g.listMarker = LayoutRect{x, y, columnWidth, lineHeight};
             g.listMarkerPad = columnWidth + kCheckboxGapDip * fontScale_;
+            listItemOwnContentPad = g.listMarkerPad;
         } else {
             // 无序列表:三档循环——第 1 层实心圆点,第 2 层空心圆,第 3 层(及之后
             // 再循环)实心方块,全部用 D2D 几何图元画,不依赖任何字体字形。
@@ -276,6 +290,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
             if (boxY < y) boxY = y;
             g.listMarker = LayoutRect{x, boxY, shapeSize, shapeSize};
             g.listMarkerPad = shapeSize + kCheckboxGapDip * fontScale_;
+            listItemOwnContentPad = g.listMarkerPad;
         }
     }
 
@@ -345,8 +360,18 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
         if (wroteSomething) cursor += kBlockVerticalGapDip * fontScale_;  // 兄弟块/自身内容之间留一份间距
         // 表格(T25/T26)整棵子树(TableHead/TableBody/TableRow/单元格)都由
         // LayoutTableSubtree 直接铺开几何,不再走这里的通用容器递归路径。
+        // 松散列表项的延续段落等"非嵌套列表"子块要按 listItemOwnContentPad
+        // 右移,对齐符号/勾选框让出的文字起点;嵌套列表容器(BulletList/
+        // OrderedList)保持不偏移,嵌套缩进只叠加 kListIndentUnitDip 这一份,
+        // 不重复叠加父项的符号宽度(否则会破坏既有嵌套缩进的验收断言)。
+        bool childIsListContainer = doc_->blocks[child].type == BlockType::BulletList ||
+                                     doc_->blocks[child].type == BlockType::OrderedList;
+        float thisChildX = (isListItem && listItemOwnContentPad > 0.0f && !childIsListContainer)
+                                ? childX + listItemOwnContentPad
+                                : childX;
+
         if (doc_->blocks[child].type == BlockType::Table) {
-            cursor = LayoutTableSubtree(child, childX, cursor);
+            cursor = LayoutTableSubtree(child, thisChildX, cursor);
         } else {
             bool childOrdered = false;
             u32 childOrdinal = 0;
@@ -359,7 +384,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
                     orderedOrdinalCounter++;
                 }
             }
-            cursor = LayoutSubtree(child, childX, cursor, nextInFootnote, childListDepth,
+            cursor = LayoutSubtree(child, thisChildX, cursor, nextInFootnote, childListDepth,
                                    childOrdered, childOrdinal, childDelim);
         }
         wroteSomething = true;
