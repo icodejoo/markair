@@ -80,17 +80,49 @@ void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
     // 有几率把刚设好的标题栏深色属性"冲掉"(非客户区重新走了一次默认主题
     // 解析,标题栏掉回浅色,而滚动条本身是对的)——先切好滚动条子应用主题,
     // 再设标题栏深浅色属性,标题栏这条更晚生效、不会被前者覆盖。
+    // 2026-09-17 真机反馈迭代记录(踩过的坑,别再踩第二次):
+    // ① 只用 `SWP_FRAMECHANGED` 不够——按 MSDN 它只是让窗口"重新计算"非客户区
+    //   (相当于发一次 WM_NCCALCSIZE),不保证立刻真正重绘到屏幕,标题栏经常要
+    //   等下一次真实失焦/获焦才显现新颜色,期间正文已先变色,肉眼看到错位。
+    // ② 补 `RedrawWindow(..., RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW |
+    //   RDW_ALLCHILDREN)`(不带 RDW_ERASE):标题栏/滚动条底色变对了,但标题
+    //   文字背后残留一小块旧主题色的方框("鬼影",ClearType 抗锯齿字形是按
+    //   旧背景色预先混合好的位图)。
+    // ③ 加 `RDW_ERASE` 想先擦再画,结果整个标题栏连底色都不再跟着变了。
+    // ④ 改用 `WM_NCACTIVATE FALSE→TRUE` 模拟一次失焦再获焦,同样导致标题栏
+    //   彻底不刷新。
+    // ⑤ 在 `DwmSetWindowAttribute` **之后**发 `WM_THEMECHANGED`,结果标题栏
+    //   又整个不跟着变了——用 foreground 校验过的真实截图逐帧核实后判断:
+    //   `WM_THEMECHANGED` 会让 DWM 按系统默认主题重新核算非客户区外观,若这
+    //   一步排在 `DwmSetWindowAttribute` 之后,等于把刚设好的显式深浅色属性
+    //   冲掉、退回系统默认(本机系统主题是浅色,于是标题栏总被冲回浅色)。
+    // ⑥ 最终方案:把 `WM_THEMECHANGED` 挪到 `DwmSetWindowAttribute` **之前**
+    //   ——先让系统按旧状态刷一遍主题资源(顺带解决②的文字鬼影,因为它会
+    //   连非客户区文字合成缓存一起清掉),`DwmSetWindowAttribute` 作为最后
+    //   一步显式定调,不会再被后续任何调用覆盖;再补 `SWP_FRAMECHANGED` +
+    //   `RedrawWindow(RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW|RDW_ALLCHILDREN)`
+    //   把这个最终状态立刻画出来。
     SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    SendMessageW(hwnd, WM_THEMECHANGED, 0, 0);
     BOOL enable = isDark ? TRUE : FALSE;
     HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkMode, &enable, sizeof(enable));
     if (hr != S_OK) {
         DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
     }
-    // 无条件强制刷新非客户区——不只是标题栏属性变化需要,SetWindowTheme 换了
-    // 滚动条子应用主题同样需要一次真正的重绘才会体现,不能只在 DWM 调用成功
-    // 时才刷新。
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RedrawWindow(hwnd, nullptr, nullptr,
+                  RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN);
+}
+
+// T47/T48:主题三态循环的核心动作,抽成一个函数供 Ctrl+Shift+T 复用——只改
+// 指针 + 触发重绘,不做任何重排/重建。
+void CycleTheme(HWND hwnd, WindowState* state) {
+    state->themeSetting = NextThemeSetting(state->themeSetting);
+    bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
+    state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
+    ApplyTitleBarTheme(hwnd, isDark);
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // 取窗口当前的 DPI 缩放系数(实际 DPI / 96);系统不支持按窗口查 DPI 时回退 1.0。
@@ -820,11 +852,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // WNDCLASS),热切换时不改也改不了,只影响"D2D 内容重绘之前"那一瞬间
         // (比如 resize 来不及重绘的边角),不在这里处理。
         if (ctrlDown && shiftDown && wparam == 'T' && state && state->renderer) {
-            state->themeSetting = NextThemeSetting(state->themeSetting);
-            bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
-            state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
-            ApplyTitleBarTheme(hwnd, isDark);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            CycleTheme(hwnd, state);
             return 0;
         }
         ScrollCommand command = ScrollCommand::Home;
