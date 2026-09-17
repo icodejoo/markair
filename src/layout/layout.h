@@ -118,6 +118,11 @@ struct BlockGeometry {
     // 留白已经体现在文本排版宽度收窄/块高度里,不需要额外几何字段。仅代码块
     // 非零,其余类型恒为 0。
     float textPad;
+    // 围栏/缩进代码块右上角的"复制"按钮矩形(相对文档,DIP):画在
+    // codeBackground 的右上角、四周各留一份内边距,正方形。仅 CodeBlock 非零,
+    // 其余块类型恒为全 0 —— 表格/引用块等不提供这个按钮。渲染见
+    // renderer.cpp::DrawCodeCopyButton,命中见 hit_test.h::FindCodeCopyButtonAt。
+    LayoutRect codeCopyButton;
 };
 
 /**

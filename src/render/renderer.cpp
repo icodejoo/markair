@@ -92,6 +92,31 @@ constexpr float kPlaceholderIconCornerRadiusDip = 3.0f;
 constexpr float kPlaceholderIconCenterYRatio = 0.38f;  // 图标中心相对占位块高度的位置,偏上给下方文案留空间
 constexpr float kPlaceholderIconTextGapDip = 6.0f;     // 图标底边到文案顶边的间距
 
+// T45 代码块复制按钮:图标线条色(中性灰)、悬浮底色(比代码块背景更深一档的
+// 浅灰,底色一出现就是明确的悬浮反馈)、图标"纸面"填充色(与页面底色一致,
+// 让两张纸的叠压关系看得出来)、已复制反馈色(绿色对勾,与任务勾选框同一绿系)。
+D2D1_COLOR_F CodeCopyIconColor() { return D2D1::ColorF(0x6A737Du); }
+D2D1_COLOR_F CodeCopyHoverBackgroundColor() { return D2D1::ColorF(0xD8DEE4u); }
+D2D1_COLOR_F CodeCopyPaperColor() { return D2D1::ColorF(0xFFFFFFu); }
+D2D1_COLOR_F CodeCopyDoneColor() { return D2D1::ColorF(0x22863Au); }
+
+// T45 复制按钮的几何比例(相对按钮边长,0~1):两张"纸"的位置与大小、圆角、
+// 线宽。按钮边长由布局层决定(kCodeCopyButtonSizeDip),这里只按比例换算,
+// 保证字号缩放时图标跟着等比放大。
+constexpr float kCopyButtonCornerRadiusRatio = 0.20f;
+constexpr float kCopyBackSheetLeftRatio = 0.20f;
+constexpr float kCopyBackSheetTopRatio = 0.14f;
+constexpr float kCopyBackSheetRightRatio = 0.68f;
+constexpr float kCopyBackSheetBottomRatio = 0.62f;
+constexpr float kCopyFrontSheetLeftRatio = 0.34f;
+constexpr float kCopyFrontSheetTopRatio = 0.32f;
+constexpr float kCopyFrontSheetRightRatio = 0.84f;
+constexpr float kCopyFrontSheetBottomRatio = 0.86f;
+constexpr float kCopySheetCornerRadiusRatio = 0.10f;
+constexpr float kCopyStrokeWidthRatio = 0.075f;
+// 已复制态对勾的三个折点(相对按钮边长)与线宽比例,画法同任务列表勾选框。
+constexpr float kCopyCheckStrokeWidthRatio = 0.13f;
+
 // T38 查找命中高亮:普通命中用半透明淡黄底,当前命中用半透明橙底区分。
 // 只画在文本**下方**(先填底再画字),因此不改变任何文本颜色,与 T24 的链接蓝互不干扰。
 D2D1_COLOR_F FindHighlightColor() { return D2D1::ColorF(0xFFE066u, 0.55f); }
@@ -534,6 +559,61 @@ void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
     }
 }
 
+void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float scrollY,
+                                   ID2D1SolidColorBrush* iconBrush,
+                                   ID2D1SolidColorBrush* hoverBgBrush,
+                                   ID2D1SolidColorBrush* paperBrush,
+                                   ID2D1SolidColorBrush* doneBrush) {
+    if (g.codeCopyButton.width <= 0.0f) return;
+
+    bool hovered = overlay_ && overlay_->copyButtonHoverBlock == blockIndex;
+    bool copied = overlay_ && overlay_->copyButtonCopiedBlock == blockIndex;
+
+    float left = g.codeCopyButton.x;
+    float top = g.codeCopyButton.y - scrollY;
+    float size = g.codeCopyButton.width;
+    D2D1_RECT_F box = D2D1::RectF(left, top, left + size, top + g.codeCopyButton.height);
+    float buttonRadius = size * kCopyButtonCornerRadiusRatio;
+    D2D1_ROUNDED_RECT roundedBox = D2D1::RoundedRect(box, buttonRadius, buttonRadius);
+    float stroke = size * kCopyStrokeWidthRatio;
+
+    if (copied) {
+        // 已复制:绿色边框 + 绿色对勾,与默认/悬浮两态一眼可分。
+        if (!doneBrush) return;
+        target_->DrawRoundedRectangle(roundedBox, doneBrush, stroke);
+        D2D1_POINT_2F p1 = D2D1::Point2F(left + size * 0.24f, top + size * 0.52f);
+        D2D1_POINT_2F p2 = D2D1::Point2F(left + size * 0.44f, top + size * 0.72f);
+        D2D1_POINT_2F p3 = D2D1::Point2F(left + size * 0.78f, top + size * 0.28f);
+        float checkStroke = size * kCopyCheckStrokeWidthRatio;
+        target_->DrawLine(p1, p2, doneBrush, checkStroke);
+        target_->DrawLine(p2, p3, doneBrush, checkStroke);
+        return;
+    }
+
+    // 悬浮:先铺一层浅灰圆角底,盖住代码块背景,底色本身就是悬浮反馈。
+    if (hovered && hoverBgBrush) target_->FillRoundedRectangle(roundedBox, hoverBgBrush);
+
+    if (!iconBrush) return;
+
+    // "复制"图标 = 两张叠压的圆角纸:后面那张只露出左上一角,前面那张先用
+    // 纸面色填实再描边,叠压关系因此清晰可辨(纯几何,不依赖任何字体字形)。
+    float sheetRadius = size * kCopySheetCornerRadiusRatio;
+    D2D1_ROUNDED_RECT backSheet = D2D1::RoundedRect(
+        D2D1::RectF(left + size * kCopyBackSheetLeftRatio, top + size * kCopyBackSheetTopRatio,
+                    left + size * kCopyBackSheetRightRatio,
+                    top + size * kCopyBackSheetBottomRatio),
+        sheetRadius, sheetRadius);
+    D2D1_ROUNDED_RECT frontSheet = D2D1::RoundedRect(
+        D2D1::RectF(left + size * kCopyFrontSheetLeftRatio, top + size * kCopyFrontSheetTopRatio,
+                    left + size * kCopyFrontSheetRightRatio,
+                    top + size * kCopyFrontSheetBottomRatio),
+        sheetRadius, sheetRadius);
+
+    target_->DrawRoundedRectangle(backSheet, iconBrush, stroke);
+    if (paperBrush) target_->FillRoundedRectangle(frontSheet, paperBrush);
+    target_->DrawRoundedRectangle(frontSheet, iconBrush, stroke);
+}
+
 void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush) {
     if (g.listMarker.width <= 0.0f || !markerBrush) return;
 
@@ -790,7 +870,11 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* badgeBgBrush,
                           ID2D1SolidColorBrush* badgeTextBrush,
                           ID2D1SolidColorBrush* findHighlightBrush,
-                          ID2D1SolidColorBrush* findCurrentBrush) {
+                          ID2D1SolidColorBrush* findCurrentBrush,
+                          ID2D1SolidColorBrush* copyIconBrush,
+                          ID2D1SolidColorBrush* copyHoverBgBrush,
+                          ID2D1SolidColorBrush* copyPaperBrush,
+                          ID2D1SolidColorBrush* copyDoneBrush) {
     // 围栏代码块背景:先画背景,再画文本,避免文本被背景矩形盖住。
     // 4 DIP 圆角,与常见 Markdown 渲染器的代码块风格保持一致。
     if (g.type == BlockType::CodeBlock && codeBgBrush) {
@@ -862,6 +946,13 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
         DrawImages(g, scrollY, textBrush, placeholderBgBrush, placeholderBorderBrush,
                    badgeBgBrush, badgeTextBrush);
     }
+
+    // 代码块复制按钮(T45):最后画,浮在代码块背景与代码文字之上——命中测试
+    // 里它同样最优先(见 hit_test.cpp),视觉层级与交互层级保持一致。
+    if (g.type == BlockType::CodeBlock) {
+        DrawCodeCopyButton(g, blockIndex, scrollY, copyIconBrush, copyHoverBgBrush,
+                            copyPaperBrush, copyDoneBrush);
+    }
 }
 
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
@@ -888,6 +979,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* findCurrentBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarBgBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* copyIconBrush = nullptr;
+    ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
+    ID2D1SolidColorBrush* copyPaperBrush = nullptr;
+    ID2D1SolidColorBrush* copyDoneBrush = nullptr;
     target_->CreateSolidColorBrush(TextColor(), &textBrush);
     target_->CreateSolidColorBrush(QuoteBarColor(), &quoteBrush);
     target_->CreateSolidColorBrush(CodeBackgroundColor(), &codeBgBrush);
@@ -905,6 +1000,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(FindCurrentHighlightColor(), &findCurrentBrush);
     target_->CreateSolidColorBrush(OverlayBarBackgroundColor(), &overlayBarBgBrush);
     target_->CreateSolidColorBrush(OverlayBarTextColor(), &overlayBarTextBrush);
+    target_->CreateSolidColorBrush(CodeCopyIconColor(), &copyIconBrush);
+    target_->CreateSolidColorBrush(CodeCopyHoverBackgroundColor(), &copyHoverBgBrush);
+    target_->CreateSolidColorBrush(CodeCopyPaperColor(), &copyPaperBrush);
+    target_->CreateSolidColorBrush(CodeCopyDoneColor(), &copyDoneBrush);
 
     D2D1_SIZE_F targetSize = target_->GetSize();
     // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
@@ -927,7 +1026,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                   textBrush, quoteBrush, codeBgBrush, hrBrush, linkBrush,
                   tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
                   placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
-                  findHighlightBrush, findCurrentBrush);
+                  findHighlightBrush, findCurrentBrush,
+                  copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush);
     }
 
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
@@ -966,6 +1066,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (findCurrentBrush) findCurrentBrush->Release();
     if (overlayBarBgBrush) overlayBarBgBrush->Release();
     if (overlayBarTextBrush) overlayBarTextBrush->Release();
+    if (copyIconBrush) copyIconBrush->Release();
+    if (copyHoverBgBrush) copyHoverBgBrush->Release();
+    if (copyPaperBrush) copyPaperBrush->Release();
+    if (copyDoneBrush) copyDoneBrush->Release();
 
     overlay_ = nullptr;  // 本帧结束,不再持有外壳层传进来的视图
 

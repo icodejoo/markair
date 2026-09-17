@@ -430,6 +430,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     findScratch.Init(16 * 1024 * 1024);
     mdvn::FindSession find(&findArena, &findScratch);
 
+    // T45:代码块复制按钮拼接剪贴板文本用的临时 Arena(每次复制前整体 Reset)。
+    // 单独一块而不是复用 imageScratch/findScratch,是为了不让"复制一次代码块"
+    // 这个动作把别人正在用的临时缓冲抹掉。
+    mdvn::Arena clipboardScratch;
+    clipboardScratch.Init(16 * 1024 * 1024);
+
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
     mdvn::WindowState windowState{
         &fonts, &layout, &doc, &renderer, 0.0f,
@@ -440,7 +446,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // (T44 修复,见 BenchTargetWantsFullDecode 注释);正常运行(双击打开
         // 文件/无 --bench)和 BENCH-A 这类非图片密集场景,此字段均为 false,
         // 首屏虚拟化行为与之前完全一致。
-        benchArgs.benchEnabled && BenchTargetWantsFullDecode(benchArgs.filePath)};
+        benchArgs.benchEnabled && BenchTargetWantsFullDecode(benchArgs.filePath),
+        // T45:剪贴板拼接 Arena;后面两个复制按钮状态字段由 CreateMainWindow
+        // 统一初始化成 kInvalidIndex,这里留给聚合初始化补零即可。
+        &clipboardScratch};
 
     if (!mdvn::RegisterMainWindowClass(hInstance)) {
         if (argv) LocalFree(argv);

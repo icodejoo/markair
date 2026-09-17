@@ -23,7 +23,8 @@ class Renderer;
  * @example
  *   mdvn::ShellOverlay overlay{find.Matches().data, find.MatchCount(),
  *                               find.CurrentIndex(), &doc, find.Visible(),
- *                               find.Query(), nullptr};
+ *                               find.Query(), nullptr,
+ *                               mdvn::kInvalidIndex, mdvn::kInvalidIndex};
  *   renderer.RenderFrame(hwnd, layout, scrollY, 12.0f, &overlay);
  */
 struct ShellOverlay {
@@ -34,6 +35,11 @@ struct ShellOverlay {
     bool findBarVisible;           // 顶部查找条是否可见
     const wchar_t* findQuery;      // 查找条里的查询串(以 '\0' 结尾),可为 nullptr
     const wchar_t* statusMessage;  // 窗口内提示(如"文件不存在"),可为 nullptr;不弹 MessageBox
+    // T45 代码块复制按钮的两种瞬时态,都是"块下标",`kInvalidIndex` 表示没有。
+    // 外壳层零初始化 ShellOverlay 时务必显式写成 kInvalidIndex —— 0 会被当成
+    // "第 0 个块的按钮处于该状态"。
+    u32 copyButtonHoverBlock;      // 鼠标当前悬浮的复制按钮所属块
+    u32 copyButtonCopiedBlock;     // 处于"已复制"反馈态的复制按钮所属块
 };
 
 /**
@@ -264,7 +270,22 @@ private:
                     ID2D1SolidColorBrush* badgeBgBrush,
                     ID2D1SolidColorBrush* badgeTextBrush,
                     ID2D1SolidColorBrush* findHighlightBrush,
-                    ID2D1SolidColorBrush* findCurrentBrush);
+                    ID2D1SolidColorBrush* findCurrentBrush,
+                    ID2D1SolidColorBrush* copyIconBrush,
+                    ID2D1SolidColorBrush* copyHoverBgBrush,
+                    ID2D1SolidColorBrush* copyPaperBrush,
+                    ID2D1SolidColorBrush* copyDoneBrush);
+
+    // 画代码块右上角的"复制"按钮(T45):纯 D2D 几何,零图标字体零位图。
+    // 三态视觉区分——默认态只画灰色双层纸张轮廓;悬浮态先铺一层浅灰圆角底、
+    // 图标不变(底色出现即反馈);已复制态换成绿色对勾 + 绿色圆角边框。
+    // 悬浮/已复制两种状态从 overlay_ 里按块下标读(见 ShellOverlay 的两个字段),
+    // 没有 overlay 时一律按默认态画。
+    void DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float scrollY,
+                             ID2D1SolidColorBrush* iconBrush,
+                             ID2D1SolidColorBrush* hoverBgBrush,
+                             ID2D1SolidColorBrush* paperBrush,
+                             ID2D1SolidColorBrush* doneBrush);
 
     // 画一个块内的全部图片(T33):缓存里有位图就 DrawBitmap,否则画统一样式的
     // 占位块(灰底圆角矩形 + 居中文案);画完位图后若该图被降采样过,再叠加

@@ -34,6 +34,11 @@ constexpr float kCodeBlockRightMarginDip = 16.0f;
 // fontScale_ 缩放。
 constexpr float kCodeBlockPaddingDip = 8.0f;
 
+// 代码块右上角"复制"按钮的边长(DIP,未缩放前),随 fontScale_ 缩放;按钮与
+// 背景矩形四边的留白直接复用 kCodeBlockPaddingDip(与代码文字同一档内边距,
+// 视觉上按钮与首行文字上沿对齐)。
+constexpr float kCodeCopyButtonSizeDip = 20.0f;
+
 // 块与块之间的垂直间距。
 constexpr float kBlockVerticalGapDip = 8.0f;
 
@@ -200,6 +205,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     g.textLayout = nullptr;
     g.quoteBar = LayoutRect{0, 0, 0, 0};
     g.codeBackground = LayoutRect{0, 0, 0, 0};
+    g.codeCopyButton = LayoutRect{0, 0, 0, 0};
     g.linkBoxes = Span<LinkBox>{nullptr, 0};
     g.imageBoxes = Span<ImageBox>{nullptr, 0};
     g.tableColWidths = Span<float>{nullptr, 0};
@@ -400,6 +406,14 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
         float bgWidth = viewportWidth_ - x - kCodeBlockRightMarginDip;
         if (bgWidth < 0.0f) bgWidth = 0.0f;
         g.codeBackground = LayoutRect{x, g.top, bgWidth, g.bottom - g.top};
+
+        // 复制按钮:贴在背景矩形右上角,离右边/上边各一份 kCodeBlockPaddingDip。
+        // 背景太窄(窗口被拖得极窄)时把按钮夹回背景左边界内,不画到背景外面去。
+        float buttonSize = kCodeCopyButtonSizeDip * fontScale_;
+        float buttonX = g.codeBackground.x + g.codeBackground.width - kCodeBlockPaddingDip - buttonSize;
+        if (buttonX < g.codeBackground.x) buttonX = g.codeBackground.x;
+        g.codeCopyButton =
+            LayoutRect{buttonX, g.top + kCodeBlockPaddingDip, buttonSize, buttonSize};
     }
 
     return g.bottom;

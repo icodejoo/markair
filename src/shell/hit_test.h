@@ -14,9 +14,10 @@ namespace mdvn {
 
 /** 一次命中测试的结果种类。 */
 enum class HitKind : u8 {
-    None,  // 没命中任何可交互内容(块间隙、行尾空白、纯装饰区域)
-    Link,  // 命中链接/自动链接 run
-    Image, // 命中图片或可点击的图片占位块
+    None,           // 没命中任何可交互内容(块间隙、行尾空白、纯装饰区域)
+    Link,           // 命中链接/自动链接 run
+    Image,          // 命中图片或可点击的图片占位块
+    CodeCopyButton, // 命中代码块右上角的复制按钮(T45),blockIndex 即该代码块
 };
 
 /** 一次命中测试的完整结果。 */
@@ -84,6 +85,21 @@ u32 FindContentBlockAt(const BlockGeometry* geometries, u32 count, float docX, f
 u32 FindImageBoxAt(const ImageBox* boxes, u32 count, float docX, float docY);
 
 /**
+ * 纯几何命中:哪个代码块的复制按钮(T45)包含指定文档坐标。
+ *
+ * 单独暴露出来是为了给"鼠标移动只更新悬浮态"这条高频路径用 —— 它不需要
+ * `HitTestDocument` 里的 DirectWrite 文本命中,纯矩形判定,零 COM 调用。
+ *
+ * @param geometries 块几何数组,非空。
+ * @param count 数组长度。
+ * @param docX 文档坐标 x(DIP)。
+ * @param docY 文档坐标 y(DIP)。
+ * @return 命中的代码块下标;没命中返回 `kInvalidIndex`。
+ * @example u32 b = mdvn::FindCodeCopyButtonAt(&layout.Geometry(0), layout.BlockCount(), x, y);
+ */
+u32 FindCodeCopyButtonAt(const BlockGeometry* geometries, u32 count, float docX, float docY);
+
+/**
  * 纯查表:某个 UTF-16 文本位置落在哪个链接 run 上。
  *
  * 半开区间 `[textPosition, textPosition + textLength)` —— 正好落在 run 末尾的位置
@@ -99,8 +115,9 @@ u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition);
 
 /**
  * 整份布局的命中测试:先按几何定位块,再在该块的 `IDWriteTextLayout` 上调用
- * `HitTestPoint` 拿到 UTF-16 位置,最后查链接 run 表。图片优先于文本命中
- * (图片矩形本身就是一块独立的可点击区域)。
+ * `HitTestPoint` 拿到 UTF-16 位置,最后查链接 run 表。代码块复制按钮最优先
+ * (它浮在代码块之上),其次图片(图片矩形本身就是一块独立的可点击区域),
+ * 最后才是文本。
  *
  * @param layout 已完成 `Relayout` / `UpdateVisibleRange` 的布局引擎。
  * @param docX 文档坐标 x(DIP)。
@@ -113,7 +130,7 @@ u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition);
 HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float docY);
 
 /**
- * 命中结果是否应当显示手型光标(链接与可点击的图片/占位块)。
+ * 命中结果是否应当显示手型光标(链接、可点击的图片/占位块、代码块复制按钮)。
  * @param hit 命中结果。
  * @return 需要手型光标返回 true。
  * @example if (mdvn::ShouldUseHandCursor(hit)) SetCursor(handCursor);

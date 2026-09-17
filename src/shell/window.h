@@ -18,6 +18,7 @@
 #include "../layout/layout.h"
 #include "../render/renderer.h"
 #include "../text/font.h"
+#include "clipboard.h"
 #include "find.h"
 #include "hit_test.h"
 #include "navigate.h"
@@ -81,6 +82,16 @@ struct WindowState {
     // 测量口径(--bench 模式本身不模拟真实滚动,这是唯一的替代)。为 false(默认)
     // 时不产生任何额外调用,非 bench 场景行为与之前完全一致。
     bool benchForceFullDecode;
+
+    // T45 代码块复制按钮:拼接剪贴板文本用的临时 Arena(每次复制前整体 Reset)。
+    // 为空时点击复制按钮静默无行为,其余功能不受影响。
+    Arena* clipboardScratch;
+
+    // T45 复制按钮的两种瞬时交互态,都由 `CreateMainWindow` 初始化成
+    // `kInvalidIndex`("没有任何按钮处于该状态"),调用方不必自行填写。
+    // 这两个字段直接喂给 `ShellOverlay` 的同名字段供渲染层分三态绘制。
+    u32 copyButtonHover;   // 鼠标当前悬浮的复制按钮所属块下标
+    u32 copyButtonCopied;  // 处于"已复制"反馈态的复制按钮所属块下标
 };
 
 /**
@@ -116,7 +127,8 @@ bool RegisterMainWindowClass(HINSTANCE instance);
  * @param instance 当前进程实例句柄。
  * @param title 窗口标题(UTF-16,非空)。
  * @param state 运行期状态,生命周期须覆盖整个消息循环;函数内部会把
- *              `scrollY`/`firstPresentDone` 归零,其余字段由调用方填好。
+ *              `scrollY`/`firstPresentDone` 归零、把两个 `copyButtonXxx`
+ *              置为 `kInvalidIndex`,其余字段由调用方填好。
  *              `onWindowCreated` 会在窗口创建成功、显示之前被调用一次
  *              (若非空)。
  * @return 创建成功返回窗口句柄,失败返回 nullptr。
@@ -124,7 +136,11 @@ bool RegisterMainWindowClass(HINSTANCE instance);
  *   mdvn::WindowState state{&fonts, &layout, &doc, &renderer, 0.0f,
  *                            &images, &residency, &remote, &temps, &imgArena, docDir,
  *                            &find, nullptr, &OpenDocumentInPlace,
- *                            nullptr, nullptr, nullptr, false};
+ *                            nullptr, nullptr, nullptr, false, false, &clipScratch};
+ *   // 末尾依次是 onWindowCreated/onFirstPresent/callbackUserData=nullptr、
+ *   // firstPresentDone=false(会被下面这行归零)、benchForceFullDecode=false、
+ *   // clipboardScratch=&clipScratch;两个 copyButtonXxx 留给聚合初始化补零,
+ *   // CreateMainWindow 内部会把它们改写成 kInvalidIndex,不需要调用方填。
  *   HWND hwnd = mdvn::CreateMainWindow(hInstance, L"mdvn", &state);
  */
 HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state);

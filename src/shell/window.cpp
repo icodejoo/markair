@@ -22,6 +22,12 @@ constexpr int kBaselineDpi = 96;
 // 这里自行定义,避免依赖特定 SDK 版本的头文件宏。
 constexpr INT_PTR kDpiAwarenessContextPerMonitorV2 = -4;
 
+// T45 代码块复制按钮的"已复制"反馈:定时器 ID 与持续时长(毫秒)。
+// 用一次性 SetTimer 而不是记时间戳 + 每帧比对,是因为反馈态本身要在没有任何
+// 鼠标/键盘输入的情况下自动消失 —— 只有定时器能主动把重绘请求送进消息循环。
+constexpr UINT_PTR kCopyFeedbackTimerId = 1;
+constexpr UINT kCopyFeedbackDurationMs = 2000;
+
 // 窗口类是否已注册成功,保证 RegisterMainWindowClass 幂等(POD 全局,零初始化)。
 bool g_classRegistered = false;
 
@@ -158,16 +164,57 @@ void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = f
 
 // T35:把一次鼠标事件翻译成命中结果(链接 / 图片 / 什么都没命中)。
 // 坐标换算与命中判定全部委托给 shell/hit_test.h 的纯函数,这里只负责取 DPI。
+// 客户区物理像素坐标 -> 文档坐标(DIP)。内容整体因内边距向右下平移了
+// kContentPaddingDip(渲染时的水平 SetTransform + effectiveScrollY),任何
+// 命中判定都必须用这同一套换算,否则点击位置会和视觉内容错位。
+DocPoint ClientToDocumentPoint(HWND hwnd, const WindowState* state, int px, int py) {
+    float effectiveScrollY = state->scrollY - kContentPaddingDip;
+    DocPoint p = ClientToDocument(px, py, DipScaleOf(hwnd), effectiveScrollY);
+    p.x -= kContentPaddingDip;
+    return p;
+}
+
 HitResult HitTestAtClientPoint(HWND hwnd, WindowState* state, int px, int py) {
     if (!state || !state->layout) {
         return HitResult{HitKind::None, kInvalidIndex, kInvalidIndex, kInvalidIndex};
     }
-    // 内容整体因内边距向右下平移了 kContentPaddingDip(渲染时的水平 SetTransform
-    // + effectiveScrollY),命中测试必须用同一套换算,否则点击位置会和视觉内容错位。
-    float effectiveScrollY = state->scrollY - kContentPaddingDip;
-    DocPoint p = ClientToDocument(px, py, DipScaleOf(hwnd), effectiveScrollY);
-    p.x -= kContentPaddingDip;
+    DocPoint p = ClientToDocumentPoint(hwnd, state, px, py);
     return HitTestDocument(*state->layout, p.x, p.y);
+}
+
+// T45:鼠标位置落在哪个代码块的复制按钮上(纯矩形判定,不走 DirectWrite 文本
+// 命中)。WM_MOUSEMOVE 是高频消息,悬浮态只需要这一份廉价判定,不必为此每次
+// 都跑一遍完整的 HitTestDocument。
+u32 CodeCopyButtonAtClientPoint(HWND hwnd, const WindowState* state, int px, int py) {
+    if (!state || !state->layout) return kInvalidIndex;
+    u32 count = state->layout->BlockCount();
+    if (count == 0) return kInvalidIndex;
+    DocPoint p = ClientToDocumentPoint(hwnd, state, px, py);
+    return FindCodeCopyButtonAt(&state->layout->Geometry(0), count, p.x, p.y);
+}
+
+// T45:鼠标移动 -> 更新复制按钮悬浮态。**只在悬浮目标真正发生变化时才
+// InvalidateRect**,否则在代码块上随便动一下鼠标就会全窗口重绘一次。
+void UpdateCopyButtonHover(HWND hwnd, WindowState* state, int px, int py) {
+    if (!state) return;
+    u32 hover = CodeCopyButtonAtClientPoint(hwnd, state, px, py);
+    if (hover == state->copyButtonHover) return;
+    state->copyButtonHover = hover;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// T45:点击复制按钮 -> 拼出该代码块纯文本写进剪贴板,进入"已复制"反馈态,
+// 并起一个一次性定时器在 kCopyFeedbackDurationMs 之后清掉反馈态。
+// 复制失败(剪贴板被占用等)时不进反馈态,避免给出与事实不符的视觉确认。
+void OnCodeCopyButtonClicked(HWND hwnd, WindowState* state, u32 blockIndex) {
+    if (!state || !state->doc || !state->clipboardScratch) return;
+    if (!CopyCodeBlockToClipboard(hwnd, *state->doc, blockIndex, state->clipboardScratch)) return;
+
+    state->copyButtonCopied = blockIndex;
+    // 同一个定时器 ID 重复 SetTimer 会重置计时(不会堆积多个定时器),
+    // 因此连续点多个按钮时只有最后一次的反馈态,时长也从最后一次重新算。
+    SetTimer(hwnd, kCopyFeedbackTimerId, kCopyFeedbackDurationMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // 按命中结果取回对应的 ImageBox;不是图片命中时返回 nullptr。
@@ -271,6 +318,11 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
         if (ok) {
             // 新文档从头开始看;旧文档的查找结果指向的是旧的块下标,必须一并作废。
             if (state->find) state->find->Close();
+            // T45:复制按钮的悬浮/已复制态同样是按旧文档的块下标记的,换文档后
+            // 那个下标在新文档里可能是别的块,必须一并作废。
+            state->copyButtonHover = kInvalidIndex;
+            state->copyButtonCopied = kInvalidIndex;
+            KillTimer(hwnd, kCopyFeedbackTimerId);
             // forceRefresh=true:新文档的 layout 已整个换掉,即使数值上恰好还是
             // 0.0f 也必须重新跑一次 UpdateVisibleRange,不能被"没变化"短路掉。
             SetScrollY(hwnd, state, 0.0f, /*forceRefresh=*/true);
@@ -377,8 +429,16 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     // T37/T38:把查找命中集合与查找条/提示条打包成只读视图交给渲染层;
     // 两者都没有时传 nullptr,渲染层零额外开销。
     ShellOverlay overlay{};
+    overlay.copyButtonHoverBlock = kInvalidIndex;
+    overlay.copyButtonCopiedBlock = kInvalidIndex;
     const ShellOverlay* overlayPtr = nullptr;
-    if (state->find || state->statusMessage) {
+    bool hasCopyButtonState =
+        state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
+    if (state->find || state->statusMessage || hasCopyButtonState) {
+        // T45:复制按钮的悬浮/已复制态同样通过叠加层视图交给渲染层,渲染层
+        // 因此不需要认识"外壳层状态"这个概念(与查找高亮同一条通路)。
+        overlay.copyButtonHoverBlock = state->copyButtonHover;
+        overlay.copyButtonCopiedBlock = state->copyButtonCopied;
         if (state->find) {
             Span<const Match> matches = state->find->Matches();
             overlay.matches = matches.data;
@@ -505,6 +565,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (state && state->layout) {
             HitResult hit = HitTestAtClientPoint(hwnd, state, GET_X_LPARAM(lparam),
                                                   GET_Y_LPARAM(lparam));
+            // T45:代码块复制按钮走与链接同一个消息(WM_LBUTTONDOWN),保持
+            // 全窗口"按下即生效"的一致手感。
+            if (hit.kind == HitKind::CodeCopyButton) {
+                OnCodeCopyButtonClicked(hwnd, state, hit.blockIndex);
+                return 0;
+            }
             if (hit.kind == HitKind::Link) {
                 OnLinkClicked(hwnd, state, hit.linkTargetIdx);
                 return 0;
@@ -518,8 +584,47 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
+    case WM_MOUSEMOVE: {
+        // T45:只更新代码块复制按钮的悬浮态(变化时才重绘)。链接/图片的手型
+        // 光标仍由 WM_SETCURSOR 负责,这里不重复做文本命中。
+        if (state && state->layout) {
+            UpdateCopyButtonHover(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            // 订阅一次 WM_MOUSELEAVE:鼠标直接移出窗口时把悬浮态收掉,
+            // 否则按钮会停在悬浮样式上(TrackMouseEvent 是一次性的,每次
+            // 鼠标移动都要重新订阅)。
+            TRACKMOUSEEVENT track{};
+            track.cbSize = sizeof(TRACKMOUSEEVENT);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hwnd;
+            TrackMouseEvent(&track);
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    case WM_MOUSELEAVE: {
+        // T45:鼠标离开客户区 -> 清掉复制按钮悬浮态("已复制"反馈态不受影响,
+        // 它由定时器负责收尾)。
+        if (state && state->copyButtonHover != kInvalidIndex) {
+            state->copyButtonHover = kInvalidIndex;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_TIMER: {
+        // T45:"已复制"反馈态到点 -> 清状态、杀掉一次性定时器、重绘回默认态。
+        if (wparam == kCopyFeedbackTimerId) {
+            KillTimer(hwnd, kCopyFeedbackTimerId);
+            if (state) state->copyButtonCopied = kInvalidIndex;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
     case WM_SETCURSOR: {
-        // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标。
+        // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标;
+        // T45 的代码块复制按钮同理(它就是个按钮,手型光标是最符合直觉的提示)。
         if (state && state->layout && LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
@@ -648,6 +753,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
 
     case WM_DESTROY:
+        // T45:窗口销毁前把可能还在跑的一次性定时器收掉。
+        KillTimer(hwnd, kCopyFeedbackTimerId);
         PostQuitMessage(0);
         return 0;
 
@@ -693,6 +800,10 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     if (!state) return nullptr;
     state->scrollY = 0.0f;
     state->firstPresentDone = false;
+    // T45:两个瞬时交互态必须初始化成 kInvalidIndex —— 零值会被当成
+    // "第 0 个块的复制按钮处于悬浮/已复制态"。
+    state->copyButtonHover = kInvalidIndex;
+    state->copyButtonCopied = kInvalidIndex;
 
     // 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
     // WS_VSCROLL:原生右侧滚动条,外观完全交给系统主题,不自绘。

@@ -68,6 +68,17 @@ u32 FindImageBoxAt(const ImageBox* boxes, u32 count, float docX, float docY) {
     return kInvalidIndex;
 }
 
+u32 FindCodeCopyButtonAt(const BlockGeometry* geometries, u32 count, float docX, float docY) {
+    if (!geometries) return kInvalidIndex;
+    for (u32 i = 0; i < count; ++i) {
+        const LayoutRect& r = geometries[i].codeCopyButton;
+        // 非代码块的 codeCopyButton 恒为全 0,width <= 0 直接跳过,不必再判块类型。
+        if (r.width <= 0.0f) continue;
+        if (Contains(r.x, r.y, r.width, r.height, docX, docY)) return i;
+    }
+    return kInvalidIndex;
+}
+
 u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition) {
     if (!boxes) return kInvalidIndex;
     for (u32 i = 0; i < count; ++i) {
@@ -82,6 +93,14 @@ u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition) 
 
 HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float docY) {
     u32 blockCount = layout.BlockCount();
+    const BlockGeometry* geometries = blockCount > 0 ? &layout.Geometry(0) : nullptr;
+
+    // T45 代码块复制按钮最优先:它在视觉上浮在代码块背景/文字之上,点它就该
+    // 是"复制",不能被下面的文本命中抢走。
+    u32 copyBlock = FindCodeCopyButtonAt(geometries, blockCount, docX, docY);
+    if (copyBlock != kInvalidIndex) {
+        return HitResult{HitKind::CodeCopyButton, copyBlock, kInvalidIndex, kInvalidIndex};
+    }
 
     // 图片优先:图片/占位块是一整块独立的可点击区域,且可能挂在容器型块下,
     // 不受 IsContentBlockType 过滤影响,所以单独先扫一遍。图片数量天然很少,
@@ -95,8 +114,7 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
         }
     }
 
-    u32 blockIndex = FindContentBlockAt(
-        blockCount > 0 ? &layout.Geometry(0) : nullptr, blockCount, docX, docY);
+    u32 blockIndex = FindContentBlockAt(geometries, blockCount, docX, docY);
     if (blockIndex == kInvalidIndex) return NoHit();
 
     const BlockGeometry& g = layout.Geometry(blockIndex);
@@ -123,7 +141,8 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
 }
 
 bool ShouldUseHandCursor(const HitResult& hit) {
-    return hit.kind == HitKind::Link || hit.kind == HitKind::Image;
+    return hit.kind == HitKind::Link || hit.kind == HitKind::Image ||
+           hit.kind == HitKind::CodeCopyButton;
 }
 
 }  // namespace mdvn

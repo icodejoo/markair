@@ -13,6 +13,7 @@ add_executable(mdvn_tests
     test_layout.cpp
     test_layout_codeblock.cpp
     test_list_marker.cpp
+    test_code_copy.cpp
     test_synthetic_newline.cpp
     test_table.cpp
     test_renderer.cpp
@@ -51,6 +52,7 @@ add_executable(mdvn_tests
     ../src/shell/navigate.cpp
     ../src/shell/hit_test.cpp
     ../src/shell/find.cpp
+    ../src/shell/clipboard.cpp
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
