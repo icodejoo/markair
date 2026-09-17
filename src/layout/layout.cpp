@@ -916,9 +916,22 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
         layout->SetTextAlignment(ta);
     }
 
-    // T28:脚注定义区块内文字整体小一号。
     IDWriteTextFormat* fmt = fonts.GetTextFormat(role);
     float baseFontSize = fmt ? fmt->GetFontSize() : (16.0f * fontScale_);
+
+    // 标题:按 kHeadingScale 放大字号 + 整体加粗(常见 GFM 渲染惯例,如 GitHub
+    // 网页版)。此前只有 EstimateLeafHeight 用 kHeadingScale 算预留高度,真正
+    // 绘制用的 IDWriteTextLayout 从未跟着放大/加粗,导致标题视觉上和正文段落
+    // 没有任何区别(用户实测发现的真实缺失,不是设计裁决)。
+    if (b.type == BlockType::Heading) {
+        u32 level = (b.level >= 1 && b.level <= 6) ? b.level : 6;
+        float scale = kHeadingScale[level];
+        DWRITE_TEXT_RANGE fullRange{0, cursor};
+        layout->SetFontSize(baseFontSize * scale, fullRange);
+        layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, fullRange);
+    }
+
+    // T28:脚注定义区块内文字整体小一号。
     if (g.smallText) {
         layout->SetFontSize(baseFontSize * kFootnoteFontRatio, DWRITE_TEXT_RANGE{0, cursor});
     }
