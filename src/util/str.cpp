@@ -91,12 +91,18 @@ void AppendUtf8(Vec<char>& out, u32 cp) {
 }
 
 // 判断一个 Unicode 码点是否落在常见"宽字符"区间(简化版 East Asian Width):
-// CJK 统一表意文字、CJK 符号与标点、日文平假名/片假名、全角字符。覆盖简体
-// 中文实际会遇到的场景即可,不追求 Unicode East Asian Width 标准的完整覆盖。
+// CJK 统一表意文字(基本区 + 扩展 A)、CJK 符号与标点、日文平假名/片假名、
+// 韩文谚文(音节区 + 兼容字母)、全角字符。覆盖中日韩常见场景即可,不追求
+// Unicode East Asian Width 标准的完整覆盖(生僻扩展区如 CJK 扩展 B 及以上、
+// 罕见韩文古字母暂不收录,真遇到再补)。
 bool IsWideCodepoint(u32 cp) {
+    if (cp >= 0x1100 && cp <= 0x11FF) return true;  // 谚文字母(Hangul Jamo)
     if (cp >= 0x3000 && cp <= 0x303F) return true;  // CJK 符号与标点
     if (cp >= 0x3040 && cp <= 0x30FF) return true;  // 平假名 + 片假名
-    if (cp >= 0x4E00 && cp <= 0x9FFF) return true;  // CJK 统一表意文字
+    if (cp >= 0x3130 && cp <= 0x318F) return true;  // 谚文兼容字母
+    if (cp >= 0x3400 && cp <= 0x4DBF) return true;  // CJK 统一表意文字扩展 A
+    if (cp >= 0x4E00 && cp <= 0x9FFF) return true;  // CJK 统一表意文字(基本区)
+    if (cp >= 0xAC00 && cp <= 0xD7A3) return true;  // 谚文音节
     if (cp >= 0xFF00 && cp <= 0xFFEF) return true;  // 全角字符/半角片假名区
     return false;
 }

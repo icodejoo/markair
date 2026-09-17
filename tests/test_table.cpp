@@ -146,6 +146,14 @@ MDVN_TEST(VisualWidth_EmptyStringIsZero) {
     MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{"", 0}), 0u);
 }
 
+// 用例 11:韩文谚文音节区(2026-09-17 扩充覆盖范围)——"안녕"(你好)2 个音节,
+// 每个记 2 个单位,共 4;UTF-8 下占 6 字节,验证走的是谚文音节区分支而不是
+// 退化成默认的 1 个单位。
+MDVN_TEST(VisualWidth_HangulSyllableCountsTwoPerChar) {
+    const char text[] = "\xec\x95\x88\xeb\x85\x95"; // 안녕
+    MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{text, sizeof(text) - 1}), 4u);
+}
+
 // ---- 集成测试:表格列宽/行高估算改用视觉宽度后,不再被字节数口径带偏 ----
 
 // 用例 11(症状 1 回归):中英混排宽表格里,同一列内既有纯英文单词又有中文
