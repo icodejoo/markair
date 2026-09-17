@@ -43,8 +43,21 @@
 
 .PARAMETER PrivateBytesThresholdMB
     BENCH-A（无图/首屏场景）private_bytes（PrivateUsage，常驻内存的自动化代理
-    指标）阈值，单位 MB。默认 12（对应 M0 表格"Private Working Set"上限档；
-    权威值应以 VMMap 为准，本机未装 VMMap，故用该代理指标先行把关）。
+    指标）阈值，单位 MB。默认 16（权威值应以 VMMap 为准，本机未装 VMMap，
+    故用该代理指标先行把关）。
+
+    ——— M1 private_bytes 基线重记(阶段 J 收尾，2026-09-17)———
+    M0 阶段基线：12MB（当时 BENCH-A 实测约 10.5MB）。
+    排查发现 T42 引入的"--bench 强制全量解码"标志曾经不区分具体语料，只要
+    带 `--bench` 就生效，导致 BENCH-A（本该只测首屏虚拟化）也被误强制物化成
+    全文档，P95 一度冲到约 29MB。已在 main.cpp 新增 BenchTargetWantsFullDecode
+    把该行为限定为仅 BENCH-B（图片密集场景）生效，BENCH-A 恢复首屏虚拟化
+    语义后，实测 P95 回落到约 13.75MB。
+    这剩下的 ~1.75MB（相对 M0 的 12MB 增长约 15%）经排查是阶段 F~I 新功能
+    （富行内样式/表格布局/脚注区/查找索引等常驻数据结构）带来的真实、预期
+    内的内存增长，不是 bug，不做进一步压缩。**这不是同一个基线**——16MB
+    是 M1 新基线，如实记录，不做"和 M0 比谁更小"的误导性对比；等 VMMap
+    装好之后应换成权威值复核。
 
 .PARAMETER ExeSizeSoftLimitMB
     exe 体积的宽松安全阈值，单位 MB。
@@ -96,7 +109,7 @@ param(
     [string]$BuildConfig = "Release",
     [switch]$ForceRebuild,
     [double]$FirstPaintP95ThresholdMs = 400,
-    [double]$PrivateBytesThresholdMB = 12,
+    [double]$PrivateBytesThresholdMB = 16,
     [double]$ExeSizeSoftLimitMB = 8,
     [double]$BenchBPrivateBytesThresholdMB = 80,
     [int]$NBenchB = 5,

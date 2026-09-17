@@ -69,6 +69,28 @@ wchar_t g_displayText[MAX_PATH + 16] = L"mdvn";
 constexpr wchar_t kMutexNamePrefix[] = L"mdvn_filemutex_";
 constexpr wchar_t kPathHashPropName[] = L"mdvn_path_hash";
 
+// T44 修复:T42 引入的"--bench 即强制全量解码"曾经不区分具体语料,导致
+// BENCH-A(测的是首屏虚拟化)也被误强制物化成全文档,拉高了 private_bytes
+// 门禁读数(见 06-m1-tasks.md 阶段 J 的排查记录)。这里改成只对文件名含
+// "bench-b"(大小写不敏感)的目标生效,让 BENCH-A 恢复原本的首屏虚拟化语义。
+bool BenchTargetWantsFullDecode(const wchar_t* filePath) {
+    if (!filePath) return false;
+    constexpr wchar_t kMarker[] = L"bench-b";
+    constexpr size_t kMarkerLen = 7;
+    size_t len = wcslen(filePath);
+    if (len < kMarkerLen) return false;
+    for (size_t i = 0; i + kMarkerLen <= len; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < kMarkerLen; ++j) {
+            wchar_t c = filePath[i + j];
+            if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
+            if (c != kMarker[j]) { match = false; break; }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
 // md4c 的 SAX 回调:本阶段只验证链接与调用可行,不构建文档模型。
 int OnBlock(MD_BLOCKTYPE, void*, void*) { return 0; }
 int OnSpan(MD_SPANTYPE, void*, void*) { return 0; }
@@ -412,9 +434,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         &imageCache, &residency, &remoteLoader, &tempFiles, &imageScratch, documentDirectory,
         &find, nullptr, &OpenDocumentInPlace,
         &OnWindowCreatedBenchHook, &OnFirstPresentBenchHook, nullptr, false,
-        // T42:只在 --bench 模式下开启"首屏之外强制全量解码",正常运行(双击打开
-        // 文件/无 --bench)时此字段为 false,行为与之前完全一致。
-        benchArgs.benchEnabled};
+        // T42:只在 --bench 且目标语料是 BENCH-B 时开启"首屏之外强制全量解码"
+        // (T44 修复,见 BenchTargetWantsFullDecode 注释);正常运行(双击打开
+        // 文件/无 --bench)和 BENCH-A 这类非图片密集场景,此字段均为 false,
+        // 首屏虚拟化行为与之前完全一致。
+        benchArgs.benchEnabled && BenchTargetWantsFullDecode(benchArgs.filePath)};
 
     if (!mdvn::RegisterMainWindowClass(hInstance)) {
         if (argv) LocalFree(argv);
