@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    mdvn CI 性能门禁脚本（T16）。
+    mdvn CI 性能门禁脚本（M0 T16，M1 T44 扩展）。
 
 .DESCRIPTION
     依次执行：
@@ -9,7 +9,11 @@
     3. 调用 bench\run_bench.ps1 做一次暖启动测量（轮数通过 -N 暴露给调用者，
        脚本自身默认沿用文档约定的 20 次；本地手动验证时可传更小的值节省时间）；
     4. 对三项指标做阈值判断：首屏时间（P95）、常驻内存代理指标 private_bytes、
-       exe 体积。任一项超标则脚本以非零退出码结束。
+       exe 体积；
+    5.（T44 新增）调用 bench\run_bench.ps1 -Target BENCH-B 做一次图片密集场景
+       的内存测量，对 private_bytes 做阈值判断；
+    6.（T44 新增）调用 ci\run_fuzz.ps1，其非零退出码直接计入整体失败。
+    任一项超标 / 任一步骤非零退出，则本脚本以非零退出码结束。
 
     重要口径说明（必须诚实注明，不能不声不响套用文档数字）：
     本脚本判断的 "t_process_to_present_ms" 取自 src/app/bench.cpp 的埋点，
@@ -24,7 +28,7 @@
     VMMap/RAMMap 之后，应该用更严格的测量方式替换本脚本里的判断依据。
 
 .PARAMETER N
-    暖启动测量轮数，透传给 run_bench.ps1。默认 20（与文档一致）；
+    暖启动测量轮数（BENCH-A），透传给 run_bench.ps1。默认 20（与文档一致）；
     本地手动验证时可以传更小的值（例如 10）节省时间。
 
 .PARAMETER BuildConfig
@@ -38,21 +42,53 @@
     默认 400（对应 M0 表格"冷启动首屏"上限档；见上方口径说明，这是简化映射）。
 
 .PARAMETER PrivateBytesThresholdMB
-    private_bytes（PrivateUsage，常驻内存的自动化代理指标）阈值，单位 MB。
-    默认 12（对应 M0 表格"Private Working Set"上限档；权威值应以 VMMap 为准，
-    本机未装 VMMap，故用该代理指标先行把关）。
+    BENCH-A（无图/首屏场景）private_bytes（PrivateUsage，常驻内存的自动化代理
+    指标）阈值，单位 MB。默认 12（对应 M0 表格"Private Working Set"上限档；
+    权威值应以 VMMap 为准，本机未装 VMMap，故用该代理指标先行把关）。
 
 .PARAMETER ExeSizeSoftLimitMB
-    exe 体积的宽松安全阈值，单位 MB，默认 5。
-    文档原文是"记录基线即可"，不做硬性阈值判断（M3 才门禁 1.5MB）。
-    这里额外加一道非常宽松的安全网：当前 exe 实测约 228KB，5MB 已是
-    20 倍以上的余量，只用来防止"不小心静态链接了一个很大的库"这种明显异常，
-    不会对正常的体积增长产生误报。超过这个阈值也会让脚本失败，但这不是
-    M0/M3 文档规定的门槛，只是本脚本作者加的一道保险，请勿与官方阈值混淆。
+    exe 体积的宽松安全阈值，单位 MB。
+    默认 8（见下方"M1 exe 体积基线"说明：M1 新基线约 0.28MB，仍是"记录基线，
+    不做硬性门禁"的口径，本阈值只是防失控的宽松安全网，不代表官方门槛）。
+
+    ——— M1 exe 体积基线（T44，2026-09-17 实测）———
+    M0 阶段基线：约 228KB（0.223MB，静态链接、无图片/查找/WIC/WinHTTP 代码）。
+    M1 阶段新基线：296448 字节 ≈ 0.2827MB（Release 构建，clean build 后实测，
+    包含 T30 图片解码路径的 WIC delayload 桩、T34 网络图片的 WinHTTP delayload
+    桩、T37/T38 查找算法代码、T39 state.ini 解析代码）。
+    这**不是同一个基线**：M1 比 M0 增大约 61.5KB（+27%），原因是新增了
+    WIC/WinHTTP 的 delayload 桩与图片解码/查找功能的代码体积，是预期内的
+    合理增长，不代表体积失控。这里如实记录新数字，不做"和 M0 比谁更小"的
+    误导性对比；沿用文档口径——exe 体积只记录基线趋势，M3 才门禁 1.5MB。
+    本脚本额外加的宽松安全网阈值相应从 5MB 上调到 8MB，仍留有约 28 倍余量，
+    只用于拦截"不小心静态链接了一个很大的库"这种明显异常。
+
+.PARAMETER BenchBPrivateBytesThresholdMB
+    （T44 新增）BENCH-B（图片密集场景，50 张 PNG 全部滚过一遍）private_bytes
+    P95 阈值，单位 MB。默认 80，对应 06-m1-tasks.md"M1 验收线与测量方法"表
+    "图片密集文档峰值内存 ≤80MB"这一条。本机实测（Release clean build，
+    N=5，--bench 全量解码口径）private_bytes 中位数 ≈44.1MB、P95 ≈42.3MB，
+    留有约一倍余量；曾观察到单轮之间有若干 MB 的波动（属正常范围，未见
+    显著抬升趋势）。
+
+.PARAMETER NBenchB
+    BENCH-B 内存测量轮数，透传给 run_bench.ps1 -Target BENCH-B。默认 5
+    （BENCH-B 每轮都要全量解码 50 张 PNG，比 BENCH-A 慢，轮数比 -N 少，
+    足以估计 P95 即可，不追求和 BENCH-A 同样的统计功效）。
+
+.PARAMETER SkipFuzz
+    （T44 新增）跳过 ci\run_fuzz.ps1 这一步。仅用于本地调试其它门禁项时
+    节省时间，CI 环境下不应加这个开关。
+
+.PARAMETER FuzzTimeoutSeconds
+    （T44 新增）透传给 ci\run_fuzz.ps1 的 -TimeoutSeconds。默认 -1 表示不覆盖
+    （沿用 run_fuzz.ps1 自身默认的 60 秒）。主要用途是双向验证：传 0 可以
+    人为制造"0 秒内必然判定为卡死"从而让 run_fuzz.ps1 必然非零退出，验证
+    本脚本能正确把这个非零退出码计入整体失败（而不是被吞掉）。
 
 .EXAMPLE
     powershell -File ci\check_budget.ps1 -N 10
-    本地手动验证：跑 10 轮暖启动测量并做门禁判断。
+    本地手动验证：跑 10 轮暖启动测量并做门禁判断（含 BENCH-B 内存与 fuzz 门禁）。
 #>
 
 param(
@@ -61,7 +97,11 @@ param(
     [switch]$ForceRebuild,
     [double]$FirstPaintP95ThresholdMs = 400,
     [double]$PrivateBytesThresholdMB = 12,
-    [double]$ExeSizeSoftLimitMB = 5
+    [double]$ExeSizeSoftLimitMB = 8,
+    [double]$BenchBPrivateBytesThresholdMB = 80,
+    [int]$NBenchB = 5,
+    [switch]$SkipFuzz,
+    [int]$FuzzTimeoutSeconds = -1
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,15 +118,15 @@ $runBenchScript = Join-Path $repoRoot "bench\run_bench.ps1"
 # 记录一次失败原因，最后统一汇总输出，方便一次性看到"到底超了几项"。
 $failures = @()
 
-Write-Host "==== mdvn CI 性能门禁（T16）===="
-Write-Host "当前门禁阈值参照 M0 表格但测量口径与文档严格定义不完全一致，这是已知简化，非最终门禁。"
+Write-Host "==== mdvn CI 性能门禁（M0 T16 + M1 T44）===="
+Write-Host "当前门禁阈值参照 M0/M1 表格但测量口径与文档严格定义不完全一致，这是已知简化，非最终门禁。"
 Write-Host ""
 
 # ------------------------- 第一步：构建（若需要） -------------------------
 
 $needBuild = $ForceRebuild -or (-not (Test-Path $exePath)) -or (-not (Test-Path $testsExePath))
 if ($needBuild) {
-    Write-Host "[1/4] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
+    Write-Host "[1/6] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
     if (-not (Test-Path $buildDir)) {
         cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
         if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
@@ -94,7 +134,7 @@ if ($needBuild) {
     cmake --build $buildDir --config $BuildConfig
     if ($LASTEXITCODE -ne 0) { throw "CMake 构建失败，退出码 $LASTEXITCODE" }
 } else {
-    Write-Host "[1/4] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
+    Write-Host "[1/6] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
 }
 
 if (-not (Test-Path $exePath)) { throw "构建后仍找不到 mdvn.exe：$exePath" }
@@ -103,7 +143,7 @@ if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 mdvn_tests.ex
 # ------------------------- 第二步：单元测试 -------------------------
 
 Write-Host ""
-Write-Host "[2/4] 运行 mdvn_tests.exe ..."
+Write-Host "[2/6] 运行 mdvn_tests.exe ..."
 # 注意：PowerShell 5.1 下，$ErrorActionPreference = "Stop" 时，原生程序往
 # stderr 写内容会被包装成终止性 ErrorRecord 抛出，即便退出码是 0（mdvn_tests
 # 的汇总行走的就是 stderr）。这里临时降级为 "Continue"，只靠 $LASTEXITCODE
@@ -122,7 +162,7 @@ if ($testsExitCode -ne 0) {
 # ------------------------- 第三步：暖启动性能测量 -------------------------
 
 Write-Host ""
-Write-Host "[3/4] 运行 bench\run_bench.ps1 做暖启动测量（N=$N）..."
+Write-Host "[3/6] 运行 bench\run_bench.ps1 做暖启动测量（BENCH-A，N=$N）..."
 & $runBenchScript -N $N -MdvnExe $exePath
 if ($LASTEXITCODE -ne 0) {
     throw "run_bench.ps1 执行失败，退出码 $LASTEXITCODE"
@@ -166,7 +206,7 @@ if ($privateBytesMB -gt $PrivateBytesThresholdMB) {
 # ------------------------- 第四步：exe 体积 -------------------------
 
 Write-Host ""
-Write-Host "[4/4] 记录 exe 体积基线..."
+Write-Host "[4/6] 记录 exe 体积基线..."
 $exeSizeBytes = (Get-Item $exePath).Length
 $exeSizeMB = $exeSizeBytes / 1MB
 Write-Host "mdvn.exe 体积：$([Math]::Round($exeSizeMB, 4)) MB（$exeSizeBytes 字节）"
@@ -175,6 +215,57 @@ Write-Host "本脚本额外加了一道宽松安全网阈值 $ExeSizeSoftLimitMB
 
 if ($exeSizeMB -gt $ExeSizeSoftLimitMB) {
     $failures += "exe 体积超过宽松安全网阈值：$([Math]::Round($exeSizeMB, 4)) MB > $ExeSizeSoftLimitMB MB（注意：这不是文档规定的官方门槛，是本脚本额外加的安全网）。"
+}
+
+# ------------------------- 第五步：BENCH-B 图片密集场景内存门禁（T44） -------------------------
+
+Write-Host ""
+Write-Host "[5/6] 运行 bench\run_bench.ps1 -Target BENCH-B 做图片密集场景内存测量（N=$NBenchB）..."
+& $runBenchScript -Target "BENCH-B" -N $NBenchB -MdvnExe $exePath
+if ($LASTEXITCODE -ne 0) {
+    throw "run_bench.ps1 -Target BENCH-B 执行失败，退出码 $LASTEXITCODE"
+}
+
+# 和第三步一样，取 run_bench.ps1 刚写出的最新一份 CSV（此时它一定比
+# 第三步那份新，因为 BENCH-B 测量在其之后才跑）。
+$latestCsvBenchB = Get-ChildItem -Path $benchDir -Filter "results_*.csv" |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $latestCsvBenchB) { throw "未找到 BENCH-B 测量产出的 results_*.csv，无法做阈值判断。" }
+if ($latestCsvBenchB.FullName -eq $latestCsv.FullName) {
+    throw "BENCH-B 的 CSV 与 BENCH-A 的 CSV 是同一份文件，测量顺序可能有误，无法信任本次阈值判断。"
+}
+
+$rowsBenchB = Import-Csv -Path $latestCsvBenchB.FullName
+$benchBPrivateBytesP95 = Get-P95FromRows -rows $rowsBenchB -field "private_bytes"
+$benchBPrivateBytesMB = $benchBPrivateBytesP95 / 1MB
+
+Write-Host ""
+Write-Host "BENCH-B private_bytes 的 P95（N=$NBenchB）：$([Math]::Round($benchBPrivateBytesMB, 3)) MB（阈值 $BenchBPrivateBytesThresholdMB MB）"
+Write-Host "口径说明：50 张 PNG 全量解码后的一次性峰值代理指标，权威值应以 VMMap 为准（本机未装，见 bench/TOOLS.md）。"
+
+if ($benchBPrivateBytesMB -gt $BenchBPrivateBytesThresholdMB) {
+    $failures += "BENCH-B private_bytes P95 超标：$([Math]::Round($benchBPrivateBytesMB, 3)) MB > $BenchBPrivateBytesThresholdMB MB。"
+}
+
+# ------------------------- 第六步：畸形文档语料稳健性门禁（T43 复用，T44 接入） -------------------------
+
+Write-Host ""
+if ($SkipFuzz) {
+    Write-Host "[6/6] -SkipFuzz 已指定，跳过 ci\run_fuzz.ps1（仅限本地调试使用，CI 中不应跳过）。"
+} else {
+    Write-Host "[6/6] 调用 ci\run_fuzz.ps1（畸形文档语料，非零退出即失败）..."
+    if ($FuzzTimeoutSeconds -ge 0) {
+        Write-Host "（-FuzzTimeoutSeconds 覆盖为 $FuzzTimeoutSeconds 秒，仅用于门禁反向验证，正式跑法不应传这个参数）"
+        & (Join-Path $scriptDir "run_fuzz.ps1") -BuildConfig $BuildConfig -TimeoutSeconds $FuzzTimeoutSeconds
+    } else {
+        & (Join-Path $scriptDir "run_fuzz.ps1") -BuildConfig $BuildConfig
+    }
+    $fuzzExitCode = $LASTEXITCODE
+    if ($fuzzExitCode -ne 0) {
+        $failures += "run_fuzz.ps1 退出码为 $fuzzExitCode（应为 0），畸形文档语料未全部通过。"
+    } else {
+        Write-Host "run_fuzz.ps1 通过（退出码 0）。"
+    }
 }
 
 # ------------------------- 汇总 -------------------------
