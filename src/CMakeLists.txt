@@ -21,6 +21,7 @@ add_executable(mdvn WIN32
     layout/table.cpp
     render/renderer.cpp
     render/theme.cpp
+    hl/languages.cpp
     shell/window.cpp
     shell/theme_state.cpp
     shell/clipboard.cpp

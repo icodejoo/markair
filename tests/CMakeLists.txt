@@ -29,6 +29,7 @@ add_executable(mdvn_tests
     test_ini.cpp
     test_theme.cpp
     test_theme_state.cpp
+    test_languages.cpp
     test_cmdline.cpp
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
@@ -50,6 +51,7 @@ add_executable(mdvn_tests
     # Renderer 本体仍不在测试里构造(需要真实 HWND),只是把这个 TU 链进来。
     ../src/render/renderer.cpp
     ../src/render/theme.cpp
+    ../src/hl/languages.cpp
     ../src/shell/theme_state.cpp
     ../src/assets/image.cpp
     ../src/assets/data_uri.cpp
