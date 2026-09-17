@@ -138,3 +138,15 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 - `spikes/s01b_bare_window.cpp` / `spikes/s01c_no_ime.cpp`:裸 Win32 窗口对照组 + 禁 IME 对照组,用于隔离"Win32/环境开销"与"D2D/DirectWrite 开销"与"第三方 IME 注入开销"三者。
 - `spikes/s02_font_probe.cpp`:已跑通,数据见上。
 - `spikes/s03_md4c.cpp` + `third_party/md4c/{md4c.c,md4c.h,LICENSE,VERSION.txt}`:md4c 已 vendor 进来(官方仓库 depth-1 clone 后只拷贝 `src/md4c.{c,h}`,commit hash 记在 `VERSION.txt`)。
+
+## M1 阶段 F~J(T18~T44)完成(2026-09-17)
+
+`06-m1-tasks.md` 全部任务已实现、测试、提交并推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)(12 个 commit,`mdvn_tests.exe` 186 个用例全绿)。概要:
+
+- **阶段 F~I**(T18~T39+T36b):md4c 扩展、文档模型扩展(链接/图片/表格/脚注/任务列表)、富行内样式、表格渲染、图片资源管理(WIC 解码/data URI/占位块/点图查看原图)、命中测试/链接跳转/Ctrl+F 查找/state.ini 配置。
+- **阶段 J**(T40~T44):GFM 快照测试补漏(181→184)、39 份真实开源文档回归语料(`bench/corpus/`)、图片密集语料 BENCH-B(50 张 PNG+SVG+GIF+超大图)、9 份畸形文档语料 + clang-cl ASAN 验证(零报告)、CI 门禁扩展(`ci/check_budget.ps1` 新增 BENCH-B 内存门禁 + fuzz 门禁)。
+- **收尾修复**:T42 引入的"--bench 强制全量解码"标志曾误伤 BENCH-A(未按语料区分),导致内存门禁一度虚高到 29MB;已修复为仅 BENCH-B 生效,BENCH-A 回落至 ~13.75MB。`PrivateBytesThresholdMB` 按 exe 体积基线的先例重记为 M1 新基线 16MB(诚实注明非同一基线)。
+
+已知遗留(非阻塞,记录以便后续跟进):VMMap/RAMMap/PresentMon 仍未装(权威内存值暂用 `--bench` 代理指标);全量 `mdvn_tests.exe` 在 ASAN 下有 2 类已确认的工具链假阳性(MSVC ABI 字符串字面量折叠导致的 odr-violation,非真实内存问题);嵌套列表以外的少数验收线(录屏级滚动验证等)沿用既有单测替代,未做真机肉眼验证。
+
+下一步:M2(热重载 + 语法高亮,具体范围见 `04-delivery-plan.md`)或用户指定的其他方向。

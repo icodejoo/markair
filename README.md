@@ -1,6 +1,6 @@
 # mdvn
 
-Windows 专用、只读的极轻量 Markdown 查看器。**当前处于立项设计阶段,尚无任何产品代码。**
+Windows 专用、只读的极轻量 Markdown 查看器。**M0(骨架)与 M1(基础 GFM 支持)均已完成**:186 个自写单测全绿,已推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)。
 
 ## 一句话目标
 
@@ -14,7 +14,8 @@ Windows 专用、只读的极轻量 Markdown 查看器。**当前处于立项设
 | [02-tech-stack.md](02-tech-stack.md) | 技术选型:语言、GUI/渲染层、Markdown 解析库(md4c vs 自研)、代码高亮,含排除理由与核实来源 |
 | [03-architecture.md](03-architecture.md) | 架构:模块划分、数据流、**规避 fontdb 式全量字体扫描的具体方案**、内存/启动优化清单 |
 | [04-delivery-plan.md](04-delivery-plan.md) | 落地计划:M-1 Spike → M0 → M1 → M2 → M3,每阶段验收标准、风险、性能测量工具与方法 |
-| [05-m0-tasks.md](05-m0-tasks.md) | **M0 可执行任务清单**:文件级任务拆解、每项验收标准、性能测量命令 |
+| [05-m0-tasks.md](05-m0-tasks.md) | **M0 可执行任务清单**:文件级任务拆解、每项验收标准、性能测量命令(**已完成**) |
+| [06-m1-tasks.md](06-m1-tasks.md) | **M1 可执行任务清单**:基础 GFM 支持(表格/脚注/任务列表/图片/查找等)的文件级任务拆解(**已完成**) |
 
 ## 核心技术结论
 
