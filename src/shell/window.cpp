@@ -76,43 +76,50 @@ WindowState* StateOf(HWND hwnd) {
 // `SetWindowTheme`,子应用名字符串是系统主题引擎认的惯例值,不是私有 API),
 // `SWP_FRAMECHANGED` 同一次调用会一并让滚动条跟着重绘,不需要额外强制刷新。
 void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
-    // 顺序很关键:实测 SetWindowTheme 若排在 DwmSetWindowAttribute 之后调用,
-    // 有几率把刚设好的标题栏深色属性"冲掉"(非客户区重新走了一次默认主题
-    // 解析,标题栏掉回浅色,而滚动条本身是对的)——先切好滚动条子应用主题,
-    // 再设标题栏深浅色属性,标题栏这条更晚生效、不会被前者覆盖。
-    // 2026-09-17 真机反馈迭代记录(踩过的坑,别再踩第二次):
-    // ① 只用 `SWP_FRAMECHANGED` 不够——按 MSDN 它只是让窗口"重新计算"非客户区
-    //   (相当于发一次 WM_NCCALCSIZE),不保证立刻真正重绘到屏幕,标题栏经常要
-    //   等下一次真实失焦/获焦才显现新颜色,期间正文已先变色,肉眼看到错位。
-    // ② 补 `RedrawWindow(..., RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW |
-    //   RDW_ALLCHILDREN)`(不带 RDW_ERASE):标题栏/滚动条底色变对了,但标题
-    //   文字背后残留一小块旧主题色的方框("鬼影",ClearType 抗锯齿字形是按
-    //   旧背景色预先混合好的位图)。
-    // ③ 加 `RDW_ERASE` 想先擦再画,结果整个标题栏连底色都不再跟着变了。
-    // ④ 改用 `WM_NCACTIVATE FALSE→TRUE` 模拟一次失焦再获焦,同样导致标题栏
-    //   彻底不刷新。
-    // ⑤ 在 `DwmSetWindowAttribute` **之后**发 `WM_THEMECHANGED`,结果标题栏
-    //   又整个不跟着变了——用 foreground 校验过的真实截图逐帧核实后判断:
-    //   `WM_THEMECHANGED` 会让 DWM 按系统默认主题重新核算非客户区外观,若这
-    //   一步排在 `DwmSetWindowAttribute` 之后,等于把刚设好的显式深浅色属性
-    //   冲掉、退回系统默认(本机系统主题是浅色,于是标题栏总被冲回浅色)。
-    // ⑥ 最终方案:把 `WM_THEMECHANGED` 挪到 `DwmSetWindowAttribute` **之前**
-    //   ——先让系统按旧状态刷一遍主题资源(顺带解决②的文字鬼影,因为它会
-    //   连非客户区文字合成缓存一起清掉),`DwmSetWindowAttribute` 作为最后
-    //   一步显式定调,不会再被后续任何调用覆盖;再补 `SWP_FRAMECHANGED` +
-    //   `RedrawWindow(RDW_INVALIDATE|RDW_FRAME|RDW_UPDATENOW|RDW_ALLCHILDREN)`
-    //   把这个最终状态立刻画出来。
-    SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
-    SendMessageW(hwnd, WM_THEMECHANGED, 0, 0);
+    // 2026-09-17 真机反馈定位记录:commit 0806db8(只有 DwmSetWindowAttribute+
+    // 条件性 SWP_FRAMECHANGED)时用户确认标题栏本身工作正常,只有滚动条没有
+    // 跟着变。后续为了让滚动条变色而加的 `SetWindowTheme` 调用 + 各种重排序/
+    // 补 RedrawWindow/WM_THEMECHANGED 的尝试,反而让标题栏彻底不再跟着变了
+    // (用户截图 `sreenshots/1.png` 实测证实:标题栏全白,不是残留鬼影,是
+    // 完全没变)——真正的坏因是 `SetWindowTheme` 作用在主窗口 hwnd 上这件事
+    // 本身,不是调用顺序。于是退回 0806db8 已证实工作正常的结构,`DwmSetWindowAttribute`
+    // 仍然是唯一决定标题栏深浅色的调用;`SetWindowTheme` 挪到最后**追加**一次
+    // 调用(只为了让滚动条子应用主题跟着换,不再折腾顺序)。
+    //
+    // 2026-09-17 用户精确复现(极有价值的线索):点击后标题栏背景仍是旧色,
+    // 但标题栏按钮(最小化/最大化/关闭)图标颜色已经跟着变了;把窗口最小化
+    // 再还原,标题栏背景就立刻变对。这说明 DWM 内部其实已经正确接受了新的
+    // `DwmSetWindowAttribute` 状态(按钮图标证明了这一点),只是标题栏背景
+    // 那块合成好的画面没有被真正"刷"到屏幕上——`SWP_FRAMECHANGED` 只是通知
+    // 窗口重新核算非客户区尺寸(WM_NCCALCSIZE),不代表 DWM 合成器已经把新
+    // 结果实际提交显示;而最小化/还原会触发一次真正的窗口可见性变化,强制
+    // DWM 提交合成队列。这里不能用"改一下尺寸再改回去"模拟同样效果——
+    // `OnSize` 每次 WM_SIZE 都会无条件 `Relayout`,伪造一次尺寸变化会违反
+    // T49"切主题不得触发 Relayout"的硬约束(且尺寸不变时 Windows 根本不会
+    // 发 WM_SIZE,伪造也做不到)。
+    //
+    // 2026-09-17 补充:先试了 `DwmFlush`(等待/强制合成队列把已提交的变更
+    // 真正显示出来),用户复测无效。改成模拟"最小化再还原"里真正起作用的
+    // 那部分——**可见性**变化,而不是尺寸变化:`ShowWindow(SW_HIDE)` 紧接
+    // `ShowWindow(SW_SHOW)`。隐藏/显示只发 `WM_SHOWWINDOW`,不发 `WM_SIZE`
+    // (客户区尺寸从未改变),不会牵连 `OnSize`/`Relayout`;但会让 DWM 把这个
+    // 窗口当作"重新变为可见"来处理,和最小化→还原触发的是同一类真实合成
+    // 提交路径。`SWP_NOACTIVATE` 不适用于 `ShowWindow`,改用 `SW_SHOWNA`
+    // 显示但不抢激活状态/焦点。
     BOOL enable = isDark ? TRUE : FALSE;
     HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkMode, &enable, sizeof(enable));
     if (hr != S_OK) {
-        DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
+        hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
     }
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    RedrawWindow(hwnd, nullptr, nullptr,
-                  RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    if (hr == S_OK) {
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    if (IsWindowVisible(hwnd)) {
+        ShowWindow(hwnd, SW_HIDE);
+        ShowWindow(hwnd, SW_SHOWNA);
+    }
 }
 
 // T47/T48:主题三态循环的核心动作,抽成一个函数供 Ctrl+Shift+T 复用——只改
