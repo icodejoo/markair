@@ -22,6 +22,7 @@ using mdvn::Document;
 using mdvn::Inline;
 using mdvn::InlineTextBytes;
 using mdvn::kInlineFlagSyntheticNewline;
+using mdvn::kInlineFlagSyntheticSpaces;
 using mdvn::ParseMarkdown;
 using mdvn::StrSlice;
 using mdvn::u32;
@@ -48,6 +49,21 @@ u32 CountSyntheticNewlines(const Document& doc, const Block& b) {
         if (doc.inlines[b.firstInlineIdx + i].flags & kInlineFlagSyntheticNewline) ++count;
     }
     return count;
+}
+
+// 把一个块的全部直属 inline 按顺序拼接成一段可读文本(经 InlineTextBytes,
+// 不直接读 source),用于断言"缩进+换行结构是否原样保留"。
+void AppendBlockText(const Document& doc, const Block& b, char* out, u32 cap, u32* outLen) {
+    u32 pos = 0;
+    for (u32 i = 0; i < b.inlineCount && pos < cap; ++i) {
+        const Inline& in = doc.inlines[b.firstInlineIdx + i];
+        const char* bytes = InlineTextBytes(in, doc);
+        u32 n = in.textLen;
+        if (pos + n > cap) n = cap - pos;
+        for (u32 k = 0; k < n; ++k) out[pos + k] = bytes[k];
+        pos += n;
+    }
+    *outLen = pos;
 }
 
 }  // namespace
@@ -132,4 +148,51 @@ MDVN_TEST(SyntheticNewline_SingleLineCodeBlockHasExactlyOne) {
     const Block& code = doc.blocks[codeIdx];
 
     MDVN_CHECK_EQ(CountSyntheticNewlines(doc, code), 1u);
+}
+
+// Bug 3 覆盖测试(2026-09-17,用户实测发现):围栏代码块每行的前导缩进
+// 不应被吞掉。md4c 的 md_process_verbatim_block_contents 用它自己的静态
+// 字面量缓冲区(16 个空格一组)拼每行缩进,同样不指向 source——此前这类
+// run 落进"不在 source 里就归零"的兜底分支,导致缩进整体丢失,多层缩进
+// (如 Python 的嵌套 for 循环)全部拉平。这里重建整个代码块的文本,断言
+// 缩进空格数与源码一致。
+MDVN_TEST(SyntheticSpaces_FencedCodeBlockPreservesIndentation) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "```\n"
+        "def f():\n"
+        "    a = 1\n"
+        "        b = 2\n"
+        "    return a\n"
+        "```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
+    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+    const Block& code = doc.blocks[codeIdx];
+
+    // 至少应该出现带 kInlineFlagSyntheticSpaces 标记的 run(4 空格与 8 空格
+    // 各出现过一次),证明缩进没有被当成"不在 source 里"直接吞掉归零。
+    bool sawSyntheticSpaces = false;
+    for (u32 i = 0; i < code.inlineCount; ++i) {
+        if (doc.inlines[code.firstInlineIdx + i].flags & kInlineFlagSyntheticSpaces) {
+            sawSyntheticSpaces = true;
+            break;
+        }
+    }
+    MDVN_CHECK(sawSyntheticSpaces);
+
+    char buf[256] = {};
+    u32 len = 0;
+    AppendBlockText(doc, code, buf, sizeof(buf), &len);
+    const char expected[] = "def f():\n    a = 1\n        b = 2\n    return a\n";
+    MDVN_CHECK_EQ(len, static_cast<u32>(sizeof(expected) - 1));
+    bool matches = len == sizeof(expected) - 1;
+    if (matches) {
+        for (u32 i = 0; i < len; ++i) {
+            if (buf[i] != expected[i]) { matches = false; break; }
+        }
+    }
+    MDVN_CHECK(matches);
 }

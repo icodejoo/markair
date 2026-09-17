@@ -412,10 +412,31 @@ int OnText(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata) 
         (type == MD_TEXT_SOFTBR || type == MD_TEXT_BR ||
          type == MD_TEXT_CODE || type == MD_TEXT_HTML);
 
+    // md4c 的 md_process_verbatim_block_contents(围栏/缩进代码块、HTML 块
+    // 逐行输出)用它自己的静态字面量缓冲区(16 个空格一组,一次最多吐 16
+    // 字节)拼每行的前导缩进,同样不指向 source。此前这类 run 落进上面
+    // syntheticNewline 判断不到的分支,被当成"不在 source 里"一律归零,
+    // 代码块缩进因此整体丢失(真实 bug,2026-09-17 用户实测发现;见
+    // model.h::kInlineFlagSyntheticSpaces 的完整注释)。size 上限 16 与
+    // md4c 的分块大小一致,不会越界;只在已知会真正合成缩进的两种块类型
+    // (代码块/HTML 块)上生效,同样避免未来 md4c 版本里语义不同的场景被误判。
+    bool syntheticSpaces = false;
+    if (!textInSource && !syntheticNewline && size >= 1 && size <= 16 &&
+        (type == MD_TEXT_CODE || type == MD_TEXT_HTML)) {
+        syntheticSpaces = true;
+        for (MD_SIZE k = 0; k < size; ++k) {
+            if (text[k] != ' ') { syntheticSpaces = false; break; }
+        }
+    }
+
     Inline in{};
-    in.flags = flags | (syntheticNewline ? static_cast<u32>(kInlineFlagSyntheticNewline) : 0u);
+    in.flags = flags | (syntheticNewline ? static_cast<u32>(kInlineFlagSyntheticNewline) : 0u) |
+               (syntheticSpaces ? static_cast<u32>(kInlineFlagSyntheticSpaces) : 0u);
     in.textOffset = textInSource ? static_cast<u32>(text - ctx->doc->source.data) : 0;
-    in.textLen = textInSource ? static_cast<u32>(size) : (syntheticNewline ? 1u : 0u);
+    in.textLen = textInSource ? static_cast<u32>(size)
+                 : syntheticNewline ? 1u
+                 : syntheticSpaces ? static_cast<u32>(size)
+                 : 0u;
     in.linkTargetIdx = ctx->CurrentTargetIdx();
 
     if (!ctx->doc->inlines.Push(in)) {

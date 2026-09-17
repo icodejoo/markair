@@ -50,6 +50,14 @@ enum InlineFlag : u32 {
     // 应视作一个字面 '\n' 字符,但绝不能从 source 读取对应字节
     // (见 parser.cpp::OnText 与 InlineTextBytes)。
     kInlineFlagSyntheticNewline = 1u << 8,
+    // md4c 对围栏/缩进代码块(及 HTML 块)每行的**前导缩进**同样不指向 source——
+    // `md_process_verbatim_block_contents` 用它自己的静态字面量缓冲区
+    // (16 个空格,一次最多吐 16 字节,indent > 16 时循环吐多次)拼出缩进,
+    // 而不是指向源文件里的空白字节。此前这类 run 被当成"不在 source 里"
+    // 一律归零,导致代码块缩进整体丢失(真实 bug,2026-09-17 用户实测发现)。
+    // 带此标记的 Inline 的 textLen 就是需要的空格数(1~16),渲染/统计时应
+    // 视作等量的字面 ' ' 字符,同样绝不能从 source 读取(见 InlineTextBytes)。
+    kInlineFlagSyntheticSpaces = 1u << 9,
 };
 
 // 无效索引哨兵值,表示"不指向任何节点"(M0 未实现链接,linkTargetIdx 始终取此值)。
@@ -151,9 +159,11 @@ struct Document {
  * 取一个 Inline run 用于渲染/拼接/统计的字节起点。
  *
  * 合成换行(kInlineFlagSyntheticNewline)固定返回指向静态字面量 "\n" 的指针,
- * 绝不读取 Document::source——这类 run 本来就不对应 source 里的任何字节。
- * 其余情况按 textOffset 正常指向 source。任何要按 textLen 拷贝/统计字节的
- * 代码都必须经这个函数取指针,不要直接写 `source.data + textOffset`。
+ * 合成缩进(kInlineFlagSyntheticSpaces)返回指向一段静态空格字面量的指针
+ * (调用方只会读取前 in.textLen 个字节,in.textLen 恒 <= 16,足够覆盖),
+ * 两者都绝不读取 Document::source——这类 run 本来就不对应 source 里的任何
+ * 字节。其余情况按 textOffset 正常指向 source。任何要按 textLen 拷贝/统计
+ * 字节的代码都必须经这个函数取指针,不要直接写 `source.data + textOffset`。
  *
  * @param in 目标 Inline run。
  * @param doc 该 run 所属的文档。
@@ -161,7 +171,15 @@ struct Document {
  * @example const char* p = InlineTextBytes(in, doc); memcpy(dst, p, in.textLen);
  */
 inline const char* InlineTextBytes(const Inline& in, const Document& doc) {
-    return (in.flags & kInlineFlagSyntheticNewline) ? "\n" : (doc.source.data + in.textOffset);
+    if (in.flags & kInlineFlagSyntheticNewline) return "\n";
+    if (in.flags & kInlineFlagSyntheticSpaces) {
+        // 16 个空格:md4c 一次最多合成这么多(md_process_verbatim_block_contents
+        // 的 indent_chunk_str 同一常量),textLen 恒 <= 16,调用方只读前
+        // textLen 个字节,不会越界。
+        static const char kSpaces[] = "                ";
+        return kSpaces;
+    }
+    return doc.source.data + in.textOffset;
 }
 
 } // namespace mdvn
