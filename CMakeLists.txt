@@ -64,10 +64,15 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # 所以 /DELAYLOAD 在这里只做到"不提前于导入表解析阶段加载、按需触发"，
 # dwmapi.dll 实际仍会在启动早期出现在模块列表里——这是预期行为，不是延迟
 # 加载没生效，验收时如实记录这个模块增量即可。
+# uxtheme.dll(T48 追加,2026-09-17 用户真机反馈补充:原生滚动条没跟着标题栏
+# 变深色):`SetWindowTheme` 让 WS_VSCROLL 滚动条切换到系统的深色控件主题,
+# 与 dwmapi 同理在窗口创建时就调用,/DELAYLOAD 同样只做到不提前于导入表
+# 解析阶段加载。
 set(MDVN_DELAYLOAD_LINK_OPTIONS
     /DELAYLOAD:winhttp.dll
     /DELAYLOAD:shell32.dll
     /DELAYLOAD:dwmapi.dll
+    /DELAYLOAD:uxtheme.dll
 )
 
 # md4c 是 vendored 的第三方源码（third_party/md4c/），不在该目录下新增任何文件，

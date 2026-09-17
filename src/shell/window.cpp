@@ -1,6 +1,7 @@
 #include "window.h"
 
 #include <dwmapi.h>    // DwmSetWindowAttribute(T48 标题栏深浅色,/DELAYLOAD)
+#include <uxtheme.h>   // SetWindowTheme(原生滚动条深浅色,/DELAYLOAD)
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #include <cwchar>      // wcscmp
 
@@ -52,9 +53,12 @@ WindowState* StateOf(HWND hwnd) {
     return reinterpret_cast<WindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 }
 
-// T48:切标题栏深浅色。按官方口径先试新值 20,`DwmSetWindowAttribute` 返回
-// 非 S_OK(比如运行在不支持该属性的老系统上)再试旧值 19;两次都失败就静默
-// 放弃——标题栏保持浅色,这不是错误态,不弹框、不影响其余功能。窗口创建时
+// T48:切标题栏深浅色 + 原生滚动条深浅色(2026-09-17 真机验收用户反馈补充:
+// 标题栏跟着变了,滚动条没跟着变——WS_VSCROLL 的滑块/滑槽外观完全交给系统
+// 主题绘制,不受 Palette 影响,需要单独告知系统去画哪一套)。按官方口径先试
+// DWMWA_USE_IMMERSIVE_DARK_MODE 新值 20,`DwmSetWindowAttribute` 返回非 S_OK
+// (比如运行在不支持该属性的老系统上)再试旧值 19;两次都失败就静默放弃——
+// 标题栏保持浅色,这不是错误态,不弹框、不影响其余功能。窗口创建时
 // (CreateMainWindow)与 Ctrl+Shift+T 热切换时(WndProc 的 WM_KEYDOWN 分支)
 // 都调用这一个函数,保证两处行为一致。
 //
@@ -66,16 +70,27 @@ WindowState* StateOf(HWND hwnd) {
 // NOZORDER 说明这只是通知重绘、不改变窗口的位置/层级。窗口创建时那次调用
 // (窗口尚未 ShowWindow)理论上不需要这一步,但一起做没有额外成本,统一处理
 // 更简单。
+//
+// 滚动条深浅色走 `SetWindowTheme(hwnd, L"DarkMode_Explorer"/"Explorer", nullptr)`
+// ——这是 Win10 1809+ 起系统滚动条/资源管理器控件识别的子应用名约定(公开 API
+// `SetWindowTheme`,子应用名字符串是系统主题引擎认的惯例值,不是私有 API),
+// `SWP_FRAMECHANGED` 同一次调用会一并让滚动条跟着重绘,不需要额外强制刷新。
 void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
+    // 顺序很关键:实测 SetWindowTheme 若排在 DwmSetWindowAttribute 之后调用,
+    // 有几率把刚设好的标题栏深色属性"冲掉"(非客户区重新走了一次默认主题
+    // 解析,标题栏掉回浅色,而滚动条本身是对的)——先切好滚动条子应用主题,
+    // 再设标题栏深浅色属性,标题栏这条更晚生效、不会被前者覆盖。
+    SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
     BOOL enable = isDark ? TRUE : FALSE;
     HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkMode, &enable, sizeof(enable));
     if (hr != S_OK) {
-        hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
+        DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
     }
-    if (hr == S_OK) {
-        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    // 无条件强制刷新非客户区——不只是标题栏属性变化需要,SetWindowTheme 换了
+    // 滚动条子应用主题同样需要一次真正的重绘才会体现,不能只在 DWM 调用成功
+    // 时才刷新。
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // 取窗口当前的 DPI 缩放系数(实际 DPI / 96);系统不支持按窗口查 DPI 时回退 1.0。
