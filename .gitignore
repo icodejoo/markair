@@ -1,0 +1,38 @@
+# CMake 构建产物目录
+/build/
+/out/
+/[Bb]uild*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Visual Studio / MSBuild 产物
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.sdf
+*.opensdf
+*.suo
+.vs/
+
+# 常见编译产物
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.log
+*.idb
+*.tlog
+
+# 编辑器/系统杂项文件
+.DS_Store
+Thumbs.db
+
+# 本地测试运行产生的临时日志
+/bench_test_err.txt
+/bench_test_out.txt

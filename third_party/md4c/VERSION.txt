@@ -1,0 +1,5 @@
+upstream: https://github.com/mity/md4c
+commit: b3c6223903c1df483cef926ba347e531248f0b92
+commit_date: 2026-09-14 23:17:03 +0200
+vendored_date: 2026-09-16
+files: src/md4c.c, src/md4c.h (仅拷贝核心解析器,未使用 md4c-html)
