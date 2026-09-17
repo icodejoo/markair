@@ -25,26 +25,48 @@
     mdvn.exe 的路径，默认 build\src\Release\mdvn.exe（相对脚本所在的仓库根目录）。
 
 .PARAMETER BenchFile
-    用于测量的基准语料文件，默认 bench\BENCH-A.md。
+    用于测量的基准语料文件，默认 bench\BENCH-A.md。直接指定路径时优先级
+    高于 -Target（两者都给时以 -BenchFile 为准）。
+
+.PARAMETER Target
+    语料预设名（T42 新增），是 -BenchFile 的语法糖：
+    "BENCH-A"（默认，等价于原有行为，语料文件 bench\BENCH-A.md）、
+    "BENCH-B"（图片密集场景，语料文件 bench\BENCH-B.md，用于验证图片密集
+    文档的峰值内存门槛）。只在调用方未显式传 -BenchFile 时生效。
 
 .EXAMPLE
     powershell -File bench\run_bench.ps1 -N 20
-    暖启动模式，跑 20 轮，输出 CSV 与中位数/P95 摘要。
+    暖启动模式，跑 20 轮，输出 CSV 与中位数/P95 摘要（默认 BENCH-A）。
 
 .EXAMPLE
     powershell -File bench\run_bench.ps1 -Cold -N 10
     冷启动模式，跑 10 轮；未装 RAMMap 时会自动降级为“未清 standby list”的测量。
+
+.EXAMPLE
+    powershell -File bench\run_bench.ps1 -Target BENCH-B -N 5
+    图片密集场景（T42），等价于 -BenchFile bench\BENCH-B.md -N 5。
 #>
 
 param(
     [int]$N = 20,
     [switch]$Cold,
     [string]$MdvnExe = "build\src\Release\mdvn.exe",
-    [string]$BenchFile = "bench\BENCH-A.md",
+    [string]$BenchFile,
+    [ValidateSet("BENCH-A", "BENCH-B")]
+    [string]$Target = "BENCH-A",
     [string]$RamMapPath = "RAMMap64.exe"
 )
 
 $ErrorActionPreference = "Stop"
+
+# -Target 只是 -BenchFile 的语法糖:调用方显式传了 -BenchFile 就以它为准
+# （PSBoundParameters 能区分"没传"和"传了默认值"，不破坏原有的直接传路径用法）。
+if (-not $PSBoundParameters.ContainsKey('BenchFile')) {
+    $BenchFile = switch ($Target) {
+        "BENCH-B" { "bench\BENCH-B.md" }
+        default   { "bench\BENCH-A.md" }
+    }
+}
 
 # 脚本自身所在目录即 bench\，仓库根目录是其上一级。
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

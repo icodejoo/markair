@@ -411,7 +411,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         &fonts, &layout, &doc, &renderer, 0.0f,
         &imageCache, &residency, &remoteLoader, &tempFiles, &imageScratch, documentDirectory,
         &find, nullptr, &OpenDocumentInPlace,
-        &OnWindowCreatedBenchHook, &OnFirstPresentBenchHook, nullptr, false};
+        &OnWindowCreatedBenchHook, &OnFirstPresentBenchHook, nullptr, false,
+        // T42:只在 --bench 模式下开启"首屏之外强制全量解码",正常运行(双击打开
+        // 文件/无 --bench)时此字段为 false,行为与之前完全一致。
+        benchArgs.benchEnabled};
 
     if (!mdvn::RegisterMainWindowClass(hInstance)) {
         if (argv) LocalFree(argv);

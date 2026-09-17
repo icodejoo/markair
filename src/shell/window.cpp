@@ -316,6 +316,16 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     // 之后同一批图片不会再触发(ImagePlacementChanged 会返回 false)。
     RelayoutForImagesIfNeeded(hwnd, state);
 
+    // T42(bench 专用):首屏解码完之后,若开启了"强制全量解码",再对整份文档
+    // 补一次 UpdateVisibleRange,把首屏之外的图片也解码一遍,近似"滚到底"的
+    // 内存读数;只在 benchForceFullDecode 且尚未触发过首帧上报时执行一次,
+    // 不影响正常交互场景下的虚拟化行为。
+    if (state->benchForceFullDecode && !state->firstPresentDone && state->layout) {
+        state->layout->UpdateVisibleRange(0.0f, state->layout->TotalHeight(), *state->fonts,
+                                          state->residency);
+        RelayoutForImagesIfNeeded(hwnd, state);
+    }
+
     // T37/T38:把查找命中集合与查找条/提示条打包成只读视图交给渲染层;
     // 两者都没有时传 nullptr,渲染层零额外开销。
     ShellOverlay overlay{};

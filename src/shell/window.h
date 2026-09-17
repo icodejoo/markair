@@ -74,6 +74,13 @@ struct WindowState {
     void* callbackUserData;                    // 传给以上两个回调的自定义指针
 
     bool firstPresentDone;       // 内部状态:onFirstPresent 是否已触发过,调用方应初始化为 false
+
+    // T42(bench 专用,测试路径,不改变默认行为):为 true 时,首次绘制会在正常的
+    // "首屏可见 ± 1 屏"解码之后,额外对整份文档([0, TotalHeight()])调用一次
+    // UpdateVisibleRange,强制把全部图片都解码一遍——用于近似"滚到底"的内存
+    // 测量口径(--bench 模式本身不模拟真实滚动,这是唯一的替代)。为 false(默认)
+    // 时不产生任何额外调用,非 bench 场景行为与之前完全一致。
+    bool benchForceFullDecode;
 };
 
 /**
