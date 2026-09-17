@@ -22,6 +22,7 @@ add_executable(mdvn_tests
     test_search.cpp
     test_ini.cpp
     test_corpus_smoke.cpp
+    test_fuzz_smoke.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/str.cpp
@@ -55,6 +56,11 @@ target_compile_options(mdvn_tests PRIVATE ${MDVN_COMMON_COMPILE_OPTIONS})
 # 用 CMAKE_SOURCE_DIR 直接烘焙一份绝对路径,避免运行期猜测相对路径层数。
 target_compile_definitions(mdvn_tests PRIVATE
     MDVN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/bench/corpus")
+
+# T43:test_fuzz_smoke.cpp 需要知道 bench/fuzz 语料目录的绝对路径,理由与
+# MDVN_CORPUS_DIR 一致(ctest 默认工作目录不是仓库根目录)。
+target_compile_definitions(mdvn_tests PRIVATE
+    MDVN_FUZZ_DIR="${CMAKE_SOURCE_DIR}/bench/fuzz")
 
 # test_model.cpp 通过 parser.cpp 间接依赖 md4c 的 md_parse；
 # test_font.cpp 通过 font.cpp 依赖 DirectWrite。
