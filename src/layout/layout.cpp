@@ -28,6 +28,12 @@ constexpr float kQuoteBarWidthDip = 3.0f;
 // 围栏代码块背景矩形右侧留白,不铺满到视口最右边。
 constexpr float kCodeBlockRightMarginDip = 16.0f;
 
+// 代码高亮区内边距(参考常见 Markdown 渲染器,如 GitHub 的代码块留白),
+// 文字四周离背景边框 8 DIP;圆角半径见 renderer.cpp 的 kCodeBlockCornerRadiusDip。
+// 与 kCodeBlockRightMarginDip/kTableCellPaddingDip 同一惯例:固定留白不随
+// fontScale_ 缩放。
+constexpr float kCodeBlockPaddingDip = 8.0f;
+
 // 块与块之间的垂直间距。
 constexpr float kBlockVerticalGapDip = 8.0f;
 
@@ -193,6 +199,13 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     g.taskChecked = false;
     g.smallText = inFootnote || b.type == BlockType::FootnoteDefSection;
     g.footnoteId = 0;
+    // 代码高亮区内边距:文字离背景四边各留 8 DIP,但 g.indent/g.codeBackground
+    // 的既有几何口径不能变(会影响下面 codeBackground 的计算)。这里只记一份
+    // textPad,渲染时(见 renderer.cpp 的 TextDrawLeft/TextDrawTop)把文字整体
+    // 从 (g.indent, g.top) 平移 (pad, pad) 画;右侧/底部内边距体现为下面
+    // cursor/maxWidth 计算时预留等量空间,不需要额外几何字段。
+    bool isCodeBlock = b.type == BlockType::CodeBlock;
+    g.textPad = isCodeBlock ? kCodeBlockPaddingDip : 0.0f;
 
     bool isListContainer =
         b.type == BlockType::BulletList || b.type == BlockType::OrderedList;
@@ -240,7 +253,14 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     bool wroteSomething = false;
     if (hasOwnLeafContent) {
         float availableWidth = viewportWidth_ - g.indent;
-        cursor = y + EstimateLeafHeight(b, availableWidth);
+        // 代码高亮区文字左右各留 8 DIP 内边距(注意 g.indent 本身不变,背景矩形
+        // 仍按 g.indent 起算,和 M0 既有的 Layout_CodeBlockBackgroundGeometry
+        // 断言口径保持一致),这里只是收窄"文字可用宽度",与 kCodeBlockRightMarginDip
+        // 一起决定真正留给文字折行的宽度;上下各 8 DIP 内边距体现为 cursor
+        // 前后各加一份 kCodeBlockPaddingDip。
+        if (isCodeBlock) availableWidth -= kCodeBlockRightMarginDip + kCodeBlockPaddingDip * 2.0f;
+        if (availableWidth < 1.0f) availableWidth = 1.0f;
+        cursor = y + g.textPad + EstimateLeafHeight(b, availableWidth) + g.textPad;
         wroteSomething = true;
     } else if (isFootnoteDefLabel) {
         cursor = y + kFootnoteLabelHeightDip * fontScale_;
@@ -751,6 +771,12 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
     BlockGeometry& g = geometries_[blockIndex];
     FontRole role = (b.type == BlockType::CodeBlock) ? FontRole::Mono : FontRole::Body;
     float maxWidth = (g.cellWidth > 0.0f) ? g.cellWidth : (viewportWidth_ - g.indent);
+    // 代码高亮区文字左右各留 8 DIP 内边距,还要扣掉背景本身的右侧留白
+    // (kCodeBlockRightMarginDip),与 LayoutSubtree 里 EstimateLeafHeight 用的
+    // availableWidth 保持同一份计算口径,避免估算高度和真实折行宽度不一致。
+    if (b.type == BlockType::CodeBlock) {
+        maxWidth -= kCodeBlockRightMarginDip + kCodeBlockPaddingDip * 2.0f;
+    }
     if (maxWidth < 1.0f) maxWidth = 1.0f;
 
     IDWriteTextLayout* layout = fonts.CreateTextLayout(buf, cursor, role, maxWidth, kMaxTextLayoutHeightDip);

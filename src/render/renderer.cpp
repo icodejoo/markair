@@ -12,17 +12,28 @@ constexpr float kThematicBreakRightMarginDip = 16.0f;
 
 // 背景色:主题背景(浅色),与窗口类的 GDI 背景色保持一致,避免首帧白闪
 // (架构 §6,已在窗口类里落地;这里只是让 D2D 清屏色跟 GDI 背景一致)。
-// Bug 2 修复:表格单元格文字的实际绘制 top——同一行所有单元格共用一份
-// "行高"(取该行各单元格估算高度的最大值,见 LayoutTableSubtree),但单个
-// 单元格文字的真实高度(g.contentHeight,来自 GetMetrics)往往比行高小,
-// 直接从 g.top 起画会贴在行顶部。这里按 (行高 - 真实内容高度) / 2 算一份
-// 垂直居中偏移;非表格单元格(g.contentHeight 恒为 0)原样返回 g.top。
+// 文字的实际绘制 left——代码高亮区(g.textPad > 0)固定右移一份内边距,
+// 让文字离背景左边框有留白;其余类型 textPad 恒为 0,原样返回 g.indent。
+float TextDrawLeft(const BlockGeometry& g) { return g.indent + g.textPad; }
+
+// 文字的实际绘制 top,两种场景各自独立生效(互不相关,一个块不会同时是
+// 表格单元格和代码块):
+//  - 代码高亮区(g.textPad > 0):固定下移一份内边距,让文字离背景上边框
+//    有留白。
+//  - 表格单元格(g.contentHeight > 0):同一行所有单元格共用一份"行高"(取该
+//    行各单元格估算高度的最大值,见 LayoutTableSubtree),但单个单元格文字的
+//    真实高度(g.contentHeight,来自 GetMetrics)往往比行高小,直接从 g.top
+//    起画会贴在行顶部,这里按 (行高 - 真实内容高度) / 2 算一份垂直居中偏移。
 float TextDrawTop(const BlockGeometry& g) {
-    if (g.contentHeight <= 0.0f) return g.top;
+    float top = g.top + g.textPad;
+    if (g.contentHeight <= 0.0f) return top;
     float rowHeight = g.bottom - g.top;
     float offset = (rowHeight - g.contentHeight) * 0.5f;
-    return offset > 0.0f ? g.top + offset : g.top;
+    return offset > 0.0f ? top + offset : top;
 }
+
+// 代码高亮区圆角半径(DIP),参考常见 Markdown 渲染器的代码块风格。
+constexpr float kCodeBlockCornerRadiusDip = 4.0f;
 
 D2D1_COLOR_F BackgroundColor() { return D2D1::ColorF(D2D1::ColorF::White); }
 
@@ -404,9 +415,10 @@ void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1Soli
         const LinkBox& lb = g.linkBoxes[i];
         DWRITE_HIT_TEST_METRICS metrics[kMaxHitTestMetrics];
         UINT32 actualCount = 0;
+        float drawLeft = TextDrawLeft(g);
         float drawTop = TextDrawTop(g) - scrollY;
         HRESULT hr = g.textLayout->HitTestTextRange(
-            lb.textPosition, lb.textLength, g.indent, drawTop,
+            lb.textPosition, lb.textLength, drawLeft, drawTop,
             metrics, kMaxHitTestMetrics, &actualCount);
         if (FAILED(hr)) continue;
 
@@ -419,7 +431,7 @@ void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1Soli
             // 不可见,效果上等价于"只给这段文字换色",但不需要 SetDrawingEffect
             // 与自定义 TextRenderer(T24 明确避免的成本)。
             target_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            target_->DrawTextLayout(D2D1::Point2F(g.indent, drawTop), g.textLayout, linkBrush);
+            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, linkBrush);
             target_->PopAxisAlignedClip();
         }
     }
@@ -443,7 +455,7 @@ void Renderer::DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float 
 
         DWRITE_HIT_TEST_METRICS metrics[kMaxFindHitMetrics];
         UINT32 actualCount = 0;
-        HRESULT hr = g.textLayout->HitTestTextRange(position, length, g.indent, TextDrawTop(g) - scrollY,
+        HRESULT hr = g.textLayout->HitTestTextRange(position, length, TextDrawLeft(g), TextDrawTop(g) - scrollY,
                                                      metrics, kMaxFindHitMetrics, &actualCount);
         if (FAILED(hr)) continue;
 
@@ -723,12 +735,15 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* findHighlightBrush,
                           ID2D1SolidColorBrush* findCurrentBrush) {
     // 围栏代码块背景:先画背景,再画文本,避免文本被背景矩形盖住。
+    // 4 DIP 圆角,与常见 Markdown 渲染器的代码块风格保持一致。
     if (g.type == BlockType::CodeBlock && codeBgBrush) {
         D2D1_RECT_F rect = D2D1::RectF(
             g.codeBackground.x, g.codeBackground.y - scrollY,
             g.codeBackground.x + g.codeBackground.width,
             g.codeBackground.y - scrollY + g.codeBackground.height);
-        target_->FillRectangle(rect, codeBgBrush);
+        D2D1_ROUNDED_RECT roundedRect =
+            D2D1::RoundedRect(rect, kCodeBlockCornerRadiusDip, kCodeBlockCornerRadiusDip);
+        target_->FillRoundedRectangle(roundedRect, codeBgBrush);
     }
 
     // 引用块左侧竖线:D2D 几何图元填色矩形,不用任何字体字符模拟(架构 §4 第 5 条)。
@@ -774,7 +789,7 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
     if (g.textLayout && textBrush) {
         // 查找命中高亮(T38)画在文本**之前**,于是底色在文字下方,文字颜色不受影响。
         DrawFindHighlights(g, blockIndex, scrollY, findHighlightBrush, findCurrentBrush);
-        target_->DrawTextLayout(D2D1::Point2F(g.indent, TextDrawTop(g) - scrollY),
+        target_->DrawTextLayout(D2D1::Point2F(TextDrawLeft(g), TextDrawTop(g) - scrollY),
                                   g.textLayout, textBrush);
         // 链接着色(T24):在正文之上叠加一次裁剪重绘,见 DrawLinkOverlays 注释。
         DrawLinkOverlays(g, scrollY, linkBrush);
