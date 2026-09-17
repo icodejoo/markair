@@ -1,0 +1,149 @@
+// mdvn 的窗口外壳(T12):窗口类注册、主窗口创建、窗口过程、DPI 感知与
+// 滚动状态管理。本模块只负责"消息 -> 状态变更 -> 触发重绘",不做解析/布局/
+// 渲染本身的工作,那些分别属于 doc/layout/render 模块。
+//
+// 设计要点:
+//   - 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
+//   - Per-Monitor V2 DPI 感知,`WM_DPICHANGED` 应用系统建议矩形并重建 D2D 资源。
+//   - 窗口类背景刷设为主题背景(当前主题为浅色,取 COLOR_WINDOW),避免首帧白闪(架构 §6)。
+//   - 滚动数值计算全部委托给 shell/scroll.h 里的纯函数,便于单元测试。
+#pragma once
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#include "../assets/cache.h"
+#include "../assets/remote.h"
+#include "../doc/model.h"
+#include "../layout/layout.h"
+#include "../render/renderer.h"
+#include "../text/font.h"
+#include "find.h"
+#include "hit_test.h"
+#include "navigate.h"
+#include "scroll.h"
+
+namespace mdvn {
+
+/**
+ * 窗口运行期状态:外壳层需要用到的各子系统引用 + 当前滚动偏移。
+ *
+ * 各指针指向的实例由调用方(`wWinMain`)持有,生命周期须覆盖整个消息循环;
+ * 本结构体自身也由调用方分配(通常放在栈上),外壳层不做任何动态分配。
+ * 全部字段为 POD/裸指针,不含有副作用的构造函数(编码规范第 6 条)。
+ */
+struct WindowState {
+    FontSubsystem* fonts;        // 字体子系统,用于按可见范围生成 IDWriteTextLayout
+    BlockLayoutEngine* layout;   // 块级布局引擎
+    const Document* doc;         // 当前文档模型,视口宽度变化时用于重跑布局
+    Renderer* renderer;          // D2D 渲染器
+    float scrollY;               // 当前纵向滚动偏移(DIP),恒在 [0, maxScroll] 内
+
+    // 以下为 M1 图片子系统(T32/T33/T34/T36b)所需的引用,均可为空:
+    // 为空时图片一律画占位块、点击图片无行为,其余功能不受影响。
+    ImageCache* images;                  // 图片缓存(尺寸常驻 + 位图随虚拟化生灭)
+    ImageResidencyManager* residency;    // 图片驻留管理器,挂在块虚拟化触发点上
+    RemoteImageLoader* remote;           // 网络图片加载器(默认关闭)
+    TempFileRegistry* tempFiles;         // T36b 临时文件清单(退出前统一清理)
+    Arena* imageScratch;                 // data: URI 解码用的临时 Arena
+    const wchar_t* documentDirectory;     // 当前文档所在目录,相对路径图片据此解析
+
+    // 以下为 M1 交互层(T36/T37/T38)所需,均可为空:
+    // 为空时对应功能静默失效(不崩溃),其余功能不受影响。
+    FindSession* find;                    // Ctrl+F 查找会话(T37/T38)
+    const wchar_t* statusMessage;         // 窗口内提示(如"文件不存在"),不弹 MessageBox
+
+    /**
+     * T36 ②:在当前窗口内替换文档(裁决 #6,不新开进程)。由 app 层实现——
+     * 外壳层不知道文档是怎么加载的,只负责在链接被点击时发起这次替换。
+     * 实现方应释放旧的 Document / BlockLayoutEngine / 图片缓存后重建并重排,
+     * 并就地更新 `doc` / `documentDirectory` 等字段。
+     * 为空表示不支持文档内跳转(纯渲染场景/单测)。
+     *
+     * @param userData 即 `callbackUserData`。
+     * @param fullPath 已规范化的绝对路径(以 '\0' 结尾)。
+     * @return 加载成功返回 true;失败返回 false(外壳层据此显示窗口内提示)。
+     */
+    bool (*openDocumentInPlace)(void* userData, const wchar_t* fullPath);
+
+    // 以下三个字段是给调用方(main.cpp/T14 性能埋点)预留的通用回调钩子,
+    // 外壳层本身不关心它们的用途,只在对应时机原样调用;均可为空指针,
+    // 为空时不产生任何额外调用开销。这样保持 shell 层不直接依赖 bench 模块。
+    void (*onWindowCreated)(void* userData);  // 窗口创建成功、显示之前调用一次
+    void (*onFirstPresent)(void* userData);   // 首次绘制成功返回后调用一次
+    void* callbackUserData;                    // 传给以上两个回调的自定义指针
+
+    bool firstPresentDone;       // 内部状态:onFirstPresent 是否已触发过,调用方应初始化为 false
+};
+
+/**
+ * 开启 Per-Monitor V2 DPI 感知,须在创建任何窗口之前调用。
+ *
+ * 实现方式是运行期从 user32.dll 取 `SetProcessDpiAwarenessContext`,系统不支持
+ * (Win10 1703 以前)时静默退化为系统 DPI 感知,不影响程序启动。
+ *
+ * @return 成功开启 Per-Monitor V2 返回 true;系统不支持或调用失败返回 false。
+ * @example
+ *   int WINAPI wWinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
+ *       mdvn::EnablePerMonitorV2DpiAwareness();
+ *       // ... 之后再创建窗口
+ *   }
+ */
+bool EnablePerMonitorV2DpiAwareness();
+
+/**
+ * 注册 mdvn 主窗口类(幂等:重复调用只在首次真正注册)。
+ * @param instance 当前进程实例句柄。
+ * @return 注册成功(或此前已注册成功)返回 true。
+ * @example mdvn::RegisterMainWindowClass(hInstance);
+ */
+bool RegisterMainWindowClass(HINSTANCE instance);
+
+/**
+ * 创建并显示主窗口,把窗口过程需要的运行期状态绑定到该窗口上。
+ *
+ * 调用前须先成功调用 `RegisterMainWindowClass`。窗口采用标准
+ * `WS_OVERLAPPEDWINDOW` 标题栏,初始逻辑尺寸 800x600,并按窗口所在显示器的
+ * DPI 缩放。
+ *
+ * @param instance 当前进程实例句柄。
+ * @param title 窗口标题(UTF-16,非空)。
+ * @param state 运行期状态,生命周期须覆盖整个消息循环;函数内部会把
+ *              `scrollY`/`firstPresentDone` 归零,其余字段由调用方填好。
+ *              `onWindowCreated` 会在窗口创建成功、显示之前被调用一次
+ *              (若非空)。
+ * @return 创建成功返回窗口句柄,失败返回 nullptr。
+ * @example
+ *   mdvn::WindowState state{&fonts, &layout, &doc, &renderer, 0.0f,
+ *                            &images, &residency, &remote, &temps, &imgArena, docDir,
+ *                            &find, nullptr, &OpenDocumentInPlace,
+ *                            nullptr, nullptr, nullptr, false};
+ *   HWND hwnd = mdvn::CreateMainWindow(hInstance, L"mdvn", &state);
+ */
+HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state);
+
+/**
+ * 取窗口客户区宽度(DIP)。客户区本身是物理像素,除以窗口所在显示器的 DPI
+ * 缩放换算成逻辑单位,与布局/渲染使用的 DIP 坐标系保持一致。
+ * @param hwnd 目标窗口。
+ * @return 客户区宽度(DIP);取不到 DPI 时按 96 DPI 计算。
+ * @example layout.Relayout(doc, mdvn::ClientWidthDip(hwnd), fonts.Scale(), &cache);
+ */
+float ClientWidthDip(HWND hwnd);
+
+/**
+ * 取窗口客户区高度(DIP),口径同 `ClientWidthDip`。
+ * @param hwnd 目标窗口。
+ * @return 客户区高度(DIP)。
+ * @example float vh = mdvn::ClientHeightDip(hwnd);
+ */
+float ClientHeightDip(HWND hwnd);
+
+/**
+ * 跑标准的 `GetMessage` 消息循环,直到窗口关闭(收到 `WM_QUIT`)。
+ * @return `WM_QUIT` 携带的退出码,可直接作为 `wWinMain` 的返回值。
+ * @example return mdvn::RunMessageLoop();
+ */
+int RunMessageLoop();
+
+}  // namespace mdvn

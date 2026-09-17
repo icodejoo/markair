@@ -1,0 +1,786 @@
+#include "layout.h"
+
+#include <cstring>
+
+namespace mdvn {
+
+namespace {
+
+// 几何数组用的 Arena 预留大小:按 kMaxDocumentNodeCount(20 万)量级的块数估算,
+// 每个 BlockGeometry 约 60 字节,Vec 扩容翻倍最多多占一倍,32MB 留有充分余量。
+// M1 新增的表格列宽/行边界/链接 run 侧数组也从这个 Arena 分配,量级远小于
+// 几何数组本身,不需要单独扩大预留。
+constexpr size_t kGeometryArenaReserveBytes = 32u * 1024u * 1024u;
+
+// 拼接单个块文本用的临时 Arena,每次生成 layout 前 Reset 复用,不需要很大。
+constexpr size_t kScratchArenaReserveBytes = 1u * 1024u * 1024u;
+
+// 每层列表缩进量:正文行高(20 DIP)的 1.2 倍,模拟常见 Markdown 渲染器
+// list-item 的 padding-left。
+constexpr float kListIndentUnitDip = 24.0f;
+
+// 每层引用块缩进量。
+constexpr float kQuoteIndentUnitDip = 20.0f;
+
+// 引用块左侧竖线宽度(固定小正数)。
+constexpr float kQuoteBarWidthDip = 3.0f;
+
+// 围栏代码块背景矩形右侧留白,不铺满到视口最右边。
+constexpr float kCodeBlockRightMarginDip = 16.0f;
+
+// 块与块之间的垂直间距。
+constexpr float kBlockVerticalGapDip = 8.0f;
+
+// 叶子内容块估算高度时额外附加的上下留白。
+constexpr float kLeafVerticalPaddingDip = 4.0f;
+
+// 正文行高与平均字符宽度估算值(占位用,真实值等真实 IDWriteTextLayout 生成后才知道)。
+constexpr float kBaseLineHeightDip = 20.0f;
+constexpr float kAvgCharWidthDip = 8.0f;
+
+// 等宽字体(围栏代码块)的行高/字符宽度估算值,略窄一些的行高、略宽一些的字符宽度。
+constexpr float kMonoLineHeightDip = 18.0f;
+constexpr float kMonoAvgCharWidthDip = 9.0f;
+
+// 分割线固定高度(含上下留白)。
+constexpr float kThematicBreakHeightDip = 24.0f;
+
+// 创建 IDWriteTextLayout 时给的排版框最大高度,只是给 DWrite 一个足够大的框,
+// 不会截断文本,真实高度以 GetMetrics() 为准(本实现暂不做该值的回填,见头文件说明)。
+constexpr float kMaxTextLayoutHeightDip = 100000.0f;
+
+// 标题各级别(1-6)相对正文的字号/行高放大系数,索引 0 不使用。
+constexpr float kHeadingScale[7] = {1.0f, 1.8f, 1.5f, 1.35f, 1.2f, 1.1f, 1.0f};
+
+// T27 任务列表勾选框:边长与文字之间的间隙(DIP,未缩放前),随 fontScale_ 缩放。
+constexpr float kCheckboxSizeDip = 14.0f;
+constexpr float kCheckboxGapDip = 6.0f;
+
+// T28 脚注区块内文字整体缩小的比例(相对当前正文字号)。
+constexpr float kFootnoteFontRatio = 0.85f;
+
+// T28 正文里脚注引用上标 "[n]" 的缩小比例。
+constexpr float kFootnoteRefFontRatio = 0.7f;
+
+// T26 表格单元格内文本左右各留的内边距(DIP)。
+constexpr float kTableCellPaddingDip = 6.0f;
+
+// T28 脚注定义 "[n]" 编号标签预留的高度(DIP,未缩放前),独占一行,
+// 具体文字由渲染层用小号一次性 layout 画出(见 renderer.cpp)。
+constexpr float kFootnoteLabelHeightDip = 18.0f;
+
+// T33 图片之间、以及图片与同块文本之间的垂直间距(DIP,未缩放前)。
+constexpr float kImageVerticalGapDip = 6.0f;
+
+// 把一个 u32 格式化成十进制 wchar_t 数字写入 buf(不含符号/千分位),返回写入长度。
+// 手写实现(脚注引用只需要合成形如 "12" 的极短数字文本),避免为此引入
+// swprintf 格式串解析的开销与依赖。
+u32 FormatDecimalW(u32 value, wchar_t* buf, u32 cap) {
+    wchar_t tmp[10];
+    u32 n = 0;
+    if (value == 0) {
+        tmp[n++] = L'0';
+    } else {
+        while (value > 0 && n < 10) {
+            tmp[n++] = static_cast<wchar_t>(L'0' + (value % 10));
+            value /= 10;
+        }
+    }
+    u32 len = n < cap ? n : cap;
+    for (u32 i = 0; i < len; ++i) buf[i] = tmp[len - 1 - i];
+    return len;
+}
+
+}  // namespace
+
+// 构造一个空引擎,Arena 延迟到首次 Relayout 才真正预留地址空间。
+BlockLayoutEngine::BlockLayoutEngine()
+    : geometryArena_(),
+      scratchArena_(),
+      arenasReady_(false),
+      geometries_(&geometryArena_),
+      doc_(nullptr),
+      viewportWidth_(0.0f),
+      totalHeight_(0.0f),
+      fontScale_(1.0f),
+      imageCache_(nullptr) {}
+
+// 先淘汰所有仍持有的 IDWriteTextLayout,再让 Arena 析构释放虚拟地址空间。
+BlockLayoutEngine::~BlockLayoutEngine() { ReleaseAllLayouts(); }
+
+void BlockLayoutEngine::ReleaseAllLayouts() {
+    u32 count = geometries_.Size();
+    for (u32 i = 0; i < count; ++i) {
+        IDWriteTextLayout*& layout = geometries_[i].textLayout;
+        if (layout) {
+            layout->Release();
+            layout = nullptr;
+        }
+    }
+}
+
+bool BlockLayoutEngine::BlockHasOwnText(const Block& b) const {
+    // 只有携带直属文本的块才需要 layout:标题/段落/代码块/表格单元格恒有文本
+    // (空单元格 inlineCount 为 0,下面按此过滤);紧凑列表项(ListItem)可能
+    // 携带自己的首段文本;纯容器块(文档根/列表/引用块/表格分组行/无文本的
+    // 列表项)永远没有直属文本,不生成 layout。
+    if (b.type == BlockType::Heading || b.type == BlockType::Paragraph ||
+        b.type == BlockType::CodeBlock) {
+        return true;
+    }
+    if (b.type == BlockType::TableHeadCell || b.type == BlockType::TableCell) {
+        return b.inlineCount > 0;
+    }
+    if (b.type == BlockType::ListItem) {
+        return b.inlineCount > 0;
+    }
+    return false;
+}
+
+bool BlockLayoutEngine::Relayout(const Document& doc, float viewportWidth, float fontScale,
+                                  const ImageCache* images) {
+    // 先淘汰上一次布局持有的全部 layout,避免跨文档/跨布局泄漏 COM 对象。
+    ReleaseAllLayouts();
+
+    if (!arenasReady_) {
+        if (!geometryArena_.Init(kGeometryArenaReserveBytes)) return false;
+        if (!scratchArena_.Init(kScratchArenaReserveBytes)) return false;
+        arenasReady_ = true;
+    } else {
+        geometryArena_.Reset();
+        scratchArena_.Reset();
+    }
+
+    // Vec 本身是"绑定到某个 Arena 的追加数组"值语义,重新绑定即可让它在
+    // Reset 后的 Arena 上重新从零开始追加,不需要额外的"清空"接口。
+    geometries_ = Vec<BlockGeometry>(&geometryArena_);
+    doc_ = &doc;
+    viewportWidth_ = viewportWidth;
+    fontScale_ = fontScale > 0.0f ? fontScale : 1.0f;
+    imageCache_ = images;
+    totalHeight_ = 0.0f;
+
+    u32 blockCount = doc.blocks.Size();
+    for (u32 i = 0; i < blockCount; ++i) {
+        if (!geometries_.Push(BlockGeometry{})) {
+            return false;  // Arena 空间耗尽,安全放弃,不崩溃
+        }
+    }
+    if (blockCount == 0) return true;
+
+    LayoutSubtree(0, 0.0f, 0.0f, false);
+    totalHeight_ = geometries_[0].bottom;
+    return true;
+}
+
+float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool inFootnote) {
+    const Block& b = doc_->blocks[blockIndex];
+    BlockGeometry& g = geometries_[blockIndex];
+
+    g.type = b.type;
+    g.top = y;
+    g.indent = x;
+    g.textLayout = nullptr;
+    g.quoteBar = LayoutRect{0, 0, 0, 0};
+    g.codeBackground = LayoutRect{0, 0, 0, 0};
+    g.linkBoxes = Span<LinkBox>{nullptr, 0};
+    g.imageBoxes = Span<ImageBox>{nullptr, 0};
+    g.tableColWidths = Span<float>{nullptr, 0};
+    g.tableRowTops = Span<float>{nullptr, 0};
+    g.tableHeadRowCount = 0;
+    g.cellWidth = 0.0f;
+    g.taskCheckbox = LayoutRect{0, 0, 0, 0};
+    g.taskChecked = false;
+    g.smallText = inFootnote || b.type == BlockType::FootnoteDefSection;
+    g.footnoteId = 0;
+
+    bool isListContainer =
+        b.type == BlockType::BulletList || b.type == BlockType::OrderedList;
+    bool isQuote = b.type == BlockType::BlockQuote;
+    float childX = x;
+    if (isListContainer) childX = x + kListIndentUnitDip * fontScale_;
+    if (isQuote) childX = x + kQuoteIndentUnitDip * fontScale_;
+
+    bool nextInFootnote = inFootnote || b.type == BlockType::FootnoteDefSection;
+
+    // T27:任务列表勾选框——检测到 ListItemDetail 侧表条目即认定为任务项
+    // (parser.cpp 只在 is_task 为真时才 Push 该侧表,detailIdx 非法即非任务项)。
+    // 勾选框画在原始左边界 x 处,自身文字整体右移让出空间;子块(嵌套列表/
+    // 段落)缩进不受影响,仍从 childX(未右移的 x)起排。
+    bool isTaskItem = b.type == BlockType::ListItem && b.detailIdx != kInvalidIndex;
+    if (isTaskItem) {
+        const ListItemDetail& lid = doc_->listItemDetails[b.detailIdx];
+        float size = kCheckboxSizeDip * fontScale_;
+        float lineHeight = kBaseLineHeightDip * fontScale_;
+        float boxY = y + (lineHeight - size) * 0.5f;
+        if (boxY < y) boxY = y;
+        g.taskCheckbox = LayoutRect{x, boxY, size, size};
+        g.taskChecked = lid.taskChecked;
+        g.indent = x + size + kCheckboxGapDip * fontScale_;
+    }
+
+    // 紧凑列表项(ListItem)可能直属一段行内文本(紧凑列表首段内容),
+    // 这段文本按叶子内容块估算高度;标题/段落/代码块/分割线也是同样的
+    // 叶子内容块,没有子块。文档根/列表/引用块永远没有直属行内内容
+    // (model.h 注释:容器类块恒为 0),只靠子块堆叠出高度。
+    bool hasOwnLeafContent =
+        b.type == BlockType::Heading || b.type == BlockType::Paragraph ||
+        b.type == BlockType::CodeBlock || b.type == BlockType::ThematicBreak ||
+        (b.type == BlockType::ListItem && b.inlineCount > 0);
+
+    // T28:脚注定义(FootnoteDef)本身是容器块(正文走子 Paragraph),但需要在
+    // 顶部独占一行画 "[n]" 编号标签,这里给它预留一行高度,渲染层据此画标签、
+    // 子块(正文段落)则照常从预留高度之后开始排。
+    bool isFootnoteDefLabel = b.type == BlockType::FootnoteDef && b.detailIdx != kInvalidIndex;
+    if (isFootnoteDefLabel) {
+        g.footnoteId = doc_->footnoteDetails[b.detailIdx].id;
+    }
+
+    float cursor = y;
+    bool wroteSomething = false;
+    if (hasOwnLeafContent) {
+        float availableWidth = viewportWidth_ - g.indent;
+        cursor = y + EstimateLeafHeight(b, availableWidth);
+        wroteSomething = true;
+    } else if (isFootnoteDefLabel) {
+        cursor = y + kFootnoteLabelHeightDip * fontScale_;
+        wroteSomething = true;
+    }
+
+    // T33:图片 inline 参与块高度计算——在本块直属文本之下纵向堆叠图片/占位块。
+    // 尺寸在这一步就定下来("先有尺寸再有位图"),渲染层只负责往矩形里画。
+    if (b.inlineCount > 0) {
+        float imageAvailWidth = viewportWidth_ - g.indent;
+        float imagesHeight = LayoutImagesForBlock(blockIndex, g.indent, cursor, imageAvailWidth);
+        if (imagesHeight > 0.0f) {
+            cursor += imagesHeight;
+            wroteSomething = true;
+        }
+    }
+
+    u32 child = b.firstChildIdx;
+    u32 end = b.firstChildIdx + b.childCount;
+    while (child < end) {
+        if (wroteSomething) cursor += kBlockVerticalGapDip * fontScale_;  // 兄弟块/自身内容之间留一份间距
+        // 表格(T25/T26)整棵子树(TableHead/TableBody/TableRow/单元格)都由
+        // LayoutTableSubtree 直接铺开几何,不再走这里的通用容器递归路径。
+        if (doc_->blocks[child].type == BlockType::Table) {
+            cursor = LayoutTableSubtree(child, childX, cursor);
+        } else {
+            cursor = LayoutSubtree(child, childX, cursor, nextInFootnote);
+        }
+        wroteSomething = true;
+        child = child + 1 + doc_->blocks[child].childCount;
+    }
+
+    g.bottom = wroteSomething ? cursor : y;
+
+    if (isQuote) {
+        g.quoteBar = LayoutRect{x, g.top, kQuoteBarWidthDip, g.bottom - g.top};
+    }
+    if (b.type == BlockType::CodeBlock) {
+        float bgWidth = viewportWidth_ - x - kCodeBlockRightMarginDip;
+        if (bgWidth < 0.0f) bgWidth = 0.0f;
+        g.codeBackground = LayoutRect{x, g.top, bgWidth, g.bottom - g.top};
+    }
+
+    return g.bottom;
+}
+
+float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth) const {
+    if (b.type == BlockType::ThematicBreak) return kThematicBreakHeightDip * fontScale_;
+
+    u32 totalChars = 0;
+    bool hasImage = false;
+    for (u32 i = 0; i < b.inlineCount; ++i) {
+        const Inline& in = doc_->inlines[b.firstInlineIdx + i];
+        if (in.flags & kInlineFlagImage) {
+            // 图片 run 的文本是 alt,画在图片/占位块内部(T33),不参与正文排版,
+            // 因此也不计入正文高度 —— 否则图片上方会多出一行空白。
+            hasImage = true;
+            continue;
+        }
+        if (in.flags & kInlineFlagFootnoteRef) {
+            totalChars += 4;  // 合成的可见文本 "[n]" 量级很小,固定按 4 字符估算即可
+            continue;
+        }
+        totalChars += in.textLen;
+    }
+    // 纯图片段落没有任何正文文字,正文部分高度为 0,整块高度全由图片贡献。
+    if (totalChars == 0 && hasImage) return 0.0f;
+    if (totalChars == 0) totalChars = 1;
+
+    float lineHeight = kBaseLineHeightDip * fontScale_;
+    float avgCharWidth = kAvgCharWidthDip * fontScale_;
+    if (b.type == BlockType::Heading) {
+        u32 level = (b.level >= 1 && b.level <= 6) ? b.level : 6;
+        float scale = kHeadingScale[level];
+        lineHeight *= scale;
+        avgCharWidth *= scale;
+    } else if (b.type == BlockType::CodeBlock) {
+        lineHeight = kMonoLineHeightDip * fontScale_;
+        avgCharWidth = kMonoAvgCharWidthDip * fontScale_;
+    }
+
+    float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
+    u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
+    if (charsPerLine == 0) charsPerLine = 1;
+    u32 lines = (totalChars + charsPerLine - 1) / charsPerLine;
+    if (lines == 0) lines = 1;
+    return static_cast<float>(lines) * lineHeight + kLeafVerticalPaddingDip * fontScale_;
+}
+
+void BlockLayoutEngine::ResolveImageSize(StrSlice href, float availableWidth, float* outWidth,
+                                          float* outHeight, ImageStatus* outStatus) const {
+    float maxWidth = availableWidth > 1.0f ? availableWidth : 1.0f;
+
+    const ImageCacheEntry* entry = imageCache_ ? imageCache_->Find(href) : nullptr;
+    if (entry && entry->status == ImageStatus::Ok && entry->width > 0 && entry->height > 0) {
+        // 已知真实(降采样后)像素尺寸:1 像素 = 1 DIP,超过可用宽度时等比缩小。
+        float w = static_cast<float>(entry->width);
+        float h = static_cast<float>(entry->height);
+        if (w > maxWidth) {
+            h = h * (maxWidth / w);
+            w = maxWidth;
+        }
+        *outWidth = w;
+        *outHeight = h > 1.0f ? h : 1.0f;
+        *outStatus = ImageStatus::Ok;
+        return;
+    }
+
+    // 尺寸未知(尚未解码 / 解码失败 / SVG / 网络未加载):用固定占位尺寸,
+    // 这样"位图还没来"的阶段几何也是确定的,不会因为解码时机不同而抖动。
+    float w = kPlaceholderWidthDip * fontScale_;
+    if (w > maxWidth) w = maxWidth;
+    *outWidth = w;
+    *outHeight = kPlaceholderHeightDip * fontScale_;
+    *outStatus = entry ? entry->status : ImageStatus::NotLoaded;
+}
+
+float BlockLayoutEngine::LayoutImagesForBlock(u32 blockIndex, float x, float startY,
+                                               float availableWidth) {
+    const Block& b = doc_->blocks[blockIndex];
+
+    // 先数一遍本块有几张图片,没有就直接返回,不碰 Arena。
+    u32 imageCount = 0;
+    for (u32 i = 0; i < b.inlineCount; ++i) {
+        const Inline& in = doc_->inlines[b.firstInlineIdx + i];
+        if ((in.flags & kInlineFlagImage) != 0 && in.linkTargetIdx != kInvalidIndex) imageCount++;
+    }
+    if (imageCount == 0) return 0.0f;
+
+    ImageBox* boxes = static_cast<ImageBox*>(
+        geometryArena_.Alloc(sizeof(ImageBox) * imageCount, alignof(ImageBox)));
+    if (!boxes) return 0.0f;  // Arena 耗尽:安全退化为"不画图片",不崩溃
+
+    float gap = kImageVerticalGapDip * fontScale_;
+    float cursor = startY;
+    u32 slot = 0;
+    for (u32 i = 0; i < b.inlineCount && slot < imageCount; ++i) {
+        const Inline& in = doc_->inlines[b.firstInlineIdx + i];
+        if ((in.flags & kInlineFlagImage) == 0 || in.linkTargetIdx == kInvalidIndex) continue;
+        if (in.linkTargetIdx >= doc_->linkTargets.Size()) continue;
+
+        const LinkTarget& target = doc_->linkTargets[in.linkTargetIdx];
+        float w = 0.0f, h = 0.0f;
+        ImageStatus status = ImageStatus::NotLoaded;
+        ResolveImageSize(target.href, availableWidth, &w, &h, &status);
+
+        cursor += gap;
+        ImageBox& box = boxes[slot];
+        box.rect = LayoutRect{x, cursor, w, h};
+        box.alt = StrSlice{in.textLen > 0 ? doc_->source.data + in.textOffset : nullptr, in.textLen};
+        box.href = target.href;
+        box.blockIndex = blockIndex;
+        box.linkTargetIdx = in.linkTargetIdx;
+        box.kind = target.kind;
+        box.status = status;
+        cursor += h;
+        slot++;
+    }
+
+    geometries_[blockIndex].imageBoxes = Span<ImageBox>{boxes, slot};
+    return slot > 0 ? (cursor - startY) : 0.0f;
+}
+
+bool BlockLayoutEngine::ImagePlacementChanged(const ImageCache& images) const {
+    const ImageCache* saved = imageCache_;
+    // 临时借用传入的缓存做一次"如果现在重排会得到什么尺寸"的试算,
+    // 不改变任何已落地的几何(ResolveImageSize 是纯读函数)。
+    const_cast<BlockLayoutEngine*>(this)->imageCache_ = &images;
+
+    bool changed = false;
+    for (u32 i = 0; i < geometries_.Size() && !changed; ++i) {
+        const BlockGeometry& g = geometries_[i];
+        for (u32 k = 0; k < g.imageBoxes.len; ++k) {
+            const ImageBox& box = g.imageBoxes[k];
+            float availableWidth = viewportWidth_ - g.indent;
+            float w = 0.0f, h = 0.0f;
+            ImageStatus status = ImageStatus::NotLoaded;
+            ResolveImageSize(box.href, availableWidth, &w, &h, &status);
+            // 尺寸差半个 DIP 以内视为未变化,避免浮点噪声触发无谓重排。
+            float dw = w - box.rect.width;
+            float dh = h - box.rect.height;
+            if (dw < 0.0f) dw = -dw;
+            if (dh < 0.0f) dh = -dh;
+            if (dw > 0.5f || dh > 0.5f) { changed = true; break; }
+        }
+    }
+
+    const_cast<BlockLayoutEngine*>(this)->imageCache_ = saved;
+    return changed;
+}
+
+float BlockLayoutEngine::LayoutTableSubtree(u32 tableBlockIndex, float x, float y) {
+    const Block& tableBlock = doc_->blocks[tableBlockIndex];
+    BlockGeometry& tg = geometries_[tableBlockIndex];
+    tg.type = tableBlock.type;
+    tg.indent = x;
+    tg.top = y;
+    tg.textLayout = nullptr;
+
+    if (tableBlock.detailIdx == kInvalidIndex) {
+        tg.bottom = y;
+        return y;
+    }
+    const TableDetail& td = doc_->tableDetails[tableBlock.detailIdx];
+    u32 colCount = td.colCount;
+    u32 totalRows = td.headRowCount + td.bodyRowCount;
+    if (colCount == 0 || totalRows == 0) {
+        tg.bottom = y;
+        return y;
+    }
+
+    // 用临时 Arena 收集"每行每列的单元格块下标 + 字符数估算",这一次遍历结果
+    // 同时供 T25 的列宽算法与后面逐格定位复用,避免重复遍历文档树。
+    u32* charCounts = static_cast<u32*>(
+        scratchArena_.Alloc(sizeof(u32) * static_cast<size_t>(colCount) * totalRows, alignof(u32)));
+    u32* rowBlockIdx =
+        static_cast<u32*>(scratchArena_.Alloc(sizeof(u32) * totalRows, alignof(u32)));
+    u32* cellBlockIdx = static_cast<u32*>(
+        scratchArena_.Alloc(sizeof(u32) * static_cast<size_t>(colCount) * totalRows, alignof(u32)));
+    if (!charCounts || !rowBlockIdx || !cellBlockIdx) {
+        tg.bottom = y;
+        return y;
+    }
+    for (u32 i = 0; i < colCount * totalRows; ++i) {
+        charCounts[i] = 0;
+        cellBlockIdx[i] = kInvalidIndex;
+    }
+    for (u32 i = 0; i < totalRows; ++i) rowBlockIdx[i] = kInvalidIndex;
+
+    u32 rowSlot = 0;
+    u32 child = tableBlock.firstChildIdx;
+    u32 end = tableBlock.firstChildIdx + tableBlock.childCount;
+    while (child < end) {
+        const Block& group = doc_->blocks[child];  // TableHead 或 TableBody
+        u32 groupEnd = child + 1 + group.childCount;
+        u32 row = child + 1;
+        while (row < groupEnd) {
+            const Block& rowBlock = doc_->blocks[row];
+            if (rowBlock.type == BlockType::TableRow && rowSlot < totalRows) {
+                rowBlockIdx[rowSlot] = row;
+                u32 col = 0;
+                u32 cell = row + 1;
+                u32 rowEnd = row + 1 + rowBlock.childCount;
+                while (cell < rowEnd && col < colCount) {
+                    const Block& cellBlock = doc_->blocks[cell];
+                    cellBlockIdx[rowSlot * colCount + col] = cell;
+                    u32 chars = 0;
+                    for (u32 k = 0; k < cellBlock.inlineCount; ++k) {
+                        chars += doc_->inlines[cellBlock.firstInlineIdx + k].textLen;
+                    }
+                    charCounts[rowSlot * colCount + col] = chars;
+                    col++;
+                    cell = cell + 1 + cellBlock.childCount;
+                }
+                rowSlot++;
+            }
+            row = row + 1 + rowBlock.childCount;
+        }
+        child = groupEnd;
+    }
+
+    float availableWidth = viewportWidth_ - x;
+    Span<float> colWidths =
+        ComputeTableColumnWidths(charCounts, colCount, totalRows, availableWidth, &geometryArena_);
+    tg.tableColWidths = colWidths;
+    tg.tableHeadRowCount = td.headRowCount;
+    if (colWidths.data == nullptr) {
+        tg.bottom = y;
+        return y;
+    }
+
+    float* rowTops = static_cast<float*>(
+        geometryArena_.Alloc(sizeof(float) * (static_cast<size_t>(totalRows) + 1), alignof(float)));
+    if (!rowTops) {
+        tg.bottom = y;
+        return y;
+    }
+
+    float rowY = y;
+    for (u32 r = 0; r < totalRows; ++r) {
+        rowTops[r] = rowY;
+        u32 rIdx = rowBlockIdx[r];
+
+        // 该行高度取行内各单元格按其列宽换行后估算高度的最大值。
+        float rowHeight = kBaseLineHeightDip * fontScale_ + kLeafVerticalPaddingDip * fontScale_;
+        for (u32 c = 0; c < colCount; ++c) {
+            u32 cIdx = cellBlockIdx[r * colCount + c];
+            if (cIdx == kInvalidIndex) continue;
+            float textWidth = colWidths[c] - kTableCellPaddingDip * 2.0f;
+            if (textWidth < 1.0f) textWidth = 1.0f;
+            float h = EstimateLeafHeight(doc_->blocks[cIdx], textWidth);
+            if (h > rowHeight) rowHeight = h;
+        }
+
+        if (rIdx != kInvalidIndex) {
+            BlockGeometry& rowG = geometries_[rIdx];
+            rowG.type = BlockType::TableRow;
+            rowG.top = rowY;
+            rowG.bottom = rowY + rowHeight;
+            rowG.indent = x;
+        }
+
+        float colX = x;
+        for (u32 c = 0; c < colCount; ++c) {
+            float colWidth = colWidths[c];
+            u32 cIdx = cellBlockIdx[r * colCount + c];
+            if (cIdx != kInvalidIndex) {
+                BlockGeometry& cellG = geometries_[cIdx];
+                cellG.type = doc_->blocks[cIdx].type;
+                cellG.top = rowY;
+                cellG.bottom = rowY + rowHeight;
+                cellG.indent = colX + kTableCellPaddingDip;
+                cellG.textLayout = nullptr;
+                cellG.cellWidth = colWidth - kTableCellPaddingDip * 2.0f;
+                if (cellG.cellWidth < 1.0f) cellG.cellWidth = 1.0f;
+            }
+            colX += colWidth;
+        }
+
+        rowY += rowHeight;
+    }
+    rowTops[totalRows] = rowY;
+    tg.tableRowTops = Span<float>{rowTops, totalRows + 1};
+
+    // 表头/表体分组块(TableHead/TableBody)几何:覆盖各自所含行的范围。
+    child = tableBlock.firstChildIdx;
+    u32 groupRowCursor = 0;
+    while (child < end) {
+        const Block& group = doc_->blocks[child];
+        BlockGeometry& groupG = geometries_[child];
+        groupG.type = group.type;
+        groupG.indent = x;
+
+        u32 rowsInGroup = 0;
+        u32 row = child + 1;
+        u32 groupEnd = child + 1 + group.childCount;
+        while (row < groupEnd) {
+            if (doc_->blocks[row].type == BlockType::TableRow) rowsInGroup++;
+            row = row + 1 + doc_->blocks[row].childCount;
+        }
+
+        groupG.top = rowTops[groupRowCursor];
+        groupRowCursor += rowsInGroup;
+        groupG.bottom = rowTops[groupRowCursor];
+        child = groupEnd;
+    }
+
+    tg.bottom = rowY;
+    return rowY;
+}
+
+void BlockLayoutEngine::UpdateVisibleRange(float topY, float bottomY, FontSubsystem& fonts,
+                                            ImageResidencyController* images) {
+    // "可见范围 ± 1 屏"(架构 §5):1 屏 = 视口高度,上下各多留一屏的缓冲区,
+    // 目的是滚动时提前/滞后一点淘汰,避免每次微小滚动都抖动式创建/释放。
+    float viewportHeight = bottomY - topY;
+    if (viewportHeight < 0.0f) viewportHeight = 0.0f;
+    float extendedTop = topY - viewportHeight;
+    float extendedBottom = bottomY + viewportHeight;
+
+    u32 count = geometries_.Size();
+    for (u32 i = 0; i < count; ++i) {
+        BlockGeometry& g = geometries_[i];
+        const Block& srcBlock = doc_->blocks[i];
+        bool inRange = g.bottom > extendedTop && g.top < extendedBottom;
+
+        // T32:图片解码位图与 IDWriteTextLayout 共用同一个进入/离开判据与触发点,
+        // 不另起一套虚拟化逻辑。图片块未必携带直属文本,所以放在 BlockHasOwnText
+        // 过滤之前处理。
+        if (images && g.imageBoxes.len > 0) {
+            if (inRange) {
+                images->EnsureResident(g.imageBoxes.data, g.imageBoxes.len);
+            } else {
+                images->ReleaseResident(g.imageBoxes.data, g.imageBoxes.len);
+            }
+        }
+
+        if (!BlockHasOwnText(srcBlock)) continue;
+
+        if (inRange) {
+            if (!g.textLayout) {
+                g.textLayout = CreateLayoutForBlock(i, fonts);
+            }
+        } else if (g.textLayout) {
+            // 淘汰时机:块的几何区间与"可见 ± 1 屏"目标区间不再相交。
+            g.textLayout->Release();
+            g.textLayout = nullptr;
+            g.linkBoxes = Span<LinkBox>{nullptr, 0};  // 随 layout 一起失效,避免渲染器读到悬空 range
+        }
+    }
+}
+
+IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontSubsystem& fonts) {
+    const Block& b = doc_->blocks[blockIndex];
+    if (b.inlineCount == 0) return nullptr;
+
+    // IDWriteTextLayout 创建时会把文本内容拷贝进内部,调用方缓冲区不需要
+    // 在创建之后继续存活,所以这里用一块"每次用前 Reset"的小型临时 Arena。
+    scratchArena_.Reset();
+
+    // 第一步:逐 run 转换 UTF-8 -> UTF-16(脚注引用 run 是自包含 span,没有
+    // 真实源文本,合成可见的 "[n]" 文本),记下每个 run 对应哪个源 Inline。
+    struct RunSlot {
+        const wchar_t* text;
+        u32 len;
+        u32 inlineIndex;
+        bool footnoteRef;
+    };
+    Vec<RunSlot> runs(&scratchArena_);
+
+    u32 totalUtf16 = 0;
+    for (u32 i = 0; i < b.inlineCount; ++i) {
+        const Inline& in = doc_->inlines[b.firstInlineIdx + i];
+        if (in.flags & kInlineFlagFootnoteRef) {
+            wchar_t* digits = static_cast<wchar_t*>(
+                scratchArena_.Alloc(sizeof(wchar_t) * 12, alignof(wchar_t)));
+            if (!digits) continue;
+            u32 dn = 0;
+            digits[dn++] = L'[';
+            dn += FormatDecimalW(in.linkTargetIdx, digits + dn, 10);
+            digits[dn++] = L']';
+            runs.Push(RunSlot{digits, dn, i, true});
+            totalUtf16 += dn;
+            continue;
+        }
+        if (in.flags & kInlineFlagImage) {
+            // T33:图片 run 的文本是 alt,由 ImageBox 在图片/占位块内部绘制,
+            // 不进正文 layout(否则 alt 会在图片上方重复显示一遍)。
+            runs.Push(RunSlot{nullptr, 0, i, false});
+            continue;
+        }
+        if (in.textLen == 0) {
+            runs.Push(RunSlot{nullptr, 0, i, false});
+            continue;
+        }
+        Utf16Slice wide =
+            Utf8ToUtf16(StrSlice{doc_->source.data + in.textOffset, in.textLen}, &scratchArena_);
+        runs.Push(RunSlot{wide.data, wide.len, i, false});
+        totalUtf16 += wide.len;
+    }
+    if (totalUtf16 == 0) return nullptr;
+
+    // 第二步:拼接进最终缓冲区,同时记下每个 run 在缓冲区里的 [offset, offset+len)
+    // 区间,供下面按 run 应用样式(T23)。
+    wchar_t* buf = static_cast<wchar_t*>(
+        scratchArena_.Alloc(sizeof(wchar_t) * (totalUtf16 + 1), alignof(wchar_t)));
+    if (!buf) return nullptr;
+
+    struct RunRange {
+        u32 offset;
+        u32 len;
+        u32 inlineIndex;
+        bool footnoteRef;
+    };
+    Vec<RunRange> ranges(&scratchArena_);
+    u32 cursor = 0;
+    for (u32 i = 0; i < runs.Size(); ++i) {
+        const RunSlot& r = runs[i];
+        if (r.len > 0) memcpy(buf + cursor, r.text, sizeof(wchar_t) * r.len);
+        ranges.Push(RunRange{cursor, r.len, r.inlineIndex, r.footnoteRef});
+        cursor += r.len;
+    }
+    buf[cursor] = 0;
+
+    BlockGeometry& g = geometries_[blockIndex];
+    FontRole role = (b.type == BlockType::CodeBlock) ? FontRole::Mono : FontRole::Body;
+    float maxWidth = (g.cellWidth > 0.0f) ? g.cellWidth : (viewportWidth_ - g.indent);
+    if (maxWidth < 1.0f) maxWidth = 1.0f;
+
+    IDWriteTextLayout* layout = fonts.CreateTextLayout(buf, cursor, role, maxWidth, kMaxTextLayoutHeightDip);
+    if (!layout) return nullptr;
+
+    // T26:表头单元格整体加粗;单元格按 CellDetail::align 设置文本对齐。
+    if (b.type == BlockType::TableHeadCell) {
+        layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_RANGE{0, cursor});
+    }
+    if ((b.type == BlockType::TableHeadCell || b.type == BlockType::TableCell) &&
+        b.detailIdx != kInvalidIndex) {
+        CellAlign align = doc_->cellDetails[b.detailIdx].align;
+        DWRITE_TEXT_ALIGNMENT ta = DWRITE_TEXT_ALIGNMENT_LEADING;
+        if (align == CellAlign::Center) ta = DWRITE_TEXT_ALIGNMENT_CENTER;
+        else if (align == CellAlign::Right) ta = DWRITE_TEXT_ALIGNMENT_TRAILING;
+        layout->SetTextAlignment(ta);
+    }
+
+    // T28:脚注定义区块内文字整体小一号。
+    IDWriteTextFormat* fmt = fonts.GetTextFormat(role);
+    float baseFontSize = fmt ? fmt->GetFontSize() : (16.0f * fontScale_);
+    if (g.smallText) {
+        layout->SetFontSize(baseFontSize * kFootnoteFontRatio, DWRITE_TEXT_RANGE{0, cursor});
+    }
+
+    // T23/T24/T28:按 run 应用粗体/斜体/删除线/行内代码字体/链接下划线/
+    // 脚注引用上标,并记录链接 run 供渲染时着色与命中测试共用。
+    Vec<LinkBox> tempLinkBoxes(&scratchArena_);
+    for (u32 i = 0; i < ranges.Size(); ++i) {
+        const RunRange& rr = ranges[i];
+        if (rr.len == 0) continue;
+        DWRITE_TEXT_RANGE range{rr.offset, rr.len};
+
+        if (rr.footnoteRef) {
+            layout->SetFontSize(baseFontSize * kFootnoteRefFontRatio, range);
+            IDWriteFactory* factory = fonts.Factory();
+            if (factory) {
+                IDWriteTypography* typo = nullptr;
+                if (SUCCEEDED(factory->CreateTypography(&typo)) && typo) {
+                    DWRITE_FONT_FEATURE feature{DWRITE_FONT_FEATURE_TAG_SUPERSCRIPT, 1};
+                    typo->AddFontFeature(feature);
+                    layout->SetTypography(typo, range);
+                    typo->Release();
+                }
+            }
+            continue;  // 合成的可见文本没有对应的粗体/斜体等源样式
+        }
+
+        const Inline& in = doc_->inlines[b.firstInlineIdx + rr.inlineIndex];
+        if (in.flags & kInlineFlagBold) layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, range);
+        if (in.flags & kInlineFlagItalic) layout->SetFontStyle(DWRITE_FONT_STYLE_ITALIC, range);
+        if (in.flags & kInlineFlagStrike) layout->SetStrikethrough(TRUE, range);
+        if ((in.flags & kInlineFlagCode) && b.type != BlockType::CodeBlock) {
+            layout->SetFontFamilyName(fonts.MonoFamily(), range);
+        }
+        if (in.flags & (kInlineFlagLink | kInlineFlagAutolink)) {
+            layout->SetUnderline(TRUE, range);
+            if (in.linkTargetIdx != kInvalidIndex) {
+                tempLinkBoxes.Push(LinkBox{blockIndex, rr.offset, rr.len, in.linkTargetIdx});
+            }
+        }
+    }
+
+    if (tempLinkBoxes.Size() > 0) {
+        LinkBox* stored = static_cast<LinkBox*>(
+            geometryArena_.Alloc(sizeof(LinkBox) * tempLinkBoxes.Size(), alignof(LinkBox)));
+        if (stored) {
+            for (u32 i = 0; i < tempLinkBoxes.Size(); ++i) stored[i] = tempLinkBoxes[i];
+            g.linkBoxes = Span<LinkBox>{stored, tempLinkBoxes.Size()};
+        }
+    }
+
+    return layout;
+}
+
+}  // namespace mdvn
