@@ -73,4 +73,21 @@ StrSlice Utf16ToUtf8(Utf16Slice input, Arena* arena);
  */
 u32 Utf16LengthOfUtf8(StrSlice input);
 
+/**
+ * 估算一段 UTF-8 文本的"视觉宽度"(不是字节数,也不是字符数):
+ * 每个 Unicode 码点按 East Asian Width 的简化规则计入宽度单位——
+ * 落在 CJK 统一表意文字/CJK 标点/日文假名/全角字符等常见宽字符区间的
+ * 记 2 个单位,其余(含 ASCII 西文字符)记 1 个单位。
+ *
+ * 用于表格列宽分配与块高度估算这类"需要按视觉宽度衡量文本、但不能依赖
+ * DirectWrite 排版"的场景,让中英文混排时的宽度估算与真实渲染观感一致,
+ * 不会因为 CJK 字符按 UTF-8 字节数(3 字节/字)虚高或按字符数(1 个/字)
+ * 偏窄而算错。
+ *
+ * @param input 待估算的 UTF-8 切片。
+ * @return 视觉宽度单位总量(ASCII 记 1,常见宽字符记 2)。
+ * @example mdvn::Utf8VisualWidth(mdvn::StrSlice{"a你", 4}); // 1 + 2 = 3
+ */
+u32 Utf8VisualWidth(StrSlice input);
+
 } // namespace mdvn

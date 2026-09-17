@@ -23,22 +23,34 @@ constexpr float kMinColumnWidthDip = 60.0f;
 // 列与列之间预留的间距/网格线宽度(DIP),参与总宽是否超视口的判断。
 constexpr float kTableColumnGapDip = 1.0f;
 
+// 表格单元格内文本左右各留的内边距(DIP,T26)。ComputeTableColumnWidths 算
+// 理想宽度时要把它算进去(见 kTableAvgCharWidthDip 旁的说明),否则列宽只够
+// "内容本身"、不够"内容 + 两侧内边距",定义该列宽度的那个最长单元格在
+// LayoutTableSubtree 里减去内边距求 textWidth 后反而放不下自己,被错误地
+// 估算成需要换行——两处口径必须一致,内边距只在一个地方定义、两处共用。
+constexpr float kTableCellPaddingDip = 6.0f;
+
 // 估算单元格内容理想宽度用的平均字符宽度(DIP),与 layout.cpp 的
-// kAvgCharWidthDip 取相同口径,保持两处估算风格一致。
+// kAvgCharWidthDip 取相同口径,保持两处估算风格一致。这里的"字符"指
+// Utf8VisualWidth 输出的视觉宽度单位(ASCII 记 1、CJK 等宽字符记 2),
+// 不是字节数,否则中英文混排时中文按 3 字节算会把列宽估得偏宽,
+// 挤压同一行里纯英文列的宽度。
 constexpr float kTableAvgCharWidthDip = 8.0f;
 
 /**
  * 计算一个表格各列的宽度(DIP)。
  *
  * 算法(04 已定方向,见文件头注释的度量取舍):
- *   1. 每列理想宽度 = 该列所有单元格"字符数估算"的最大值 × 平均字符宽度,
+ *   1. 每列理想宽度 = 该列所有单元格"视觉宽度估算"(见 Utf8VisualWidth)的
+ *      最大值 × 平均字符宽度 + 两侧内边距(kTableCellPaddingDip * 2),
  *      钳制到 [kMinColumnWidthDip, 视口宽度 * kMaxColumnWidthRatio] 区间;
  *   2. 若各列理想宽度之和(含列间距)超过视口宽度,按各列理想宽度的比例
  *      整体等比压缩,压缩下限为 kMinColumnWidthDip;
  *   3. 压到下限后仍超宽,不再进一步压缩(由调用方对单元格文本换行,
  *      裁决 #2:表格变高但不丢信息)。
  *
- * @param cellCharCounts 按行主序展开的单元格"字符数估算"二维数组,
+ * @param cellCharCounts 按行主序展开的单元格"视觉宽度估算"(Utf8VisualWidth
+ *                       的输出,不是字节数也不是字符数)二维数组,
  *                       长度须为 colCount * rowCount(含表头行)。
  * @param colCount 列数,0 时直接返回空 Span。
  * @param rowCount 行数(含表头),用于遍历 cellCharCounts。
@@ -46,7 +58,7 @@ constexpr float kTableAvgCharWidthDip = 8.0f;
  * @param arena 输出数组所在的 Arena,按裁决 §6"列数 × 4 字节"存放。
  * @return colCount 个元素的列宽数组;Arena 分配失败时返回空 Span(data=nullptr,len=0)。
  * @example
- *   u32 chars[] = {3, 10,   2, 20}; // 2 列 2 行:第 0 列最长 3 字符,第 1 列最长 20 字符
+ *   u32 chars[] = {3, 10,   2, 20}; // 2 列 2 行:第 0 列最大视觉宽度 3,第 1 列 20
  *   mdvn::Span<float> widths = mdvn::ComputeTableColumnWidths(chars, 2, 2, 600.0f, &arena);
  */
 Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u32 rowCount,

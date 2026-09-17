@@ -23,7 +23,11 @@ Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u3
                 if (v > maxChars) maxChars = v;
             }
         }
-        float ideal = static_cast<float>(maxChars) * kTableAvgCharWidthDip;
+        // +2*kTableCellPaddingDip:理想宽度要连内边距一起budget,否则
+        // LayoutTableSubtree 减去内边距求 textWidth 时,定义该列宽度的那个
+        // 最长单元格反而放不下自己(症状 2 的另一半根因,见 table.h 注释)。
+        float ideal = static_cast<float>(maxChars) * kTableAvgCharWidthDip +
+                      kTableCellPaddingDip * 2.0f;
         if (ideal < kMinColumnWidthDip) ideal = kMinColumnWidthDip;
         if (ideal > maxColWidth) ideal = maxColWidth;
         widths[c] = ideal;

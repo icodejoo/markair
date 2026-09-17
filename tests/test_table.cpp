@@ -1,14 +1,44 @@
 // T25 覆盖测试:表格列宽算法(纯数字函数,不依赖 D2D/DirectWrite)。
+// 另含"表格列宽/行高估算改用视觉宽度而非 UTF-8 字节数"这次修复的回归测试:
+// Utf8VisualWidth 本身的纯函数断言,以及 CJK/英文混排场景下列宽分配、
+// 单行 CJK 行高估算不再被字节数口径带偏的集成测试。
 #include "mdvn_test.h"
 #include "../src/util/arena.h"
+#include "../src/util/str.h"
+#include "../src/doc/model.h"
+#include "../src/doc/parser.h"
 #include "../src/layout/table.h"
+#include "../src/layout/layout.h"
 
 using mdvn::Arena;
+using mdvn::Block;
+using mdvn::BlockGeometry;
+using mdvn::BlockLayoutEngine;
+using mdvn::BlockType;
 using mdvn::ComputeTableColumnWidths;
+using mdvn::Document;
+using mdvn::ParseMarkdown;
 using mdvn::Span;
+using mdvn::StrSlice;
+using mdvn::Utf8VisualWidth;
 using mdvn::kMinColumnWidthDip;
 using mdvn::kMaxColumnWidthRatio;
 using mdvn::u32;
+
+namespace {
+// 在 doc.blocks 里线性找到第 occurrence 个(从 0 计数)指定类型的块下标,
+// 找不到返回 kInvalidIndex。与 test_layout.cpp 里的同名辅助函数保持相同写法。
+u32 FindBlockOfType(const Document& doc, BlockType type, u32 occurrence) {
+    u32 seen = 0;
+    for (u32 i = 0; i < doc.blocks.Size(); ++i) {
+        if (doc.blocks[i].type == type) {
+            if (seen == occurrence) return i;
+            ++seen;
+        }
+    }
+    return mdvn::kInvalidIndex;
+}
+}  // namespace
 
 #define MDVN_MAKE_TEST_ARENA() Arena arena; arena.Init(1 * 1024 * 1024)
 
@@ -77,8 +107,10 @@ MDVN_TEST(Table_NoCompressionWhenFitsViewport) {
     u32 chars[] = {5, 8}; // 2 列 1 行,理想宽度均远小于视口
     Span<float> widths = ComputeTableColumnWidths(chars, 2, 1, 2000.0f, &arena);
     MDVN_CHECK_EQ(widths.len, 2u);
-    MDVN_CHECK_EQ(widths[0], kMinColumnWidthDip); // 5 字符 * 8 DIP = 40 < 60 下限
-    MDVN_CHECK(widths[1] > widths[0]); // 8 字符 * 8 DIP = 64 > 60 下限
+    // 理想宽度现在含两侧内边距预算(kTableCellPaddingDip*2=12,见 table.h):
+    // 5*8+12=52 < 60 下限,8*8+12=76 > 60 下限。
+    MDVN_CHECK_EQ(widths[0], kMinColumnWidthDip);
+    MDVN_CHECK(widths[1] > widths[0]);
 }
 
 // 用例 6:colCount 为 0 时安全返回空 Span,不崩溃。
@@ -87,4 +119,93 @@ MDVN_TEST(Table_ZeroColumnsReturnsEmptySpan) {
     Span<float> widths = ComputeTableColumnWidths(nullptr, 0, 0, 600.0f, &arena);
     MDVN_CHECK(widths.data == nullptr);
     MDVN_CHECK_EQ(widths.len, 0u);
+}
+
+// ---- Utf8VisualWidth:纯函数,验证宽字符/窄字符/混排的视觉宽度计数 ----
+
+// 用例 7:纯 ASCII——每个字节 1 个视觉宽度单位,与字符数相等。
+MDVN_TEST(VisualWidth_AsciiCountsOnePerChar) {
+    MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{"Gamma", 5}), 5u);
+}
+
+// 用例 8:纯 CJK——"网关服务" 4 个汉字,每个记 2 个单位,共 8;
+// UTF-8 下这 4 个汉字占 12 字节,验证结果是视觉宽度而不是字节数。
+MDVN_TEST(VisualWidth_CjkCountsTwoPerChar) {
+    const char text[] = "\xe7\xbd\x91\xe5\x85\xb3\xe6\x9c\x8d\xe5\x8a\xa1"; // 网关服务
+    MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{text, sizeof(text) - 1}), 8u);
+}
+
+// 用例 9:中英混排——"a你b" = 1(a) + 2(你) + 1(b) = 4,不是字节数 5,也不是字符数 3。
+MDVN_TEST(VisualWidth_MixedCjkAndAsciiSumsPerCharWidth) {
+    const char text[] = "a\xe4\xbd\xa0" "b"; // a 你 b
+    MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{text, sizeof(text) - 1}), 4u);
+}
+
+// 用例 10:空串视觉宽度为 0。
+MDVN_TEST(VisualWidth_EmptyStringIsZero) {
+    MDVN_CHECK_EQ(Utf8VisualWidth(StrSlice{"", 0}), 0u);
+}
+
+// ---- 集成测试:表格列宽/行高估算改用视觉宽度后,不再被字节数口径带偏 ----
+
+// 用例 11(症状 1 回归):中英混排宽表格里,同一列内既有纯英文单词又有中文
+// 内容时,纯英文单元格的估算宽度不应该被"中文按字节数虚高"挤压变窄——
+// 用视觉宽度口径,"Gamma"(5)应比"网关服务"(视觉宽度 8,字节数 12)窄,
+// 但差距只应体现视觉宽度的 5:8,而不是字节数的 5:12 那么悬殊。
+MDVN_TEST(Table_CjkAndAsciiMixedColumnDoesNotSquashAsciiWidth) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "| Name | Desc |\n"
+        "|------|------|\n"
+        "| Gamma | 网关服务说明文字 |\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+
+    u32 tableIdx = FindBlockOfType(doc, BlockType::Table, 0);
+    MDVN_CHECK(tableIdx != mdvn::kInvalidIndex);
+    const BlockGeometry& tg = layout.Geometry(tableIdx);
+    MDVN_CHECK_EQ(tg.tableColWidths.len, 2u);
+
+    // "Gamma" 视觉宽度 5,"网关服务说明文字" 8 个汉字视觉宽度 16——
+    // 字节数口径下分别是 5 字节 vs 24 字节,比例悬殊得多(1:4.8);
+    // 视觉宽度口径下比例是 1:3.2,列宽差距应体现更温和的比例,
+    // 且第 0 列(纯英文)不应被压到刚好等于下限(证明没有被过度压缩)。
+    MDVN_CHECK(tg.tableColWidths[0] >= kMinColumnWidthDip);
+    float ratio = tg.tableColWidths[1] / tg.tableColWidths[0];
+    MDVN_CHECK(ratio < 4.0f);  // 明显小于字节数口径下会出现的比例
+}
+
+// 用例 12(症状 2 回归):单元格内容是能在估算列宽下一行放下的中文短语时,
+// 行高不应该被多算成 2 行——用视觉宽度而不是字节数估算折行,配合按视觉
+// 宽度分配的列宽,两者口径一致,单行内容就应该估算成 1 行的高度。
+MDVN_TEST(Table_SingleLineCjkCellDoesNotOverestimateRowHeight) {
+    MDVN_MAKE_TEST_ARENA();
+    // "短" 和 "中等长度内容" 都很短,给足够宽的视口,列宽应该远大于这两列
+    // 内容的视觉宽度,不会触发折行。
+    const char src[] =
+        "| 左对齐 | 居中对齐 | 右对齐 |\n"
+        "|:---|:---:|---:|\n"
+        "| 短 | 中等长度内容 | 1 |\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 900.0f));
+
+    u32 headRow = FindBlockOfType(doc, BlockType::TableRow, 0);
+    u32 bodyRow = FindBlockOfType(doc, BlockType::TableRow, 1);
+    MDVN_CHECK(headRow != mdvn::kInvalidIndex);
+    MDVN_CHECK(bodyRow != mdvn::kInvalidIndex);
+
+    float headHeight = layout.Geometry(headRow).bottom - layout.Geometry(headRow).top;
+    float bodyHeight = layout.Geometry(bodyRow).bottom - layout.Geometry(bodyRow).top;
+    // 两行都只有单行文字,不应该因为估算口径不一致被判成两行——高度应当相等
+    // (允许极小的浮点误差)。
+    MDVN_CHECK(headHeight > 0.0f);
+    MDVN_CHECK(bodyHeight > 0.0f);
+    float diff = headHeight > bodyHeight ? headHeight - bodyHeight : bodyHeight - headHeight;
+    MDVN_CHECK(diff < 0.5f);
 }

@@ -90,7 +90,31 @@ void AppendUtf8(Vec<char>& out, u32 cp) {
     }
 }
 
+// 判断一个 Unicode 码点是否落在常见"宽字符"区间(简化版 East Asian Width):
+// CJK 统一表意文字、CJK 符号与标点、日文平假名/片假名、全角字符。覆盖简体
+// 中文实际会遇到的场景即可,不追求 Unicode East Asian Width 标准的完整覆盖。
+bool IsWideCodepoint(u32 cp) {
+    if (cp >= 0x3000 && cp <= 0x303F) return true;  // CJK 符号与标点
+    if (cp >= 0x3040 && cp <= 0x30FF) return true;  // 平假名 + 片假名
+    if (cp >= 0x4E00 && cp <= 0x9FFF) return true;  // CJK 统一表意文字
+    if (cp >= 0xFF00 && cp <= 0xFFEF) return true;  // 全角字符/半角片假名区
+    return false;
+}
+
 } // namespace
+
+u32 Utf8VisualWidth(StrSlice input) {
+    const u8* bytes = reinterpret_cast<const u8*>(input.data);
+    u32 width = 0;
+    u32 i = 0;
+    while (i < input.len) {
+        u32 consumed = 0;
+        const u32 cp = DecodeOneUtf8(bytes + i, input.len - i, &consumed);
+        i += consumed;
+        width += IsWideCodepoint(cp) ? 2u : 1u;
+    }
+    return width;
+}
 
 Utf16Slice Utf8ToUtf16(StrSlice input, Arena* arena) {
     Vec<wchar_t> out(arena);

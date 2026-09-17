@@ -41,6 +41,9 @@ constexpr float kBlockVerticalGapDip = 8.0f;
 constexpr float kLeafVerticalPaddingDip = 4.0f;
 
 // 正文行高与平均字符宽度估算值(占位用,真实值等真实 IDWriteTextLayout 生成后才知道)。
+// kAvgCharWidthDip 这里的"字符"指 Utf8VisualWidth 的视觉宽度单位(ASCII 记 1、
+// CJK 等宽字符记 2),不是字节数——用视觉宽度而非字节数才能让 CJK/西文混排
+// 场景下"总视觉宽度 ÷ 平均字符宽度"估算出的折行行数与真实渲染基本吻合。
 constexpr float kBaseLineHeightDip = 20.0f;
 constexpr float kAvgCharWidthDip = 8.0f;
 
@@ -76,9 +79,6 @@ constexpr float kFootnoteFontRatio = 0.85f;
 
 // T28 正文里脚注引用上标 "[n]" 的缩小比例。
 constexpr float kFootnoteRefFontRatio = 0.7f;
-
-// T26 表格单元格内文本左右各留的内边距(DIP)。
-constexpr float kTableCellPaddingDip = 6.0f;
 
 // T28 脚注定义 "[n]" 编号标签预留的高度(DIP,未缩放前),独占一行,
 // 具体文字由渲染层用小号一次性 layout 画出(见 renderer.cpp)。
@@ -443,7 +443,7 @@ static u32 CountLeafLines(const Document& doc, const Block& b, u32 charsPerLine)
         } else if (in.flags & kInlineFlagFootnoteRef) {
             curLineChars += 4;
         } else {
-            curLineChars += in.textLen;
+            curLineChars += Utf8VisualWidth(StrSlice{InlineTextBytes(in, doc), in.textLen});
         }
     }
     if (curLineChars > 0) {
@@ -479,7 +479,7 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
             totalChars += 4;  // 合成的可见文本 "[n]" 量级很小,固定按 4 字符估算即可
             continue;
         }
-        totalChars += in.textLen;
+        totalChars += Utf8VisualWidth(StrSlice{InlineTextBytes(in, *doc_), in.textLen});
     }
     // 纯图片段落没有任何正文文字,正文部分高度为 0,整块高度全由图片贡献。
     if (totalChars == 0 && hasImage) return 0.0f;
@@ -663,7 +663,10 @@ float BlockLayoutEngine::LayoutTableSubtree(u32 tableBlockIndex, float x, float 
                     cellBlockIdx[rowSlot * colCount + col] = cell;
                     u32 chars = 0;
                     for (u32 k = 0; k < cellBlock.inlineCount; ++k) {
-                        chars += doc_->inlines[cellBlock.firstInlineIdx + k].textLen;
+                        const Inline& cellIn = doc_->inlines[cellBlock.firstInlineIdx + k];
+                        // 按视觉宽度而非字节数估算(见 Utf8VisualWidth),避免 CJK 字符
+                        // 按 UTF-8 字节数(3 字节/字)虚高,挤压同一行里纯英文列的宽度。
+                        chars += Utf8VisualWidth(StrSlice{InlineTextBytes(cellIn, *doc_), cellIn.textLen});
                     }
                     charCounts[rowSlot * colCount + col] = chars;
                     col++;
