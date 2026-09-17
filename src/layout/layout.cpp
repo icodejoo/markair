@@ -123,7 +123,8 @@ BlockLayoutEngine::BlockLayoutEngine()
       viewportWidth_(0.0f),
       totalHeight_(0.0f),
       fontScale_(1.0f),
-      imageCache_(nullptr) {}
+      imageCache_(nullptr),
+      relayoutCallCount_(0) {}
 
 // 先淘汰所有仍持有的 IDWriteTextLayout,再让 Arena 析构释放虚拟地址空间。
 BlockLayoutEngine::~BlockLayoutEngine() { ReleaseAllLayouts(); }
@@ -159,6 +160,7 @@ bool BlockLayoutEngine::BlockHasOwnText(const Block& b) const {
 
 bool BlockLayoutEngine::Relayout(const Document& doc, float viewportWidth, float fontScale,
                                   const ImageCache* images) {
+    ++relayoutCallCount_;  // T49 测试桩:仅计数,不影响布局逻辑
     // 先淘汰上一次布局持有的全部 layout,避免跨文档/跨布局泄漏 COM 对象。
     ReleaseAllLayouts();
 

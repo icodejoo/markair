@@ -1,14 +1,27 @@
 // T46 覆盖测试:调色板(Palette)体积、槽位是否显式赋值、light/dark 主背景与
 // 正文对比度是否达标(WCAG 相对亮度公式)。ContrastRatio 本身也顺带单测覆盖。
+// T49 追加:验证"切换主题不触发 Relayout"——见文件末尾。
 #include "mdvn_test.h"
 #include "../src/render/theme.h"
+#include "../src/render/renderer.h"
+#include "../src/util/arena.h"
+#include "../src/util/str.h"
+#include "../src/doc/model.h"
+#include "../src/doc/parser.h"
+#include "../src/layout/layout.h"
 
+using mdvn::Arena;
+using mdvn::BlockLayoutEngine;
 using mdvn::ContrastRatio;
+using mdvn::Document;
 using mdvn::kDarkPalette;
 using mdvn::kLightPalette;
 using mdvn::LinearizeChannel;
 using mdvn::MakeColor;
 using mdvn::Palette;
+using mdvn::ParseMarkdown;
+using mdvn::Renderer;
+using mdvn::StrSlice;
 
 namespace {
 
@@ -112,4 +125,44 @@ MDVN_TEST(Theme_LightPaletteMeetsWcagAA) {
 MDVN_TEST(Theme_DarkPaletteMeetsWcagAA) {
     float ratio = ContrastRatio(kDarkPalette.background, kDarkPalette.text);
     MDVN_CHECK(ratio >= 4.5f);
+}
+
+// 用例(T49 验收硬指标):连续切换主题 N 次不触发 BlockLayoutEngine::Relayout。
+//
+// 验证思路:Renderer::SetPalette 的签名(见 renderer.h)只接受一个
+// `const Palette*`,根本不持有/不接触 BlockLayoutEngine——这是"结构上不可能
+// 触发 Relayout"的静态保证,和 window.cpp 里 Ctrl+Shift+T 分支只调用
+// SetPalette + ApplyTitleBarTheme + InvalidateRect(不调用任何 layout 相关
+// 函数)一致。本用例把这条静态保证落成一个可执行的回归断言:先跑一次真实
+// Relayout 建立基线布局,记下此时的调用计数与总高度,再连续调用 50 次
+// SetPalette(模拟连按 50 次 Ctrl+Shift+T 的核心动作),断言 Relayout 计数与
+// TotalHeight 都纹丝不动——任何人以后不小心让主题切换路径牵连到布局重排,
+// 这个用例就会先炸。
+//
+// 没有采用"扫描 window.cpp 源码文本找 Relayout 字符串"的方案:项目测试里
+// 没有读取源文件当数据的先例(全部用例都直接调用被测函数),临时发明一种新
+// 校验手法成本和收益不成比例,弃用。也没有额外给 window.cpp 的 WM_KEYDOWN
+// 分支写一个需要真实 HWND/消息泵的集成测试——现有测试体系里没有任何
+// window.cpp 单元测试先例(它依赖真实窗口),不为这一条新开先例。
+MDVN_TEST(Theme_SwitchingPaletteDoesNotTriggerRelayout) {
+    Arena arena;
+    arena.Init(1 * 1024 * 1024);
+    const char* md =
+        "# Heading\n\nSome paragraph text for layout.\n\n"
+        "- item one\n- item two\n\n> a quote\n";
+    Document doc = ParseMarkdown(StrSlice{md, static_cast<mdvn::u32>(strlen(md))}, &arena);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+    mdvn::u32 baselineCount = layout.RelayoutCallCount();
+    float baselineHeight = layout.TotalHeight();
+    MDVN_CHECK_EQ(baselineCount, 1u);
+
+    Renderer renderer;
+    for (int i = 0; i < 50; ++i) {
+        renderer.SetPalette((i % 2 == 0) ? &kDarkPalette : &kLightPalette);
+    }
+
+    MDVN_CHECK_EQ(layout.RelayoutCallCount(), baselineCount);
+    MDVN_CHECK(layout.TotalHeight() == baselineHeight);
 }

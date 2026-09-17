@@ -263,6 +263,10 @@ public:
     // 整份文档估算/实测的总高度(DIP),即根节点 Document 块的 bottom。
     float TotalHeight() const { return totalHeight_; }
 
+    // Relayout 的累计调用次数(T49):仅用于测试断言"某操作不触发重排",
+    // 不参与任何布局逻辑,生产代码不应依赖此计数做业务判断。
+    u32 RelayoutCallCount() const { return relayoutCallCount_; }
+
 private:
     // 递归铺开一个块及其子树的几何占位,返回"排完这个块之后,下一个兄弟块应从哪个 y 开始"。
     // inFootnote 表示当前是否处于 FootnoteDefSection 子树内(T28,决定文字是否小一号),
@@ -318,6 +322,7 @@ private:
     float totalHeight_;              // 文档总高度缓存(DIP)
     float fontScale_;                // 当前字号缩放系数(T29),参与行高/字符宽度/勾选框几何估算
     const ImageCache* imageCache_;   // 图片缓存(T33),只读、可为空,用于"先有尺寸再有位图"
+    u32 relayoutCallCount_;          // Relayout 累计调用次数(T49 测试桩,见 RelayoutCallCount)
 };
 
 }  // namespace mdvn
