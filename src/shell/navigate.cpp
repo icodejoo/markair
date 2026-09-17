@@ -180,8 +180,9 @@ u32 BuildBlockSlug(const Document& doc, u32 blockIndex, char* out, u32 cap) {
         const Inline& in = doc.inlines[b.firstInlineIdx + i];
         // 图片 alt 与脚注引用不是标题的可见文字,不参与 slug(与 GitHub 口径一致)。
         if (in.flags & (kInlineFlagImage | kInlineFlagFootnoteRef)) continue;
+        const char* bytes = InlineTextBytes(in, doc);
         for (u32 k = 0; k < in.textLen && len < kMaxSlugBytes; ++k) {
-            text[len++] = doc.source.data[in.textOffset + k];
+            text[len++] = bytes[k];
         }
     }
     return MakeHeadingSlug(StrSlice{text, len}, out, cap);

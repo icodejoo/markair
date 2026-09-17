@@ -44,6 +44,12 @@ enum InlineFlag : u32 {
     kInlineFlagImage = 1u << 5,       // 图片替代文本,目标见 Inline::linkTargetIdx
     kInlineFlagAutolink = 1u << 6,    // 自动识别的链接(URL/WWW/邮箱)
     kInlineFlagFootnoteRef = 1u << 7, // 脚注引用([^label])
+    // md4c 对软/硬换行(MD_TEXT_SOFTBR/MD_TEXT_BR,含代码块行拼接场景)传入
+    // 的是库内部字面量指针 "\n",不在 Document::source 范围内,不能按
+    // textOffset 读取。带此标记的 Inline 固定 textLen == 1,渲染/统计时
+    // 应视作一个字面 '\n' 字符,但绝不能从 source 读取对应字节
+    // (见 parser.cpp::OnText 与 InlineTextBytes)。
+    kInlineFlagSyntheticNewline = 1u << 8,
 };
 
 // 无效索引哨兵值,表示"不指向任何节点"(M0 未实现链接,linkTargetIdx 始终取此值)。
@@ -139,5 +145,22 @@ struct Document {
 
 // sizeof(Block) == 32、sizeof(Inline) == 16(M1 新增 detailIdx 借用了
 // layoutCache 前既有的对齐 padding,两者大小相比 M0 均未变化)。
+
+/**
+ * 取一个 Inline run 用于渲染/拼接/统计的字节起点。
+ *
+ * 合成换行(kInlineFlagSyntheticNewline)固定返回指向静态字面量 "\n" 的指针,
+ * 绝不读取 Document::source——这类 run 本来就不对应 source 里的任何字节。
+ * 其余情况按 textOffset 正常指向 source。任何要按 textLen 拷贝/统计字节的
+ * 代码都必须经这个函数取指针,不要直接写 `source.data + textOffset`。
+ *
+ * @param in 目标 Inline run。
+ * @param doc 该 run 所属的文档。
+ * @return 长度至少为 in.textLen 的只读字节起点。
+ * @example const char* p = InlineTextBytes(in, doc); memcpy(dst, p, in.textLen);
+ */
+inline const char* InlineTextBytes(const Inline& in, const Document& doc) {
+    return (in.flags & kInlineFlagSyntheticNewline) ? "\n" : (doc.source.data + in.textOffset);
+}
 
 } // namespace mdvn

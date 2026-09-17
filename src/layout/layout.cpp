@@ -287,8 +287,54 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     return g.bottom;
 }
 
+// 围栏/缩进代码块的行数估算:代码块的换行是"每个源码行各自一行",不应该
+// 按"字符总数 / 平均每行字符数"这种韵文式折行去反推行数(那是给会自动
+// 折行的正文准备的近似,对代码块明显不适用,极易把多行代码估算成一整块
+// 挤在一起,导致预留高度小于 DirectWrite 实际渲染高度、和下方块重叠)。
+// 这里改为按"真实换行符数量"数行:遇到 kInlineFlagSyntheticNewline 标记的
+// run 才换到下一行;单行字符数超过可用宽度时,该行再退化成按字符数估算
+// 会被 DirectWrite 二次折行的行数——这部分极端场景(单行超长)仍是近似值,
+// 但最常见的"多行代码、每行不太长"场景能与真实渲染基本吻合。
+//
+// md4c 的 md_process_verbatim_block_contents 对代码块**每一行**(含最后一行)
+// 都会在内容之后补一个终止换行,所以"合成换行 run 的个数"本身就精确等于
+// 源码行数,不需要再额外给"最后一个换行之后的尾巴"补一行——那样反而会多算
+// 一行空行。只有在"块里完全没有任何换行"(单行代码块)或"末尾确实有一段
+// 没被换行终止的内容"(理论上不会出现,纯防御)时才需要用剩余字符数补一行。
+static u32 CountCodeBlockLines(const Document& doc, const Block& b, u32 charsPerLine) {
+    u32 totalLines = 0;
+    u32 curLineChars = 0;
+    for (u32 i = 0; i < b.inlineCount; ++i) {
+        const Inline& in = doc.inlines[b.firstInlineIdx + i];
+        if (in.flags & kInlineFlagSyntheticNewline) {
+            u32 wrapped = curLineChars == 0 ? 1 : (curLineChars + charsPerLine - 1) / charsPerLine;
+            totalLines += wrapped;
+            curLineChars = 0;
+        } else {
+            curLineChars += in.textLen;
+        }
+    }
+    // 收尾:只有当末尾确实剩下未被换行终止的内容时才补一行(单行代码块,
+    // 或防御性场景);正常的每行都以换行结尾的情况,上面的循环已经数完了
+    // 全部行数,这里不再重复计入。
+    if (curLineChars > 0) {
+        totalLines += (curLineChars + charsPerLine - 1) / charsPerLine;
+    }
+    return totalLines > 0 ? totalLines : 1;
+}
+
 float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth) const {
     if (b.type == BlockType::ThematicBreak) return kThematicBreakHeightDip * fontScale_;
+
+    if (b.type == BlockType::CodeBlock) {
+        float lineHeight = kMonoLineHeightDip * fontScale_;
+        float avgCharWidth = kMonoAvgCharWidthDip * fontScale_;
+        float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
+        u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
+        if (charsPerLine == 0) charsPerLine = 1;
+        u32 lines = CountCodeBlockLines(*doc_, b, charsPerLine);
+        return static_cast<float>(lines) * lineHeight + kLeafVerticalPaddingDip * fontScale_;
+    }
 
     u32 totalChars = 0;
     bool hasImage = false;
@@ -317,9 +363,6 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
         float scale = kHeadingScale[level];
         lineHeight *= scale;
         avgCharWidth *= scale;
-    } else if (b.type == BlockType::CodeBlock) {
-        lineHeight = kMonoLineHeightDip * fontScale_;
-        avgCharWidth = kMonoAvgCharWidthDip * fontScale_;
     }
 
     float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
@@ -390,7 +433,7 @@ float BlockLayoutEngine::LayoutImagesForBlock(u32 blockIndex, float x, float sta
         cursor += gap;
         ImageBox& box = boxes[slot];
         box.rect = LayoutRect{x, cursor, w, h};
-        box.alt = StrSlice{in.textLen > 0 ? doc_->source.data + in.textOffset : nullptr, in.textLen};
+        box.alt = StrSlice{in.textLen > 0 ? InlineTextBytes(in, *doc_) : nullptr, in.textLen};
         box.href = target.href;
         box.blockIndex = blockIndex;
         box.linkTargetIdx = in.linkTargetIdx;
@@ -677,7 +720,7 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
             continue;
         }
         Utf16Slice wide =
-            Utf8ToUtf16(StrSlice{doc_->source.data + in.textOffset, in.textLen}, &scratchArena_);
+            Utf8ToUtf16(StrSlice{InlineTextBytes(in, *doc_), in.textLen}, &scratchArena_);
         runs.Push(RunSlot{wide.data, wide.len, i, false});
         totalUtf16 += wide.len;
     }
@@ -712,6 +755,16 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
 
     IDWriteTextLayout* layout = fonts.CreateTextLayout(buf, cursor, role, maxWidth, kMaxTextLayoutHeightDip);
     if (!layout) return nullptr;
+
+    // Bug 2 修复:表格单元格的行高是"该行所有单元格里最高的那个"(见
+    // LayoutTableSubtree),单个单元格的文字真实高度往往比它小,记下真实
+    // 内容高度供渲染时算垂直居中偏移(布局框本身给了 kMaxTextLayoutHeightDip
+    // 那么大的高度,GetMetrics().height 返回的是紧贴文字的真实高度,不是
+    // 布局框高度,SetParagraphAlignment 在这个尺寸的布局框内没有实际效果)。
+    if (b.type == BlockType::TableHeadCell || b.type == BlockType::TableCell) {
+        DWRITE_TEXT_METRICS metrics{};
+        g.contentHeight = SUCCEEDED(layout->GetMetrics(&metrics)) ? metrics.height : 0.0f;
+    }
 
     // T26:表头单元格整体加粗;单元格按 CellDetail::align 设置文本对齐。
     if (b.type == BlockType::TableHeadCell) {

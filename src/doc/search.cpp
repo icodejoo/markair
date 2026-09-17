@@ -28,7 +28,7 @@ u32 RunLayoutUtf16Length(const Document& doc, const Inline& in) {
     if (in.flags & kInlineFlagFootnoteRef) return 2u + DecimalDigits(in.linkTargetIdx);
     if (in.flags & kInlineFlagImage) return 0u;
     if (in.textLen == 0) return 0u;
-    return Utf16LengthOfUtf8(StrSlice{doc.source.data + in.textOffset, in.textLen});
+    return Utf16LengthOfUtf8(StrSlice{InlineTextBytes(in, doc), in.textLen});
 }
 
 // 把一个块的全部 inline run 源文本首尾相接拼进 scratch,得到本块的可搜索文本。
@@ -45,7 +45,7 @@ StrSlice BuildBlockText(const Document& doc, const Block& b, Arena* scratch) {
     for (u32 i = 0; i < b.inlineCount; ++i) {
         const Inline& in = doc.inlines[b.firstInlineIdx + i];
         if (in.textLen == 0) continue;
-        memcpy(buf + cursor, doc.source.data + in.textOffset, in.textLen);
+        memcpy(buf + cursor, InlineTextBytes(in, doc), in.textLen);
         cursor += in.textLen;
     }
     return StrSlice{buf, cursor};
@@ -136,7 +136,7 @@ bool MatchToTextRange(const Document& doc, const Match& m, u32* outPosition, u32
             // 命中触及不进入正文排版的 run(图片 alt / 脚注引用)——没有可高亮的文字。
             if (!RunEntersLayout(in)) return false;
 
-            const char* runText = doc.source.data + in.textOffset;
+            const char* runText = InlineTextBytes(in, doc);
             if (startUnit == kInvalidIndex) {
                 u32 within = m.byteOffset > runBegin ? m.byteOffset - runBegin : 0;
                 startUnit = utf16Cursor + Utf16LengthOfUtf8(StrSlice{runText, within});

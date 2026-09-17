@@ -10,6 +10,8 @@ add_executable(mdvn_tests
     test_front_matter.cpp
     test_font.cpp
     test_layout.cpp
+    test_layout_codeblock.cpp
+    test_synthetic_newline.cpp
     test_table.cpp
     test_renderer.cpp
     test_scroll.cpp

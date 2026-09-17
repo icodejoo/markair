@@ -351,7 +351,7 @@ int OnLeaveSpan(MD_SPANTYPE type, void* detail, void* userdata) {
 }
 
 // text 回调:把一段文本落地成一个 Inline run,归属到当前栈顶的块。
-int OnText(MD_TEXTTYPE /*type*/, const MD_CHAR* text, MD_SIZE size, void* userdata) {
+int OnText(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata) {
     ParseContext* ctx = static_cast<ParseContext*>(userdata);
     if (ctx->aborted) return 1;
     if (ctx->AtNodeLimit()) {
@@ -374,20 +374,37 @@ int OnText(MD_TEXTTYPE /*type*/, const MD_CHAR* text, MD_SIZE size, void* userda
     // 等场景会传入库内部的字面量字符串指针(如 "\n"),不在 source 地址范围内。
     // 这类文本若仍按"相对 source 的偏移"记录,后续 source.data + textOffset
     // 会算出野指针,真正读取字节时(如 layout 阶段拼接文本)直接崩溃。
-    // 这里仍然生成一个 Inline 节点(保持块的行数/结构统计不受影响),但把
-    // textOffset/textLen 都归零——不引用任何内存,后续任何按 textLen 迭代
-    // 拷贝字节的代码都会安全地跳过它;代价是这类合成换行/替换处不会真正
-    // 插入一个换行/空格字符(纯排版细节问题,不是安全问题)。
     bool textInSource =
         text >= ctx->doc->source.data &&
         text < ctx->doc->source.data + ctx->doc->source.len &&
         static_cast<u32>(size) <= ctx->doc->source.len &&
         static_cast<u32>(text - ctx->doc->source.data) <= ctx->doc->source.len - static_cast<u32>(size);
 
+    // T11 的野指针防御不能开倒车,但"这段不在 source 里的文本,内容其实就是
+    // 单个换行符"这件事本身是可以安全判断的——text 指针虽不在 source 范围内,
+    // 但仍是 md4c 传入的、保证可读 size 字节的合法内存(要么指向 source,要么
+    // 指向库内部的字面量/静态缓冲,两种情况下读取 [text, text+size) 都是安全
+    // 的,只是不能再当成"相对 source 的偏移"去用)。md4c 对软/硬换行
+    // (MD_TEXT_SOFTBR/MD_TEXT_BR)以及围栏/缩进代码块"每行结尾补一个换行"
+    // (md_process_verbatim_block_contents,type 固定是 MD_TEXT_CODE,不是
+    // BR/SOFTBR)统一传入库内部字面量 "\n"(size == 1),这里按内容而非
+    // type 判断,才能同时覆盖这两类场景。命中时不读那个不安全的指针,而是
+    // 合成一个安全的"换行" Inline:textOffset 归零(不使用)、textLen 固定
+    // 为 1、标记 kInlineFlagSyntheticNewline,渲染/统计时统一通过
+    // InlineTextBytes() 取字面量 "\n",不接触 source。其余"不在 source 里"
+    // 场景(如 MD_TEXT_NULLCHAR 的空字符替换、可折叠空格)维持原有归零行为,
+    // 不引入新的假设。
+    // 额外用 type 做一层限定(而不是彻底忽略这个参数):只在已知会真正合成
+    // "\n" 字面量的四种回调类型上生效,避免未来 md4c 版本升级后,某个偶然也传
+    // 单字节 "\n" 但语义完全不同的新场景被误判成换行。
+    bool syntheticNewline = !textInSource && size == 1 && text[0] == '\n' &&
+        (type == MD_TEXT_SOFTBR || type == MD_TEXT_BR ||
+         type == MD_TEXT_CODE || type == MD_TEXT_HTML);
+
     Inline in{};
-    in.flags = flags;
+    in.flags = flags | (syntheticNewline ? static_cast<u32>(kInlineFlagSyntheticNewline) : 0u);
     in.textOffset = textInSource ? static_cast<u32>(text - ctx->doc->source.data) : 0;
-    in.textLen = textInSource ? static_cast<u32>(size) : 0;
+    in.textLen = textInSource ? static_cast<u32>(size) : (syntheticNewline ? 1u : 0u);
     in.linkTargetIdx = ctx->CurrentTargetIdx();
 
     if (!ctx->doc->inlines.Push(in)) {

@@ -91,6 +91,11 @@ struct BlockGeometry {
     bool taskChecked;              // 任务是否已勾选(仅任务项有意义)
     bool smallText;                 // 脚注定义区块内文字整体小一号(T28)
     u32 footnoteId;                 // 脚注定义(FootnoteDef)的 1-based 编号,渲染 "[n]" 前缀用;非脚注定义恒为 0
+    // 表格单元格(TableHeadCell/TableCell)的 IDWriteTextLayout 真实内容高度
+    // (GetMetrics().height),用于渲染时把文字在"统一行高"内垂直居中——行高
+    // 取该行所有单元格估算高度的最大值,单个单元格的文字实际高度往往比它小,
+    // 直接从 top 起画会贴顶。仅表格单元格创建 layout 时才写入,其余类型恒为 0。
+    float contentHeight;
 };
 
 /**
