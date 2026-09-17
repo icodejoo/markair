@@ -276,7 +276,9 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     host->fileMap->Close();
     host->docArena->Reset();
 
-    float widthDip = mdvn::ClientWidthDip(host->hwnd);
+    // 换行宽度收窄掉左右内边距(kContentPaddingDip),口径与 window.cpp 的
+    // ViewportWidthOf 一致,否则窗口内换文档后正文换行宽度会和其余场景对不上。
+    float widthDip = mdvn::ContentWidthDip(mdvn::ClientWidthDip(host->hwnd));
     if (widthDip < 1.0f) widthDip = 1.0f;
     float fontScale = host->fonts ? host->fonts->Scale() : 1.0f;
 

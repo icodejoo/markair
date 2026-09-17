@@ -45,8 +45,43 @@ float DipScaleOf(HWND hwnd) {
 
 // 客户区高度/宽度(DIP)的内部别名,实现见文件末尾的公开函数 ClientHeightDip /
 // ClientWidthDip(T36 的窗口内换文档需要在 app 层拿到同一口径的视口尺寸)。
+// 注意:这是"原始"客户区尺寸,不含内边距收窄——正文换行宽度/滚动范围计算
+// 分别在使用处另外调用 ContentWidthDip / UsableViewportHeightDip 收窄。
 float ViewportHeightOf(HWND hwnd) { return ClientHeightDip(hwnd); }
-float ViewportWidthOf(HWND hwnd) { return ClientWidthDip(hwnd); }
+float ViewportWidthOf(HWND hwnd) { return ContentWidthDip(ClientWidthDip(hwnd)); }
+
+// 滚动范围计算统一用的"可用视口高度"(原始视口高度收窄掉上下内边距),
+// 喂给 ClampScrollOffset/MaxScrollOffset/ApplyScrollCommand 的 viewportHeight 参数
+// 以及 UpdateVisibleRange 的可见区间宽度,滚到底时才会在文档下方留出内边距空白。
+float UsableViewportHeightOf(HWND hwnd) { return UsableViewportHeightDip(ViewportHeightOf(hwnd)); }
+
+// float 滚动范围值夹到 SCROLLINFO 的 int 字段能装下的区间,避免溢出/负数。
+// 文档高度在真实场景里远不会逼近这个上限,这里只是防御性夹取。
+int ClampToScrollInfoRange(float value) {
+    constexpr float kScrollInfoMaxValue = 2000000000.0f;
+    if (value <= 0.0f) return 0;
+    if (value >= kScrollInfoMaxValue) return static_cast<int>(kScrollInfoMaxValue);
+    return static_cast<int>(value + 0.5f);  // 四舍五入,精度损失是滚动条 UI 的固有限制
+}
+
+// 把 WindowState::scrollY 同步到原生垂直滚动条(WS_VSCROLL)。任何改动过
+// scrollY 或者可能改变了总高度/视口尺寸的地方都应该在收尾调用一次,否则会出现
+// "用滚轮/键盘滚动了,滑块位置却没跟着动"这种明显 bug。
+void SyncScrollBar(HWND hwnd, const WindowState* state) {
+    if (!state || !state->layout) return;
+
+    float totalHeight = state->layout->TotalHeight();
+    float usableViewportHeight = UsableViewportHeightOf(hwnd);
+
+    SCROLLINFO si{};
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
+    si.nMin = 0;
+    si.nMax = ClampToScrollInfoRange(totalHeight);
+    si.nPage = static_cast<UINT>(ClampToScrollInfoRange(usableViewportHeight));
+    si.nPos = ClampToScrollInfoRange(state->scrollY);
+    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+}
 
 // T29:在"释放全部 layout 并重排"之前,找到当前视口顶部对应的块下标——
 // 取"top <= scrollY 的块中 top 最大的那个",重排后用同一个块下标的新 top
@@ -76,28 +111,45 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
     state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd), state->fonts->Scale(),
                             state->images);
 
-    float viewportHeight = ViewportHeightOf(hwnd);
+    float usableViewportHeight = UsableViewportHeightOf(hwnd);
     float newScrollY =
         (topBlock < state->layout->BlockCount()) ? state->layout->Geometry(topBlock).top : 0.0f;
-    state->scrollY = ClampScrollOffset(newScrollY, state->layout->TotalHeight(), viewportHeight);
+    state->scrollY =
+        ClampScrollOffset(newScrollY, state->layout->TotalHeight(), usableViewportHeight);
+    SyncScrollBar(hwnd, state);
 
     // Relayout 会淘汰全部 IDWriteTextLayout,必须在这里立刻按新几何重建一次,
     // 否则紧接着的这一帧会画成"只有图片、没有文字"。
-    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + viewportHeight,
+    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                       *state->fonts, state->residency);
     return true;
 }
 
-// 滚动偏移变化后的统一收尾:刷新可见范围内的 IDWriteTextLayout / 图片解码位图
-// (两者共用同一个虚拟化触发点),并请求重绘。
-// 偏移没有实际变化时什么都不做,避免顶部/底部到界后仍反复重绘。
-void ApplyScroll(HWND hwnd, WindowState* state, float newScrollY) {
-    if (newScrollY == state->scrollY) return;
-    state->scrollY = newScrollY;
+// 滚动偏移变化后的统一收尾:任何触发滚动的路径(滚轮/键盘/查找跳转/换文档/
+// 图片解码重排/原生滚动条拖动)都应该走这里,保证:
+//   ① scrollY 按当前视口/文档高度重新夹取一次(调用方传入的值未必已经夹过);
+//   ② 原生滚动条(WS_VSCROLL)滑块位置与 scrollY 同步;
+//   ③ 刷新可见范围内的 IDWriteTextLayout / 图片解码位图并请求重绘。
+// 偏移夹取后没有实际变化时跳过②之后的步骤,避免顶部/底部到界后仍反复重绘,
+// 但滚动条仍会同步一次(窗口尺寸/文档高度可能已经变了,即使 scrollY 没变)。
+// forceRefresh:换文档这类"scrollY 数值可能凑巧没变、但 layout 已经整个换掉了"
+// 的场景传 true,跳过"没变化就不刷新虚拟化"的短路判断。
+void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = false) {
+    if (!state || !state->layout) return;
 
-    if (state->layout && state->fonts) {
-        float viewportHeight = ViewportHeightOf(hwnd);
-        state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + viewportHeight,
+    float totalHeight = state->layout->TotalHeight();
+    float usableViewportHeight = UsableViewportHeightOf(hwnd);
+    float clamped = ClampScrollOffset(newY, totalHeight, usableViewportHeight);
+
+    bool changed = forceRefresh || (clamped != state->scrollY);
+    state->scrollY = clamped;
+    SyncScrollBar(hwnd, state);
+
+    // 虚拟化刷新只在偏移真正变化时才需要(顶部/底部到界后重复触发没有意义);
+    // 但重绘请求总是发出——调用方可能是"当前命中变了但仍在同一屏"这种场景
+    // (查找条前后跳转),视觉上仍需要刷新高亮颜色。
+    if (changed && state->fonts) {
+        state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                           *state->fonts, state->residency);
         RelayoutForImagesIfNeeded(hwnd, state);
     }
@@ -110,7 +162,11 @@ HitResult HitTestAtClientPoint(HWND hwnd, WindowState* state, int px, int py) {
     if (!state || !state->layout) {
         return HitResult{HitKind::None, kInvalidIndex, kInvalidIndex, kInvalidIndex};
     }
-    DocPoint p = ClientToDocument(px, py, DipScaleOf(hwnd), state->scrollY);
+    // 内容整体因内边距向右下平移了 kContentPaddingDip(渲染时的水平 SetTransform
+    // + effectiveScrollY),命中测试必须用同一套换算,否则点击位置会和视觉内容错位。
+    float effectiveScrollY = state->scrollY - kContentPaddingDip;
+    DocPoint p = ClientToDocument(px, py, DipScaleOf(hwnd), effectiveScrollY);
+    p.x -= kContentPaddingDip;
     return HitTestDocument(*state->layout, p.x, p.y);
 }
 
@@ -128,16 +184,7 @@ const ImageBox* ImageBoxOfHit(const BlockLayoutEngine& layout, const HitResult& 
 // 全文 layout 都实例化(那样就破坏了架构 §5 的虚拟化策略)。
 void ScrollToBlock(HWND hwnd, WindowState* state, u32 blockIndex) {
     if (!state || !state->layout || blockIndex >= state->layout->BlockCount()) return;
-
-    float viewportHeight = ViewportHeightOf(hwnd);
-    float target = ClampScrollOffset(state->layout->Geometry(blockIndex).top,
-                                      state->layout->TotalHeight(), viewportHeight);
-    state->scrollY = target;
-    if (state->fonts) {
-        state->layout->UpdateVisibleRange(target, target + viewportHeight, *state->fonts,
-                                          state->residency);
-    }
-    InvalidateRect(hwnd, nullptr, FALSE);
+    SetScrollY(hwnd, state, state->layout->Geometry(blockIndex).top);
 }
 
 // T36b:点击一张图片 -> 打开它的原始数据。
@@ -224,11 +271,10 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
         if (ok) {
             // 新文档从头开始看;旧文档的查找结果指向的是旧的块下标,必须一并作废。
             if (state->find) state->find->Close();
-            state->scrollY = 0.0f;
-            if (state->fonts && state->layout) {
-                state->layout->UpdateVisibleRange(0.0f, ViewportHeightOf(hwnd), *state->fonts,
-                                                   state->residency);
-            }
+            // forceRefresh=true:新文档的 layout 已整个换掉,即使数值上恰好还是
+            // 0.0f 也必须重新跑一次 UpdateVisibleRange,不能被"没变化"短路掉。
+            SetScrollY(hwnd, state, 0.0f, /*forceRefresh=*/true);
+            return;
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return;
@@ -278,10 +324,11 @@ void OnRemoteImageDone(HWND hwnd, WindowState* state, RemoteImageResult* result)
     ReleaseRemoteImageResult(result);
 
     if (state && state->layout && state->fonts) {
-        float viewportHeight = ViewportHeightOf(hwnd);
-        state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + viewportHeight,
+        float usableViewportHeight = UsableViewportHeightOf(hwnd);
+        state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                           *state->fonts, state->residency);
         RelayoutForImagesIfNeeded(hwnd, state);
+        SyncScrollBar(hwnd, state);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
 }
@@ -309,12 +356,13 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     // 否则首帧会白解一次却建不出位图(见 Renderer::EnsureTarget 的注释)。
     state->renderer->EnsureTarget(hwnd);
 
-    float viewportHeight = ViewportHeightOf(hwnd);
-    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + viewportHeight,
+    float usableViewportHeight = UsableViewportHeightOf(hwnd);
+    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                       *state->fonts, state->residency);
     // T33:首次解码出真实尺寸后,若与占位尺寸不同就在这里做一次性重排,
     // 之后同一批图片不会再触发(ImagePlacementChanged 会返回 false)。
     RelayoutForImagesIfNeeded(hwnd, state);
+    SyncScrollBar(hwnd, state);
 
     // T42(bench 专用):首屏解码完之后,若开启了"强制全量解码",再对整份文档
     // 补一次 UpdateVisibleRange,把首屏之外的图片也解码一遍,近似"滚到底"的
@@ -345,8 +393,11 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         overlay.statusMessage = state->statusMessage;
         overlayPtr = &overlay;
     }
-    bool presented =
-        state->renderer->RenderFrame(hwnd, *state->layout, state->scrollY, overlayPtr);
+    // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
+    // 早就在算 `g.top - scrollY`,传一个减去内边距的 scrollY 即等效于内容下移。
+    float effectiveScrollY = state->scrollY - kContentPaddingDip;
+    bool presented = state->renderer->RenderFrame(hwnd, *state->layout, effectiveScrollY,
+                                                   kContentPaddingDip, overlayPtr);
 
     if (presented && !state->firstPresentDone) {
         state->firstPresentDone = true;
@@ -363,13 +414,19 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         state->renderer->OnResize(width, height);
     }
     if (state->layout && state->doc) {
-        // 视口宽度变化只重跑布局,不重新解析(架构 §5/§9)。布局用 DIP,故先按 DPI 换算。
+        // 视口宽度变化只重跑布局,不重新解析(架构 §5/§9)。布局用 DIP,故先按 DPI 换算,
+        // 换行宽度再收窄掉左右内边距(ContentWidthDip)。
         float scale = DipScaleOf(hwnd);
         float fontScale = state->fonts ? state->fonts->Scale() : 1.0f;
-        state->layout->Relayout(*state->doc, static_cast<float>(width) / scale, fontScale,
-                                state->images);
+        float contentWidth = ContentWidthDip(static_cast<float>(width) / scale);
+        state->layout->Relayout(*state->doc, contentWidth, fontScale, state->images);
+        // 滚动范围夹取同样要用"可用视口高度"(收窄掉上下内边距),口径与
+        // ClampScrollOffset 的其余调用点一致,滚到底才会正确留出底部内边距空白。
+        float usableViewportHeight = UsableViewportHeightDip(static_cast<float>(height) / scale);
         state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
-                                           static_cast<float>(height) / scale);
+                                           usableViewportHeight);
+        // 窗口尺寸变化必然改变滚动条的 nMax/nPage,即使 scrollY 数值没变也要同步。
+        SyncScrollBar(hwnd, state);
     }
 }
 
@@ -386,12 +443,14 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
     state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd), state->fonts->Scale(),
                             state->images);
 
-    float viewportHeight = ViewportHeightOf(hwnd);
+    float usableViewportHeight = UsableViewportHeightOf(hwnd);
     float newScrollY =
         (topBlock < state->layout->BlockCount()) ? state->layout->Geometry(topBlock).top : 0.0f;
-    state->scrollY = ClampScrollOffset(newScrollY, state->layout->TotalHeight(), viewportHeight);
-    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + viewportHeight,
+    state->scrollY =
+        ClampScrollOffset(newScrollY, state->layout->TotalHeight(), usableViewportHeight);
+    state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                       *state->fonts, state->residency);
+    SyncScrollBar(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -495,8 +554,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         if (state && state->layout) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
-                                       state->layout->TotalHeight(), ViewportHeightOf(hwnd));
-            ApplyScroll(hwnd, state, newY);
+                                       state->layout->TotalHeight(), UsableViewportHeightOf(hwnd));
+            SetScrollY(hwnd, state, newY);
+        }
+        return 0;
+    }
+
+    case WM_VSCROLL: {
+        // 原生垂直滚动条(WS_VSCROLL)拖动/点击箭头/点击滑槽的统一入口。
+        if (state && state->layout) {
+            int code = LOWORD(wparam);
+            if (IsThumbScrollCode(code)) {
+                // MSDN 明确建议:WM_VSCROLL 的 HIWORD(wParam) 只有 16 位,文档高度
+                // 一旦超过 65535 DIP 就会截断,拖动滑块/松手时改用 GetScrollInfo 的
+                // SIF_TRACKPOS 读取完整精度的滑块位置。
+                SCROLLINFO si{};
+                si.cbSize = sizeof(SCROLLINFO);
+                si.fMask = SIF_TRACKPOS;
+                float target = state->scrollY;
+                if (GetScrollInfo(hwnd, SB_VERT, &si)) {
+                    target = static_cast<float>(si.nTrackPos);
+                }
+                SetScrollY(hwnd, state, target);
+            } else {
+                ScrollCommand command;
+                if (ScrollCommandFromScrollBarCode(code, &command)) {
+                    float newY = ApplyScrollCommand(state->scrollY, command,
+                                                    state->layout->TotalHeight(),
+                                                    UsableViewportHeightOf(hwnd));
+                    SetScrollY(hwnd, state, newY);
+                }
+            }
         }
         return 0;
     }
@@ -547,8 +635,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             ScrollCommandFromVirtualKey(wparam, &command)) {
             float newY = ApplyScrollCommand(state->scrollY, command,
                                             state->layout->TotalHeight(),
-                                            ViewportHeightOf(hwnd));
-            ApplyScroll(hwnd, state, newY);
+                                            UsableViewportHeightOf(hwnd));
+            SetScrollY(hwnd, state, newY);
             return 0;
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -602,8 +690,9 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     state->firstPresentDone = false;
 
     // 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
+    // WS_VSCROLL:原生右侧滚动条,外观完全交给系统主题,不自绘。
     HWND hwnd = CreateWindowExW(
-        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW,
+        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, kInitialWidthDip, kInitialHeightDip,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
@@ -626,6 +715,11 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
+
+    // 保险起见显式同步一次滚动条:WM_SIZE 通常会在窗口创建/显示过程中触发并
+    // 顺带同步(见 OnSize),这里再补一次是为了在极端情况下(比如 WM_SIZE 没有
+    // 如预期触发)也不会出现"滚动条还没配置好"的窗口。
+    SyncScrollBar(hwnd, state);
 
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);

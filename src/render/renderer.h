@@ -24,7 +24,7 @@ class Renderer;
  *   mdvn::ShellOverlay overlay{find.Matches().data, find.MatchCount(),
  *                               find.CurrentIndex(), &doc, find.Visible(),
  *                               find.Query(), nullptr};
- *   renderer.RenderFrame(hwnd, layout, scrollY, &overlay);
+ *   renderer.RenderFrame(hwnd, layout, scrollY, 12.0f, &overlay);
  */
 struct ShellOverlay {
     const Match* matches;          // 查找命中数组(按块下标升序),可为 nullptr
@@ -145,7 +145,7 @@ private:
  * @example
  *   mdvn::Renderer renderer;
  *   renderer.Init(d2dFactory);
- *   renderer.RenderFrame(hwnd, layoutEngine, 0.0f);
+ *   renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f);
  */
 class Renderer {
 public:
@@ -222,16 +222,22 @@ public:
      * @param layout 已完成 `Relayout`/`UpdateVisibleRange` 的布局引擎,
      *               只读取其几何与 `IDWriteTextLayout`,不修改。
      * @param scrollY 当前纵向滚动偏移(DIP),0 表示文档顶部对齐窗口顶部。
+     * @param leftPaddingDip 内容整体的左内边距(DIP);同时用于把客户区宽度
+     *              收窄成正文可用宽度(分割线/脚注分隔线的右边界据此计算),
+     *              避免画进右侧内边距的空白区域。由外壳层(window.cpp)按其
+     *              统一定义的内边距常量传入——渲染层不认识"内边距"这个外壳层
+     *              概念,只接收一个数字,保持 `shell → render` 单向依赖(不反向
+     *              include shell 目录下的头文件)。
      * @param overlay 可选的叠加层视图(T37/T38 的查找高亮与查找条、T36 的窗口内
      *                提示);传 nullptr 表示不画任何叠加层,零额外开销。只在本次
      *                调用期间被引用,函数返回后不再持有。
      * @return 本帧是否真正完成了一次成功的 `EndDraw`(渲染目标创建失败或
      *         `EndDraw` 返回失败 HRESULT 时为 false),供调用方判断"首帧是否
      *         已真正显示"(T14 性能埋点用)。
-     * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, &overlay);
+     * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay);
      */
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
-                      const ShellOverlay* overlay = nullptr);
+                      float leftPaddingDip, const ShellOverlay* overlay = nullptr);
 
 private:
     // 渲染目标不存在时按 hwnd 当前客户区尺寸创建(软件光栅化,架构决策)。

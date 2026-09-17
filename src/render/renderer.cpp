@@ -775,7 +775,7 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 }
 
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
-                            const ShellOverlay* overlay) {
+                            float leftPaddingDip, const ShellOverlay* overlay) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -817,18 +817,31 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(OverlayBarTextColor(), &overlayBarTextBrush);
 
     D2D1_SIZE_F targetSize = target_->GetSize();
+    // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
+    // 分割线/脚注分隔线的右边界要按这个来算,否则会画到内边距的空白区域里去。
+    float contentWidth = targetSize.width - 2.0f * leftPaddingDip;
+    if (contentWidth < 0.0f) contentWidth = 0.0f;
 
     target_->BeginDraw();
     target_->Clear(BackgroundColor());
 
+    // 左内边距:水平方向整体平移 leftPaddingDip,每个 DrawXxx 已经在用
+    // g.indent 当 x 坐标画东西,不用逐个改。垂直方向的内边距由调用方传入的
+    // scrollY(已经减去过内边距)实现,这里不用再叠一次。仅对"文档内容"
+    // 生效——叠加层(查找条/提示条)画之前会恢复成 Identity,不跟着这个平移走。
+    target_->SetTransform(D2D1::Matrix3x2F::Translation(leftPaddingDip, 0.0f));
+
     u32 blockCount = layout.BlockCount();
     for (u32 i = 0; i < blockCount; ++i) {
-        DrawBlock(layout.Geometry(i), i, scrollY, targetSize.width,
+        DrawBlock(layout.Geometry(i), i, scrollY, contentWidth,
                   textBrush, quoteBrush, codeBgBrush, hrBrush, linkBrush,
                   tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
                   placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
                   findHighlightBrush, findCurrentBrush);
     }
+
+    // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
+    target_->SetTransform(D2D1::Matrix3x2F::Identity());
 
     // 叠加层最后画,浮在正文之上:查找条(T37)与窗口内提示(T36)。
     if (overlay_) {

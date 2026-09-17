@@ -13,6 +13,7 @@ add_executable(mdvn_tests
     test_table.cpp
     test_renderer.cpp
     test_scroll.cpp
+    test_scroll_v2.cpp
     test_bench.cpp
     test_image.cpp
     test_data_uri.cpp
