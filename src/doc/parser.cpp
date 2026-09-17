@@ -159,6 +159,17 @@ int OnEnterBlock(MD_BLOCKTYPE type, void* detail, void* userdata) {
                 }
             }
             break;
+        case MD_BLOCK_OL:
+            if (detail != nullptr) {
+                auto* d = static_cast<MD_BLOCK_OL_DETAIL*>(detail);
+                OrderedListDetail old{static_cast<u32>(d->start), d->mark_delimiter};
+                b.detailIdx = ctx->doc->orderedListDetails.Size();
+                if (!ctx->doc->orderedListDetails.Push(old)) {
+                    ctx->Truncate();
+                    return 1;
+                }
+            }
+            break;
         case MD_BLOCK_LI:
             if (detail != nullptr) {
                 auto* d = static_cast<MD_BLOCK_LI_DETAIL*>(detail);

@@ -33,6 +33,17 @@ struct ListItemDetail {
     bool taskChecked; // 任务是否已勾选
 };
 
+/**
+ * 有序列表容器(BlockType::OrderedList)的附加信息,取自 md4c 的
+ * MD_BLOCK_OL_DETAIL——起始序号(<ol start="N"> 或 "3. foo" 这种写法里的 3)
+ * 与序号分隔符,布局阶段据此从 start 开始给每个直属 ListItem 递增编号
+ * (T44,见 layout.cpp::LayoutSubtree),不需要在 ListItem 自身另存序号。
+ */
+struct OrderedListDetail {
+    u32 start;          // 起始序号,默认 1
+    char markDelimiter; // 序号分隔符,如 '.' 或 ')'
+};
+
 /** 脚注定义块(FootnoteDef)的附加信息。 */
 struct FootnoteDetail {
     u32 id;         // 1-based 脚注编号,与引用处 Inline::linkTargetIdx 配对

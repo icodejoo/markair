@@ -62,6 +62,15 @@ constexpr float kHeadingScale[7] = {1.0f, 1.8f, 1.5f, 1.35f, 1.2f, 1.1f, 1.0f};
 constexpr float kCheckboxSizeDip = 14.0f;
 constexpr float kCheckboxGapDip = 6.0f;
 
+// T44 列表符号(无序列表用几何图元,有序列表用数字):圆点/空心圆直径、方块边长
+// (DIP,未缩放前);符号与文字之间复用 kCheckboxGapDip 同一档间隙,视觉上与
+// 任务列表勾选框保持一致的"图元 + 间隙 + 文字"节奏。
+constexpr float kListMarkerDotDiameterDip = 6.0f;
+constexpr float kListMarkerSquareDip = 5.0f;
+// 有序列表序号预留列宽:按两位数字("12.")在正文字号下的量级估算,不精确测量
+// 实际文字宽度(和任务列表勾选框一样,布局阶段不为此创建 IDWriteTextLayout)。
+constexpr float kOrderedMarkerColumnDip = 26.0f;
+
 // T28 脚注区块内文字整体缩小的比例(相对当前正文字号)。
 constexpr float kFootnoteFontRatio = 0.85f;
 
@@ -174,12 +183,14 @@ bool BlockLayoutEngine::Relayout(const Document& doc, float viewportWidth, float
     }
     if (blockCount == 0) return true;
 
-    LayoutSubtree(0, 0.0f, 0.0f, false);
+    LayoutSubtree(0, 0.0f, 0.0f, false, 0, false, 0, 0);
     totalHeight_ = geometries_[0].bottom;
     return true;
 }
 
-float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool inFootnote) {
+float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool inFootnote,
+                                        u32 listDepth, bool orderedItem, u32 itemOrdinal,
+                                        char itemDelim) {
     const Block& b = doc_->blocks[blockIndex];
     BlockGeometry& g = geometries_[blockIndex];
 
@@ -197,6 +208,12 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     g.cellWidth = 0.0f;
     g.taskCheckbox = LayoutRect{0, 0, 0, 0};
     g.taskChecked = false;
+    g.listMarker = LayoutRect{0, 0, 0, 0};
+    g.listMarkerLevel = 0;
+    g.listMarkerOrdered = false;
+    g.listMarkerOrdinal = 0;
+    g.listMarkerDelim = 0;
+    g.listMarkerPad = 0.0f;
     g.smallText = inFootnote || b.type == BlockType::FootnoteDefSection;
     g.footnoteId = 0;
     // 代码高亮区内边距:文字离背景四边各留 8 DIP,但 g.indent/g.codeBackground
@@ -207,8 +224,8 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     bool isCodeBlock = b.type == BlockType::CodeBlock;
     g.textPad = isCodeBlock ? kCodeBlockPaddingDip : 0.0f;
 
-    bool isListContainer =
-        b.type == BlockType::BulletList || b.type == BlockType::OrderedList;
+    bool isOrderedContainer = b.type == BlockType::OrderedList;
+    bool isListContainer = b.type == BlockType::BulletList || isOrderedContainer;
     bool isQuote = b.type == BlockType::BlockQuote;
     float childX = x;
     if (isListContainer) childX = x + kListIndentUnitDip * fontScale_;
@@ -232,6 +249,36 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
         g.indent = x + size + kCheckboxGapDip * fontScale_;
     }
 
+    // T44:列表符号——非任务列表项的 ListItem 才画(任务列表项已经在上面画了
+    // 勾选框,不重复画符号,二者互斥,判据同样是 isTaskItem)。listDepth 由
+    // 直接父块(BulletList/OrderedList)下发,>0 才说明确实处于某个列表容器内
+    // (理论上非 ListItem 块不会带非 0 listDepth 进这里,但仍以 b.type 判断为准)。
+    bool isListItem = b.type == BlockType::ListItem;
+    if (isListItem && !isTaskItem && listDepth > 0) {
+        float lineHeight = kBaseLineHeightDip * fontScale_;
+        g.listMarkerLevel = static_cast<u8>(listDepth);
+        g.listMarkerOrdered = orderedItem;
+        if (orderedItem) {
+            // 有序列表:所有层级统一用"阿拉伯数字 + 分隔符"(如 "1." "2)"),不切换
+            // 字母/罗马数字——这与常见 GFM 渲染器(如 GitHub)嵌套有序列表的实际
+            // 观感一致:层级只体现在缩进上,序号风格不变。
+            g.listMarkerOrdinal = itemOrdinal;
+            g.listMarkerDelim = itemDelim;
+            float columnWidth = kOrderedMarkerColumnDip * fontScale_;
+            g.listMarker = LayoutRect{x, y, columnWidth, lineHeight};
+            g.listMarkerPad = columnWidth + kCheckboxGapDip * fontScale_;
+        } else {
+            // 无序列表:三档循环——第 1 层实心圆点,第 2 层空心圆,第 3 层(及之后
+            // 再循环)实心方块,全部用 D2D 几何图元画,不依赖任何字体字形。
+            u32 cyc = (listDepth - 1) % 3;
+            float shapeSize = (cyc == 2 ? kListMarkerSquareDip : kListMarkerDotDiameterDip) * fontScale_;
+            float boxY = y + (lineHeight - shapeSize) * 0.5f;
+            if (boxY < y) boxY = y;
+            g.listMarker = LayoutRect{x, boxY, shapeSize, shapeSize};
+            g.listMarkerPad = shapeSize + kCheckboxGapDip * fontScale_;
+        }
+    }
+
     // 紧凑列表项(ListItem)可能直属一段行内文本(紧凑列表首段内容),
     // 这段文本按叶子内容块估算高度;标题/段落/代码块/分割线也是同样的
     // 叶子内容块,没有子块。文档根/列表/引用块永远没有直属行内内容
@@ -252,7 +299,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     float cursor = y;
     bool wroteSomething = false;
     if (hasOwnLeafContent) {
-        float availableWidth = viewportWidth_ - g.indent;
+        float availableWidth = viewportWidth_ - g.indent - g.listMarkerPad;
         // 代码高亮区文字左右各留 8 DIP 内边距(注意 g.indent 本身不变,背景矩形
         // 仍按 g.indent 起算,和 M0 既有的 Layout_CodeBlockBackgroundGeometry
         // 断言口径保持一致),这里只是收窄"文字可用宽度",与 kCodeBlockRightMarginDip
@@ -270,12 +317,26 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     // T33:图片 inline 参与块高度计算——在本块直属文本之下纵向堆叠图片/占位块。
     // 尺寸在这一步就定下来("先有尺寸再有位图"),渲染层只负责往矩形里画。
     if (b.inlineCount > 0) {
-        float imageAvailWidth = viewportWidth_ - g.indent;
-        float imagesHeight = LayoutImagesForBlock(blockIndex, g.indent, cursor, imageAvailWidth);
+        float imageLeft = g.indent + g.listMarkerPad;
+        float imageAvailWidth = viewportWidth_ - imageLeft;
+        float imagesHeight = LayoutImagesForBlock(blockIndex, imageLeft, cursor, imageAvailWidth);
         if (imagesHeight > 0.0f) {
             cursor += imagesHeight;
             wroteSomething = true;
         }
+    }
+
+    // T44:本块若是列表容器,给直属子块(应为 ListItem)算好列表符号参数——
+    // 层级在容器这一层 +1,有序列表的序号从 OrderedListDetail::start 起递增。
+    // 非列表容器时,listDepth 原样透传给子块(既不增也不是重置为 0),
+    // 让"容器套容器"之间的中间层(引用块/脚注定义等)不影响列表嵌套计数。
+    u32 childListDepth = isListContainer ? (listDepth + 1) : listDepth;
+    u32 orderedOrdinalCounter = 1;
+    char orderedDelim = '.';
+    if (isOrderedContainer && b.detailIdx != kInvalidIndex) {
+        const OrderedListDetail& od = doc_->orderedListDetails[b.detailIdx];
+        orderedOrdinalCounter = od.start;
+        orderedDelim = od.markDelimiter != 0 ? od.markDelimiter : '.';
     }
 
     u32 child = b.firstChildIdx;
@@ -287,7 +348,19 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
         if (doc_->blocks[child].type == BlockType::Table) {
             cursor = LayoutTableSubtree(child, childX, cursor);
         } else {
-            cursor = LayoutSubtree(child, childX, cursor, nextInFootnote);
+            bool childOrdered = false;
+            u32 childOrdinal = 0;
+            char childDelim = 0;
+            if (isListContainer && doc_->blocks[child].type == BlockType::ListItem) {
+                childOrdered = isOrderedContainer;
+                if (isOrderedContainer) {
+                    childOrdinal = orderedOrdinalCounter;
+                    childDelim = orderedDelim;
+                    orderedOrdinalCounter++;
+                }
+            }
+            cursor = LayoutSubtree(child, childX, cursor, nextInFootnote, childListDepth,
+                                   childOrdered, childOrdinal, childDelim);
         }
         wroteSomething = true;
         child = child + 1 + doc_->blocks[child].childCount;
@@ -770,7 +843,7 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
 
     BlockGeometry& g = geometries_[blockIndex];
     FontRole role = (b.type == BlockType::CodeBlock) ? FontRole::Mono : FontRole::Body;
-    float maxWidth = (g.cellWidth > 0.0f) ? g.cellWidth : (viewportWidth_ - g.indent);
+    float maxWidth = (g.cellWidth > 0.0f) ? g.cellWidth : (viewportWidth_ - g.indent - g.listMarkerPad);
     // 代码高亮区文字左右各留 8 DIP 内边距,还要扣掉背景本身的右侧留白
     // (kCodeBlockRightMarginDip),与 LayoutSubtree 里 EstimateLeafHeight 用的
     // availableWidth 保持同一份计算口径,避免估算高度和真实折行宽度不一致。

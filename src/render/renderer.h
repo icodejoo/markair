@@ -311,6 +311,13 @@ private:
     // fonts_ 为空(未提供字体子系统)时静默跳过。
     void DrawFootnoteLabel(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* textBrush);
 
+    // 画列表项前的符号(T44):无序列表用 D2D 几何图元(实心圆点/空心圆/实心方块,
+    // 按 listMarkerLevel 三档循环),有序列表临时创建一个极小的 IDWriteTextLayout
+    // 画 "N." 这样的序号(用法同 DrawFootnoteLabel,画完立即释放)。任务列表项
+    // (g.taskCheckbox 非空)已经在 DrawTaskCheckbox 画了勾选框,这里用
+    // g.listMarker.width <= 0 直接跳过,不会重复画。
+    void DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush);
+
     // 画一个块内的查找命中高亮(T38):用 HitTestTextRange 拿矩形,在**文本下方**
     // 填半透明底色(不改文本颜色,避免和链接蓝冲突),当前命中换另一种底色。
     void DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,

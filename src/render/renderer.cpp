@@ -13,8 +13,10 @@ constexpr float kThematicBreakRightMarginDip = 16.0f;
 // 背景色:主题背景(浅色),与窗口类的 GDI 背景色保持一致,避免首帧白闪
 // (架构 §6,已在窗口类里落地;这里只是让 D2D 清屏色跟 GDI 背景一致)。
 // 文字的实际绘制 left——代码高亮区(g.textPad > 0)固定右移一份内边距,
-// 让文字离背景左边框有留白;其余类型 textPad 恒为 0,原样返回 g.indent。
-float TextDrawLeft(const BlockGeometry& g) { return g.indent + g.textPad; }
+// 让文字离背景左边框有留白;非任务列表项的列表符号(T44,g.listMarkerPad > 0)
+// 同理右移让出符号/序号的位置,indent 本身不含这份偏移(见 layout.h 的
+// listMarkerPad 字段注释);其余情况两者恒为 0,原样返回 g.indent。
+float TextDrawLeft(const BlockGeometry& g) { return g.indent + g.textPad + g.listMarkerPad; }
 
 // 文字的实际绘制 top,两种场景各自独立生效(互不相关,一个块不会同时是
 // 表格单元格和代码块):
@@ -532,6 +534,61 @@ void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
     }
 }
 
+void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush) {
+    if (g.listMarker.width <= 0.0f || !markerBrush) return;
+
+    D2D1_RECT_F rect = D2D1::RectF(
+        g.listMarker.x, g.listMarker.y - scrollY,
+        g.listMarker.x + g.listMarker.width,
+        g.listMarker.y - scrollY + g.listMarker.height);
+
+    if (!g.listMarkerOrdered) {
+        // 无序列表:三档循环——第 1 层实心圆点,第 2 层空心圆,第 3 层(及再循环)
+        // 实心方块,纯 D2D 几何图元,不依赖任何字体字形(与 DrawTaskCheckbox 同一
+        // 风格)。listMarkerLevel 是 1-based,减 1 再取模才对齐"第 1 层"的语义。
+        u32 cyc = (g.listMarkerLevel >= 1 ? g.listMarkerLevel - 1 : 0) % 3;
+        if (cyc == 2) {
+            target_->FillRectangle(rect, markerBrush);
+        } else {
+            D2D1_ELLIPSE ellipse = D2D1::Ellipse(
+                D2D1::Point2F((rect.left + rect.right) * 0.5f, (rect.top + rect.bottom) * 0.5f),
+                (rect.right - rect.left) * 0.5f, (rect.bottom - rect.top) * 0.5f);
+            if (cyc == 0) {
+                target_->FillEllipse(ellipse, markerBrush);
+            } else {
+                target_->DrawEllipse(ellipse, markerBrush, 1.3f);
+            }
+        }
+        return;
+    }
+
+    // 有序列表:数字 + 分隔符(如 "1." "2)"),复用现有 IDWriteTextLayout 管线,
+    // 画法与 DrawFootnoteLabel 一致——临时创建、画完立即释放,不进虚拟化/不缓存。
+    if (!fonts_) return;
+    wchar_t label[16];
+    wchar_t digits[10];
+    u32 value = g.listMarkerOrdinal;
+    u32 dn = 0;
+    if (value == 0) {
+        digits[dn++] = L'0';
+    } else {
+        while (value > 0 && dn < 10) {
+            digits[dn++] = static_cast<wchar_t>(L'0' + (value % 10));
+            value /= 10;
+        }
+    }
+    u32 li = 0;
+    for (u32 i = 0; i < dn; ++i) label[li++] = digits[dn - 1 - i];
+    label[li++] = g.listMarkerDelim != 0 ? static_cast<wchar_t>(g.listMarkerDelim) : L'.';
+    label[li] = 0;
+
+    IDWriteTextLayout* labelLayout =
+        fonts_->CreateTextLayout(label, li, FontRole::Body, rect.right - rect.left, rect.bottom - rect.top);
+    if (!labelLayout) return;
+    target_->DrawTextLayout(D2D1::Point2F(rect.left, rect.top), labelLayout, markerBrush);
+    labelLayout->Release();
+}
+
 void Renderer::DrawFootnoteLabel(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* textBrush) {
     if (g.footnoteId == 0 || !fonts_ || !textBrush) return;
 
@@ -784,6 +841,11 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 
     // 任务列表勾选框(T27)。
     DrawTaskCheckbox(g, scrollY, checkboxBorderBrush, checkboxCheckBrush);
+
+    // 列表符号(T44):无序圆点/空心圆/方块,有序数字序号;复用正文颜色。
+    // 与上面的任务列表勾选框互斥(见 layout.cpp 里 isTaskItem 分支不写 listMarker),
+    // 不会同一个 ListItem 上重复画两种前缀。
+    DrawListMarker(g, scrollY, textBrush);
 
     // 正文/标题/代码块/表格单元格文本:虚拟化范围内才非空,直接用 DrawTextLayout。
     if (g.textLayout && textBrush) {

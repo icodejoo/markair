@@ -11,6 +11,7 @@ add_executable(mdvn_tests
     test_font.cpp
     test_layout.cpp
     test_layout_codeblock.cpp
+    test_list_marker.cpp
     test_synthetic_newline.cpp
     test_table.cpp
     test_renderer.cpp

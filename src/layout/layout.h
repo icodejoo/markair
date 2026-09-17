@@ -89,6 +89,23 @@ struct BlockGeometry {
     float cellWidth;               // 单元格排版宽度(T26),仅 TableHeadCell/TableCell 非零
     LayoutRect taskCheckbox;       // 任务列表勾选框几何(T27);非任务项恒为全 0
     bool taskChecked;              // 任务是否已勾选(仅任务项有意义)
+    // T44 列表符号:仅非任务项的 ListItem 才非零(任务项已经画勾选框,二者互斥,
+    // 见 taskCheckbox 注释)。无序列表时是符号本身的绘制矩形(圆点/空心圆/方块,
+    // 渲染层按 listMarkerLevel 决定形状,见 renderer.cpp::DrawListMarker);有序
+    // 列表时是序号文字的绘制原点 + 预留列宽(width/height 供渲染层排版参考)。
+    LayoutRect listMarker;
+    u8 listMarkerLevel;    // 列表嵌套层级,1-based;0 表示该 ListItem 不画列表符号
+    bool listMarkerOrdered; // 是否为有序列表项(否则是无序符号)
+    u32 listMarkerOrdinal;  // 有序列表当前序号,listMarkerOrdered 为真时才有意义
+    char listMarkerDelim;   // 有序列表序号分隔符(如 '.' 或 ')'),listMarkerOrdered 为真时才有意义
+    // 列表符号占用的水平位移量(DIP):只影响"这个 ListItem 自身"文字/图片的
+    // 绘制起点(渲染层见 TextDrawLeft;命中测试见 hit_test.cpp),不叠加进
+    // indent 本身——indent 保留"纯嵌套缩进"的既有语义(kListIndentUnitDip 的
+    // 整数倍),兼容 M0 基线测试 Layout_NestedListIndent 对 indent 的断言。
+    // 任务列表勾选框走的是老路径,直接改 g.indent(见 taskCheckbox 分支),
+    // 与这个字段互斥,不会同时非零。子块(嵌套列表/段落)缩进不受影响,
+    // 仍从未叠加此值的 x 起排(与 taskCheckbox 现有做法一致)。
+    float listMarkerPad;
     bool smallText;                 // 脚注定义区块内文字整体小一号(T28)
     u32 footnoteId;                 // 脚注定义(FootnoteDef)的 1-based 编号,渲染 "[n]" 前缀用;非脚注定义恒为 0
     // 表格单元格(TableHeadCell/TableCell)的 IDWriteTextLayout 真实内容高度
@@ -245,7 +262,17 @@ private:
     // 递归铺开一个块及其子树的几何占位,返回"排完这个块之后,下一个兄弟块应从哪个 y 开始"。
     // inFootnote 表示当前是否处于 FootnoteDefSection 子树内(T28,决定文字是否小一号),
     // 由调用方(Relayout 的首次调用传 false)沿递归自动传播,不需要外部关心。
-    float LayoutSubtree(u32 blockIndex, float x, float y, bool inFootnote);
+    //
+    // T44 新增四个列表符号相关参数,均由直接父块在下发子块时算好,本函数自己
+    // 不做任何"往上找列表祖先"的反查:
+    //   - listDepth:当前块所处的列表嵌套层级(0 = 不在任何列表容器内)。若本块
+    //     是 BulletList/OrderedList 容器,它会在下发自己的子块(应为 ListItem)
+    //     时传 listDepth + 1;其余情况原样透传,不在中途"凭空"改变层级。
+    //   - orderedItem/itemOrdinal/itemDelim:仅当本块是某个 OrderedList 的直属
+    //     ListItem 时才有意义(由该 OrderedList 在下发子块时算好当前序号),
+    //     其余情况调用方一律传 false/0/0。
+    float LayoutSubtree(u32 blockIndex, float x, float y, bool inFootnote, u32 listDepth,
+                        bool orderedItem, u32 itemOrdinal, char itemDelim);
 
     // 叶子内容块(标题/段落/代码块/分割线)的高度估算,纯数字计算,不涉及 DirectWrite。
     float EstimateLeafHeight(const Block& b, float availableWidth) const;

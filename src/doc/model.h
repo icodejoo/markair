@@ -132,6 +132,7 @@ struct Document {
     Vec<TableDetail> tableDetails;       // 表格附加信息(BlockType::Table)
     Vec<CellDetail> cellDetails;         // 单元格对齐(TableHeadCell/TableCell)
     Vec<ListItemDetail> listItemDetails; // 任务列表项(ListItem,仅 is_task 时分配)
+    Vec<OrderedListDetail> orderedListDetails; // 有序列表起始序号/分隔符(T44,BlockType::OrderedList)
     Vec<FootnoteDetail> footnoteDetails; // 脚注定义(FootnoteDef)
     StrSlice source;  // 原始 Markdown 字节,零拷贝引用调用方缓冲区,生命周期由调用方保证
     bool truncated;   // true 表示因超出节点数/嵌套深度上限被安全截断
@@ -139,8 +140,8 @@ struct Document {
     // 构造一个空文档,所有数组均绑定到指定 Arena。
     explicit Document(Arena* arena)
         : blocks(arena), inlines(arena), linkTargets(arena), tableDetails(arena),
-          cellDetails(arena), listItemDetails(arena), footnoteDetails(arena),
-          source{nullptr, 0}, truncated(false) {}
+          cellDetails(arena), listItemDetails(arena), orderedListDetails(arena),
+          footnoteDetails(arena), source{nullptr, 0}, truncated(false) {}
 };
 
 // sizeof(Block) == 32、sizeof(Inline) == 16(M1 新增 detailIdx 借用了

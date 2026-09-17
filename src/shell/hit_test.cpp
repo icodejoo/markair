@@ -105,7 +105,11 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
     BOOL isTrailingHit = FALSE;
     BOOL isInside = FALSE;
     DWRITE_HIT_TEST_METRICS metrics{};
-    HRESULT hr = g.textLayout->HitTestPoint(docX - g.indent, docY - g.top,
+    // T44:非任务列表项的列表符号(g.listMarkerPad)与代码高亮区内边距
+    // (g.textPad)一样,只影响文字的实际绘制起点,不改变 g.indent 本身,
+    // 这里换算命中坐标要跟渲染层 TextDrawLeft 用同一份口径,否则符号列会
+    // 被误判成命中文字。
+    HRESULT hr = g.textLayout->HitTestPoint(docX - g.indent - g.listMarkerPad, docY - g.top,
                                              &isTrailingHit, &isInside, &metrics);
     if (FAILED(hr) || !isInside) {
         // isInside 为假 = 点落在行尾空白/行外的"最近字符"上,不算命中文本。
