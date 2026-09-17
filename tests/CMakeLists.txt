@@ -27,10 +27,12 @@ add_executable(mdvn_tests
     test_hit_test.cpp
     test_search.cpp
     test_ini.cpp
+    test_cmdline.cpp
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
+    ../src/util/cmdline.cpp
     ../src/util/str.cpp
     ../src/util/ini.cpp
     ../src/doc/file_map.cpp

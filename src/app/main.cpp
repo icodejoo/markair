@@ -12,7 +12,6 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shellapi.h>
 #include <imm.h>
 #include <d2d1.h>
 
@@ -22,6 +21,7 @@
 
 #include "bench.h"
 #include "../util/arena.h"
+#include "../util/cmdline.h"
 #include "../util/ini.h"
 #include "../util/str.h"
 #include "../doc/model.h"
@@ -317,9 +317,16 @@ void OnFirstPresentBenchHook(void*) {
 // 进程入口:解析命令行、命名互斥体、初始化各子系统、加载文档、弹出窗口、
 // 跑消息循环。
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    mdvn::bench::ParsedArgs benchArgs = mdvn::bench::ParseArgs(argc, argv);
+    // 命令行解析改用不依赖 shell32.dll 的 mdvn::ParseCommandLine(见 cmdline.h
+    // 顶部注释)——CommandLineToArgvW 本身是 shell32 的导出符号,在这里被
+    // 无条件调用会让 CMakeLists.txt 里的 /DELAYLOAD:shell32.dll 名存实亡。
+    // cmdlineArena 只需装下命令行字符串与 argv 数组,生命周期覆盖整个
+    // wWinMain(benchArgs.filePath 后面还会被多处使用),函数退出时随栈析构。
+    mdvn::Arena cmdlineArena;
+    cmdlineArena.Init(64 * 1024);
+    mdvn::Vec<wchar_t*> argv = mdvn::ParseCommandLine(GetCommandLineW(), &cmdlineArena);
+    int argc = static_cast<int>(argv.Size());
+    mdvn::bench::ParsedArgs benchArgs = mdvn::bench::ParseArgs(argc, argv.Data());
     if (benchArgs.benchEnabled) mdvn::bench::Enable();
     // "进程入口"埋点尽量早地记录;命令行解析本身极轻,可忽略的测量误差。
     mdvn::bench::MarkProcessStart();
@@ -452,13 +459,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         &clipboardScratch};
 
     if (!mdvn::RegisterMainWindowClass(hInstance)) {
-        if (argv) LocalFree(argv);
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
     }
     HWND hwnd = mdvn::CreateMainWindow(hInstance, g_displayText, &windowState);
     if (!hwnd) {
-        if (argv) LocalFree(argv);
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
     }
@@ -489,7 +494,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     if (g_d2dFactory) g_d2dFactory->Release();
     if (fileMutex) CloseHandle(fileMutex);
-    if (argv) LocalFree(argv);
+    // argv/cmdlineArena 随函数返回时的栈析构自动回收,不需要手动释放
+    // (对应过去 CommandLineToArgvW 结果专用的 LocalFree)。
 
     return exitCode;
 }

@@ -51,8 +51,16 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # COM 运行期激活本身就比延迟加载更晚、更惰性：不解码图片就不会 CoCreateInstance，
 # 也就不会把 windowscodecs.dll 映射进进程 —— 验收要的「无图文档模块列表里不出现
 # windowscodecs.dll」由此成立，且比 /DELAYLOAD 更强（连导入表条目都没有）。
+# shell32.dll(2026-09-17 深挖内存追加):`ShellExecuteW`(外链跳转、点本地/
+# 临时文件图片调用系统看图软件,见 src/shell/navigate.cpp)只在用户真正点击
+# 链接/图片时才会被调用,但 shell32 是静态导入,进程启动时无条件加载——
+# 实测它会连带拉起 windows.storage.dll(~7.8MB)、comctl32.dll(~2.7MB)等一整条
+# Shell 命名空间基础设施,而 mdvn 自己从不使用其中任何 Shell UI/命名空间功能,
+# 纯粹是 ShellExecuteW 这一个入口点带来的"连坐"加载。延迟加载后,不点击任何
+# 外链/图片的会话里,模块列表不应出现这几个 DLL。
 set(MDVN_DELAYLOAD_LINK_OPTIONS
     /DELAYLOAD:winhttp.dll
+    /DELAYLOAD:shell32.dll
 )
 
 # md4c 是 vendored 的第三方源码（third_party/md4c/），不在该目录下新增任何文件，

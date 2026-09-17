@@ -3,6 +3,7 @@ add_executable(mdvn WIN32
     app/main.cpp
     app/bench.cpp
     util/arena.cpp
+    util/cmdline.cpp
     util/str.cpp
     util/ini.cpp
     doc/file_map.cpp
