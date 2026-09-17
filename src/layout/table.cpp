@@ -10,10 +10,9 @@ Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u3
     if (!widths) return Span<float>{nullptr, 0};
 
     float safeViewport = viewportWidth > 0.0f ? viewportWidth : 0.0f;
-    float maxColWidth = safeViewport * kMaxColumnWidthRatio;
-    if (maxColWidth < kMinColumnWidthDip) maxColWidth = kMinColumnWidthDip;
 
-    // ① 每列理想宽度:内容测宽 + 上限约束。
+    // ① 每列理想宽度:纯内容测宽,只钳下限,不钳视口相关的上限——上限是
+    // "压缩时怎么分摊"的规则,不是"要不要压缩"的判断依据(见 table.h 注释)。
     float totalIdeal = 0.0f;
     for (u32 c = 0; c < colCount; ++c) {
         u32 maxChars = 0;
@@ -29,21 +28,34 @@ Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u3
         float ideal = static_cast<float>(maxChars) * kTableAvgCharWidthDip +
                       kTableCellPaddingDip * 2.0f;
         if (ideal < kMinColumnWidthDip) ideal = kMinColumnWidthDip;
-        if (ideal > maxColWidth) ideal = maxColWidth;
         widths[c] = ideal;
         totalIdeal += ideal;
     }
 
-    // ② 总宽超视口时按理想宽度比例整体等比压缩。
+    // ② 总宽超视口才需要压缩;不超时直接用第①步的理想宽度,一个字节都不改。
     float gapTotal = kTableColumnGapDip * static_cast<float>(colCount > 0 ? colCount - 1 : 0);
     float totalWithGap = totalIdeal + gapTotal;
     if (totalWithGap > safeViewport && totalIdeal > 0.0f) {
+        // ③ 真正需要压缩时,才把每列理想宽度先钳到上限(kMaxColumnWidthRatio),
+        // 避免压缩后某一列依然独占绝大部分宽度,再按钳制后的比例整体等比压缩。
+        float maxColWidth = safeViewport * kMaxColumnWidthRatio;
+        if (maxColWidth < kMinColumnWidthDip) maxColWidth = kMinColumnWidthDip;
+        float cappedTotal = 0.0f;
+        for (u32 c = 0; c < colCount; ++c) {
+            if (widths[c] > maxColWidth) widths[c] = maxColWidth;
+            cappedTotal += widths[c];
+        }
+
         float available = safeViewport - gapTotal;
         float floorTotal = kMinColumnWidthDip * static_cast<float>(colCount);
-        // ③ 压到下限仍超宽:不再进一步压缩,交给调用方按裁决 #2 换行。
+        // ④ 压到下限仍超宽:不再进一步压缩,交给调用方按裁决 #2 换行。
         if (available < floorTotal) available = floorTotal;
 
-        float scale = available / totalIdeal;
+        // 只压缩、不拉伸:钳完上限后总宽可能已经小于 available(比如就一列,
+        // 钳到上限就直接达标),这时不应该反过来把列拉宽去"填满"可用空间
+        // ——kMaxColumnWidthRatio 是硬上限,不是"尽量占满视口"的目标。
+        float scale = cappedTotal > 0.0f ? available / cappedTotal : 1.0f;
+        if (scale > 1.0f) scale = 1.0f;
         for (u32 c = 0; c < colCount; ++c) {
             float w = widths[c] * scale;
             if (w < kMinColumnWidthDip) w = kMinColumnWidthDip;

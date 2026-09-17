@@ -113,6 +113,35 @@ MDVN_TEST(Table_NoCompressionWhenFitsViewport) {
     MDVN_CHECK(widths[1] > widths[0]);
 }
 
+// 用例 5b(2026-09-17 用户真机反馈的回归):总宽不超视口时,即使某一列内容
+// 长到理应超过 kMaxColumnWidthRatio 的比例,也不应该被钳到那个比例——
+// 上限只在"确实需要压缩"时才生效,不能在表格明明还有大片富余空间时,
+// 仅因为单列内容长就强制换行(否则拖动窗口会出现"表格离右边界还有大片
+// 空白却仍然触发重排"的问题,见 table.h 文件头注释)。
+MDVN_TEST(Table_LongColumnNotClampedWhenTableFitsViewport) {
+    MDVN_MAKE_TEST_ARENA();
+    // 1 列内容视觉宽度 180,理想宽度 = 180*8+12=1452,超过 viewport*0.6=1200
+    // (若按旧逻辑无条件钳到这个比例就会被强制换行),但总宽(1452)本身小于
+    // 视口(2000),不应该压缩。
+    u32 chars[] = {180};
+    Span<float> widths = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena);
+    MDVN_CHECK_EQ(widths.len, 1u);
+    MDVN_CHECK_EQ(widths[0], 180.0f * 8.0f + 12.0f);
+    MDVN_CHECK(widths[0] > 2000.0f * kMaxColumnWidthRatio);
+}
+
+// 用例 5c:同样的单列超长内容,若视口本身较窄导致总宽确实超视口,验证
+// 用例 1 的"钳到上限"行为不受用例 5b 改动影响——上限仍然只在压缩时生效,
+// 但压缩时不会反过来把已经钳到上限的列"拉伸"去填满剩余空间(裁决:上限
+// 是硬约束,不是"尽量占满视口"的目标)。
+MDVN_TEST(Table_CappedColumnDuringCompressionIsNotStretchedBack) {
+    MDVN_MAKE_TEST_ARENA();
+    u32 chars[] = {500}; // 与用例 1 相同,理想宽度远超视口
+    Span<float> widths = ComputeTableColumnWidths(chars, 1, 1, 600.0f, &arena);
+    MDVN_CHECK_EQ(widths.len, 1u);
+    MDVN_CHECK_EQ(widths[0], 600.0f * kMaxColumnWidthRatio);
+}
+
 // 用例 6:colCount 为 0 时安全返回空 Span,不崩溃。
 MDVN_TEST(Table_ZeroColumnsReturnsEmptySpan) {
     MDVN_MAKE_TEST_ARENA();
