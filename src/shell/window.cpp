@@ -428,6 +428,11 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         // 窗口尺寸变化必然改变滚动条的 nMax/nPage,即使 scrollY 数值没变也要同步。
         SyncScrollBar(hwnd, state);
     }
+    // 强制整个客户区重绘:窗口变大时,Windows 会为新露出的区域自动生成
+    // WM_PAINT,让人误以为"重排生效了";窗口变小时没有新露出的区域,系统
+    // 不会自动触发 WM_PAINT,若这里不主动 Invalidate,画面会停留在旧的
+    // (更宽的)布局上,被新的窄窗口边框直接裁切,表现为文字截断。
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // T29:字号缩放变更后的统一收尾。调用前调用方须已经调过
