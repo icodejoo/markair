@@ -5,7 +5,7 @@
 > 拆解到文件级过程中新暴露出来的 7 个歧义点,已于 **2026-09-17** 由用户授权按"**内存占用为第一目的,怎么省内存怎么来**"这一原则裁决完毕,结论与论证见文末「M1 歧义点裁决记录」。以下任务表已按裁决结论写死,不再是"见文末待裁决"的占位。
 >
 > **前置事实(与 M0 不同)**:`05-m0-tasks.md` 的 T0~T17 已全部实现并实测验收通过(见 [memory.md](memory.md)),本阶段是在**已有的真实工程代码**上做增量,不是从零起步。当前代码结构:
-> `src/util/`(arena/str/span/types)、`src/doc/`(file_map / encoding / model.h / parser)、`src/text/`(font)、`src/layout/`(layout)、`src/render/`(renderer)、`src/shell/`(window / scroll)、`src/app/`(main / bench),测试在 `tests/`(53 个用例全绿),语料与脚本在 `bench/`,门禁在 `ci/`。
+> `src/util/`(arena/str/span/types)、`src/doc/`(file_map / encoding / model.h / parser)、`src/text/`(font)、`src/layout/`(layout)、`src/render/`(renderer)、`src/shell/`(window / scroll)、`src/app/`(main / bench),测试在 `tests/`(61 个用例全绿),语料与脚本在 `bench/`,门禁在 `ci/`。
 > 架构 §2 中规划但**尚未创建**的目录:`src/assets/`(图片)、`src/watch/`(热重载,M2)、`src/hl/`(高亮,M2)。M1 会首次创建 `src/assets/`。
 
 ## M1 的边界
@@ -81,7 +81,7 @@
 
 | # | 任务 | 要创建/修改的文件 | 验收标准 |
 |---|---|---|---|
-| **T40** | GFM 快照测试 | 新增 `tests/test_model_gfm.cpp`、`test_attr.cpp`、`test_front_matter.cpp`、`test_table.cpp`、`test_search.cpp`、`test_navigate.cpp`、`test_hit_test.cpp`、`test_image.cpp`、`test_data_uri.cpp`、`test_cache.cpp`、`test_ini.cpp`;改 `tests/CMakeLists.txt` | 沿用 `tests/mdvn_test.h` 的自写断言宏 `[裁决 #11]`,**不引入 gtest/catch2**。快照口径与 M0 一致:块类型序列 + 行内 flag 序列 + 新增的 detail 字段。**验收**:`mdvn_tests.exe` 退出码 0,用例总数从 53 增长到 ≥ 110,且 M0 的 53 个用例**一个都不许改动**(改动即意味着破坏了向后兼容,需要在 PR 里单独说明) |
+| **T40** | GFM 快照测试 | 新增 `tests/test_model_gfm.cpp`、`test_attr.cpp`、`test_front_matter.cpp`、`test_table.cpp`、`test_search.cpp`、`test_navigate.cpp`、`test_hit_test.cpp`、`test_image.cpp`、`test_data_uri.cpp`、`test_cache.cpp`、`test_ini.cpp`;改 `tests/CMakeLists.txt` | 沿用 `tests/mdvn_test.h` 的自写断言宏 `[裁决 #11]`,**不引入 gtest/catch2**。快照口径与 M0 一致:块类型序列 + 行内 flag 序列 + 新增的 detail 字段。**验收**:`mdvn_tests.exe` 退出码 0,用例总数从 61 增长到 ≥ 110,且 M0 的 61 个用例**一个都不许改动**(改动即意味着破坏了向后兼容,需要在 PR 里单独说明) |
 | **T41** | 真实文档回归语料 | 新增 `bench/corpus/*.md`(≥ 20 份)、`bench/corpus/SOURCES.md`、`bench/M1-REGRESSION.md` | 从知名开源项目取 ≥ 20 份 README/CHANGELOG(覆盖:宽表格、任务列表、徽章图片、脚注、自动链接、front matter、HTML 片段、mermaid 代码块各至少 2 份)。`SOURCES.md` 记录每份的来源 URL、抓取日期与许可,**不得改动原文**(改了就不是回归语料)。`M1-REGRESSION.md` 是比对记录表:`文件 / 差异描述 / 分类(可接受 / 必修)/ 处理状态`。**验收**:20 份全部打开不崩溃,差异逐条分类完毕,"必修"项全部关闭 |
 | **T42** | 图片密集语料 | 新增 `bench/BENCH-B.md` + `bench/images/`(50 张 PNG)、改 `bench/run_bench.ps1`(加 `-Target` 参数) | 50 张本地 PNG + 若干 `data:` URI + 若干网络图片 URL(用于验证"默认不加载")+ 1 张 SVG + 1 张多帧 GIF + 1 张超 4096 尺寸图。**验收**见下方验收线表 |
 | **T43** | 畸形文档语料与稳健性 | 新增 `bench/fuzz/*.md`、`ci/run_fuzz.ps1` | 手工构造 + 脚本生成:超深嵌套(> 64 层,触发已有的 `kMaxNestingDepth` 截断)、百万级链接(触发 `kMaxDocumentNodeCount`)、超长单行(10MB 无换行)、未闭合表格/围栏/front matter、非法 UTF-8 混入、伪造的超大 `data:` URI、图片路径穿越(`![](../../../windows/system32/...)`)。**验收**:全部**不崩溃、不卡死(单文件处理 ≤ 3s)、不越界**;在 clang-cl ASAN 配置下跑一遍零报告(ASAN 只用于这条验证,不进正式构建) |
@@ -99,7 +99,7 @@
 | 图片密集文档峰值内存 | **≤ 80MB**(50 张 PNG 全部滚过一遍,`kMaxDecodedDimension` 已下调为低默认值) | `--bench` 的 `PrivateUsage`(自动化代理)+ **VMMap**(权威值) | `mdvn.exe --bench bench\BENCH-B.md`,滚到底部后读数;VMMap 附加进程记录 Private Working Set / Private Bytes / Mapped File 三项 | CSV(`run_bench.ps1 -Target BENCH-B`)+ VMMap 截图 |
 | ~~图片滚走后内存回落~~(2026-09-17 裁决作废) | T32 已改为"降采样后永久缓存、不做淘汰"([裁决,见 T32])，不存在"滚走后回落"这件事,本行验收线不再适用,不需要验证 | — | — | — |
 | 滚动不跳动 | 滚动位置不因图片加载完成后的一次性重排而变化(T33"先有尺寸再有位图"仍然有效;这条现在只需验证首次解码这一次性重排不产生跳动,不再涉及淘汰/重新加载场景) | 录屏 + 滚动偏移日志 | `BENCH-B` 从顶滚到底再滚回,记录每帧 `scrollY`,不应出现非用户触发的突变 | 录屏文件 + 日志(放 `bench/` 下,不进 git) |
-| 解析→模型一致性 | 快照测试全绿,M0 的 53 个用例零改动 | `mdvn_tests.exe` | `build\Release\mdvn_tests.exe`,退出码 0 | 控制台输出 |
+| 解析→模型一致性 | 快照测试全绿,M0 的 61 个用例零改动 | `mdvn_tests.exe` | `build\Release\mdvn_tests.exe`,退出码 0 | 控制台输出 |
 | BENCH-A 暖启动首屏(不回退) | **≤ 80ms 中位数**(与 M0 同线,新功能不得吃掉预算) | 内置埋点 | `powershell -File bench\run_bench.ps1 -Warm -N 20` | CSV + 中位数/P95 |
 | BENCH-A 常驻内存(不回退) | **≤ 20MB**(M0 实测 ~11MB,M1 后不应显著抬升) | 同上 | 同上 | 同上 |
 | exe 体积 | 记录 M1 新基线并写入 `ci/check_budget.ps1`(M3 才门禁 1.5MB) | 构建产物 | `link /dump /headers build\Release\mdvn.exe` | CI 日志的趋势记录 |
@@ -137,7 +137,7 @@ T40~T44(测试/语料/门禁)与阶段 F/G 并行开工,不排在最后
 3. **T39(`state.ini`)要早于 T32/T34** —— 缓存上限与网络开关都从它读;否则这两个任务只能先写死常量,回头再改一遍。
 4. **T40~T44 与开发并行**,理由同 M0 的 T14/T15:语料越早到位,每个任务合并时就能立刻看到自己在真实文档上的效果与代价,而不是到阶段末尾再事后归因。
 5. **T37 的算法层(`src/doc/search.h/.cpp`)只依赖文档模型**,不依赖布局/渲染,可以在 T23~T28 还在做的时候就并行完成并单测。
-6. M0 的 53 个测试是本阶段的**回归护栏**:任何一次改动后先跑 `mdvn_tests.exe`,红了就不要继续往下叠功能。
+6. M0 的 61 个测试是本阶段的**回归护栏**:任何一次改动后先跑 `mdvn_tests.exe`,红了就不要继续往下叠功能。
 
 ---
 

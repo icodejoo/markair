@@ -358,6 +358,30 @@ MDVN_TEST(ModelGfm_LinkContainingImage) {
     MDVN_CHECK_EQ(doc.linkTargets.Size(), 2u); // 外层链接 + 内层图片各一条
 }
 
+// 样本 11:缩进式代码块(4 空格起始,与围栏代码块走同一 BlockType,快照口径应一致)。
+MDVN_TEST(ModelGfm_IndentedCodeBlock) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "    code line\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    SummaryBuf buf;
+    const char* actual = Summarize(buf, doc);
+    MDVN_CHECK_STREQ(actual, "CODE(c,c)");
+}
+
+// 样本 12:硬换行(行尾两个空格)。md4c 的 MD_TEXT_BR 落地为一个空文本 Inline
+// (textOffset/textLen 归零,见 parser.cpp OnText 注释),不新增专属 flag,
+// 但应作为段落内独立的一段出现,前后文本正常保留。
+MDVN_TEST(ModelGfm_HardLineBreak) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "line1  \nline2\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    SummaryBuf buf;
+    const char* actual = Summarize(buf, doc);
+    MDVN_CHECK_STREQ(actual, "P(-,-,-)");
+}
+
 // 样本 10:链接 title 含 HTML 实体,展开后应解码。
 MDVN_TEST(ModelGfm_LinkTitleWithEntity) {
     MDVN_MAKE_TEST_ARENA();
@@ -376,4 +400,57 @@ MDVN_TEST(ModelGfm_LinkTitleWithEntity) {
             if (lt.title.len == 5) MDVN_CHECK(memcmp(lt.title.data, "a & b", 5) == 0);
         }
     }
+}
+
+// 样本 13:无序列表嵌套无序列表(三层)。Summarize 按前序遍历展平输出,
+// 括号只包裹每个块自身的行内 flags,不体现父子嵌套层级;tight 列表项的
+// 文本直接作为 LI 自身的 inline(呈现为 "LI(-)"),不再套一层 P。
+MDVN_TEST(ModelGfm_NestedBulletList) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "- a\n"
+        "  - b\n"
+        "    - c\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    SummaryBuf buf;
+    const char* actual = Summarize(buf, doc);
+    MDVN_CHECK_STREQ(actual,
+        "UL LI(-) UL LI(-) UL LI(-)");
+}
+
+// 样本 14:有序列表嵌套无序列表,验证混合列表类型的块序列。
+MDVN_TEST(ModelGfm_OrderedListNestedBulletList) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "1. a\n"
+        "   - b\n"
+        "   - c\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    SummaryBuf buf;
+    const char* actual = Summarize(buf, doc);
+    MDVN_CHECK_STREQ(actual,
+        "OL LI(-) UL LI(-) LI(-)");
+}
+
+// 样本 15:列表项内段落 + 围栏代码块 + 嵌套列表并存(带空行,列表判定为
+// loose,LI 自身不带 inline,段落作为独立 P 子块出现),验证同一 LI 下
+// 多个子块(P/CODE/嵌套 UL)按序共存。
+MDVN_TEST(ModelGfm_ListItemWithParagraphCodeAndNestedList) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "- a\n"
+        "\n"
+        "  ```\n"
+        "  code\n"
+        "  ```\n"
+        "\n"
+        "  - b\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    SummaryBuf buf;
+    const char* actual = Summarize(buf, doc);
+    MDVN_CHECK_STREQ(actual,
+        "UL LI P(-) CODE(c,c) UL LI(-)");
 }
