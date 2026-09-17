@@ -9,6 +9,7 @@
 #include "../assets/image.h"
 #include "../doc/search.h"
 #include "../layout/layout.h"
+#include "theme.h"
 
 namespace mdvn {
 
@@ -245,6 +246,16 @@ public:
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
                       float leftPaddingDip, const ShellOverlay* overlay = nullptr);
 
+    /**
+     * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
+     * `Palette`、不触发任何重排/重建渲染目标,下一帧 `RenderFrame` 起生效。
+     * @param palette 新调色板,生命周期须覆盖本对象(通常传 `&kLightPalette`
+     *                或 `&kDarkPalette` 这类静态常量);传 nullptr 时忽略,
+     *                保持当前调色板不变。
+     * @example renderer.SetPalette(&mdvn::kDarkPalette);
+     */
+    void SetPalette(const Palette* palette);
+
 private:
     // 渲染目标不存在时按 hwnd 当前客户区尺寸创建(软件光栅化,架构决策)。
     bool EnsureRenderTarget(HWND hwnd);
@@ -357,6 +368,7 @@ private:
     ID2D1HwndRenderTarget* target_;       // 懒创建,可在 D2DERR_RECREATE_TARGET 后重建
     float dpi_;                           // 渲染目标 DPI,0 表示跟随系统默认
     const ShellOverlay* overlay_;         // 仅在一次 RenderFrame 期间有效的叠加层视图,不拥有
+    const Palette* palette_;              // 当前调色板(T46),不拥有;默认指向 kLightPalette
 };
 
 }  // namespace mdvn

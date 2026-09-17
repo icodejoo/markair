@@ -37,38 +37,12 @@ float TextDrawTop(const BlockGeometry& g) {
 // 代码高亮区圆角半径(DIP),参考常见 Markdown 渲染器的代码块风格。
 constexpr float kCodeBlockCornerRadiusDip = 4.0f;
 
-D2D1_COLOR_F BackgroundColor() { return D2D1::ColorF(D2D1::ColorF::White); }
-
-D2D1_COLOR_F TextColor() { return D2D1::ColorF(D2D1::ColorF::Black); }
-
-// 引用竖线/代码块背景/分割线的装饰色,统一取中性灰,不引入主题配置(M0 未做主题)。
-D2D1_COLOR_F QuoteBarColor() { return D2D1::ColorF(0x808080u); }
-D2D1_COLOR_F CodeBackgroundColor() { return D2D1::ColorF(0xF0F0F0u); }
-D2D1_COLOR_F ThematicBreakColor() { return D2D1::ColorF(0xC0C0C0u); }
-
-// T24:链接着色,取常见的"链接蓝"。
-D2D1_COLOR_F LinkColor() { return D2D1::ColorF(0x0366D6u); }
-
-// T26:表格表头背景色/网格线颜色,浅灰色系,贴近 GitHub 网页版表格风格。
-D2D1_COLOR_F TableHeaderBackgroundColor() { return D2D1::ColorF(0xF6F8FAu); }
-D2D1_COLOR_F TableGridColor() { return D2D1::ColorF(0xD0D7DEu); }
-
-// T27:任务列表勾选框边框色/对勾色。
-D2D1_COLOR_F CheckboxBorderColor() { return D2D1::ColorF(0x808080u); }
-D2D1_COLOR_F CheckboxCheckColor() { return D2D1::ColorF(0x22863Au); }
-
 // T27 勾选框圆角半径(DIP)。
 constexpr float kCheckboxCornerRadiusDip = 3.0f;
 
-// T33 图片占位块:灰底色、边框色、圆角半径、内边距。
-D2D1_COLOR_F ImagePlaceholderBackgroundColor() { return D2D1::ColorF(0xF0F0F0u); }
-D2D1_COLOR_F ImagePlaceholderBorderColor() { return D2D1::ColorF(0xC0C0C0u); }
+// T33 图片占位块:圆角半径、内边距(颜色已收进 T46 的 Palette,见 theme.h)。
 constexpr float kImagePlaceholderCornerRadiusDip = 6.0f;
 constexpr float kImagePlaceholderTextPaddingDip = 8.0f;
-
-// T33 降采样提示标签:半透明深底(alpha 0.55)+ 近白文字,贴合"角落小标签"的观感。
-D2D1_COLOR_F DownsampledBadgeBackgroundColor() { return D2D1::ColorF(0x1F2328u, 0.55f); }
-D2D1_COLOR_F DownsampledBadgeTextColor() { return D2D1::ColorF(0xFFFFFFu, 0.95f); }
 
 // T33 标签的字号(与 T28 脚注小字号同一量级)、圆角、内边距与距图片边缘的外边距。
 constexpr float kBadgeFontSizeDip = 11.0f;
@@ -82,8 +56,7 @@ constexpr float kPlaceholderTextMaxHeightDip = 4096.0f;
 
 // 占位块中央"图片"图标(2026-09-17 追加):零图标字体、零位图,纯 D2D 几何——
 // 一个圆角方框(相框)+ 左上角一个实心圆(太阳)+ 底部两段折线(山峰),
-// 是浏览器/系统最常见的"图片占位"符号,一眼可辨认。
-D2D1_COLOR_F ImagePlaceholderIconColor() { return D2D1::ColorF(0xA8AEB4u); }
+// 是浏览器/系统最常见的"图片占位"符号,一眼可辨认(颜色见 Palette::imagePlaceholderIcon)。
 constexpr float kPlaceholderIconMinBoxDip = 40.0f;  // 占位块矩形小于此高度时不画图标,只留文案(避免小图标挤爆)
 constexpr float kPlaceholderIconSizeRatio = 0.32f;  // 图标边长相对 min(宽,高) 的比例
 constexpr float kPlaceholderIconMinSizeDip = 18.0f;
@@ -92,14 +65,10 @@ constexpr float kPlaceholderIconCornerRadiusDip = 3.0f;
 constexpr float kPlaceholderIconCenterYRatio = 0.38f;  // 图标中心相对占位块高度的位置,偏上给下方文案留空间
 constexpr float kPlaceholderIconTextGapDip = 6.0f;     // 图标底边到文案顶边的间距
 
-// T45 代码块复制按钮:图标线条色(中性灰)、悬浮底色(比代码块背景更深一档的
-// 浅灰,底色一出现就是明确的悬浮反馈)、图标"纸面"填充色(与页面底色一致,
-// 让两张纸的叠压关系看得出来)、已复制反馈色(绿色对勾,与任务勾选框同一绿系)。
-D2D1_COLOR_F CodeCopyIconColor() { return D2D1::ColorF(0x6A737Du); }
-D2D1_COLOR_F CodeCopyHoverBackgroundColor() { return D2D1::ColorF(0xD8DEE4u); }
-D2D1_COLOR_F CodeCopyPaperColor() { return D2D1::ColorF(0xFFFFFFu); }
-D2D1_COLOR_F CodeCopyDoneColor() { return D2D1::ColorF(0x22863Au); }
-
+// T45 复制按钮:图标线条色(中性灰)、悬浮底色(比代码块背景更深一档的浅灰,
+// 底色一出现就是明确的悬浮反馈)、图标"纸面"填充色(与页面底色一致,让两张纸
+// 的叠压关系看得出来)、已复制反馈色(绿色对勾,与任务勾选框同一绿系)——
+// 颜色已收进 T46 的 Palette(codeCopy* 系列槽位),这里只留几何比例常量。
 // T45 复制按钮的几何比例(相对按钮边长,0~1):两张"纸"的位置与大小、圆角、
 // 线宽。按钮边长由布局层决定(kCodeCopyButtonSizeDip),这里只按比例换算,
 // 保证字号缩放时图标跟着等比放大。
@@ -118,13 +87,10 @@ constexpr float kCopyStrokeWidthRatio = 0.075f;
 constexpr float kCopyCheckStrokeWidthRatio = 0.13f;
 
 // T38 查找命中高亮:普通命中用半透明淡黄底,当前命中用半透明橙底区分。
-// 只画在文本**下方**(先填底再画字),因此不改变任何文本颜色,与 T24 的链接蓝互不干扰。
-D2D1_COLOR_F FindHighlightColor() { return D2D1::ColorF(0xFFE066u, 0.55f); }
-D2D1_COLOR_F FindCurrentHighlightColor() { return D2D1::ColorF(0xFF8C42u, 0.55f); }
+// 只画在文本**下方**(先填底再画字),因此不改变任何文本颜色,与 T24 的链接蓝互不干扰
+// (颜色见 Palette::findHighlight / findCurrentHighlight)。
 
-// T37 查找条 / T36 窗口内提示共用的顶部浮出条样式。
-D2D1_COLOR_F OverlayBarBackgroundColor() { return D2D1::ColorF(0x24292Fu, 0.92f); }
-D2D1_COLOR_F OverlayBarTextColor() { return D2D1::ColorF(0xFFFFFFu, 0.95f); }
+// T37 查找条 / T36 窗口内提示共用的顶部浮出条样式(颜色见 Palette::overlayBarBackground/Text)。
 constexpr float kOverlayBarFontSizeDip = 13.0f;
 constexpr float kOverlayBarCornerRadiusDip = 6.0f;
 constexpr float kOverlayBarPaddingXDip = 10.0f;
@@ -335,7 +301,7 @@ void ImageResidencyManager::ReleaseResident(const ImageBox* boxes, u32 count) {
 // 构造一个未绑定工厂、未创建渲染目标的渲染器。
 Renderer::Renderer()
     : factory_(nullptr), fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
-      overlay_(nullptr) {}
+      overlay_(nullptr), palette_(&kLightPalette) {}
 
 // 析构时释放渲染目标本体;工厂/字体子系统均不归本对象所有,不在此释放。
 Renderer::~Renderer() { ReleaseRenderTarget(); }
@@ -347,6 +313,11 @@ void Renderer::Init(ID2D1Factory* factory, FontSubsystem* fonts, ImageCache* ima
 }
 
 ID2D1RenderTarget* Renderer::Target() const { return target_; }
+
+// 切换调色板:只改指针,不拷贝 Palette、不碰渲染目标/布局(T46,为 T49 打基础)。
+void Renderer::SetPalette(const Palette* palette) {
+    if (palette) palette_ = palette;
+}
 
 bool Renderer::EnsureTarget(HWND hwnd) { return EnsureRenderTarget(hwnd); }
 
@@ -724,7 +695,7 @@ void Renderer::DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text
         iconBottom = iconTop + iconSize;
 
         ID2D1SolidColorBrush* iconBrush = nullptr;
-        target_->CreateSolidColorBrush(ImagePlaceholderIconColor(), &iconBrush);
+        target_->CreateSolidColorBrush(palette_->imagePlaceholderIcon, &iconBrush);
         if (iconBrush) {
             // 相框:圆角矩形描边。
             D2D1_RECT_F iconRect = D2D1::RectF(iconLeft, iconTop, iconLeft + iconSize, iconBottom);
@@ -983,27 +954,27 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
     ID2D1SolidColorBrush* copyPaperBrush = nullptr;
     ID2D1SolidColorBrush* copyDoneBrush = nullptr;
-    target_->CreateSolidColorBrush(TextColor(), &textBrush);
-    target_->CreateSolidColorBrush(QuoteBarColor(), &quoteBrush);
-    target_->CreateSolidColorBrush(CodeBackgroundColor(), &codeBgBrush);
-    target_->CreateSolidColorBrush(ThematicBreakColor(), &hrBrush);
-    target_->CreateSolidColorBrush(LinkColor(), &linkBrush);
-    target_->CreateSolidColorBrush(TableHeaderBackgroundColor(), &tableHeaderBrush);
-    target_->CreateSolidColorBrush(TableGridColor(), &tableGridBrush);
-    target_->CreateSolidColorBrush(CheckboxBorderColor(), &checkboxBorderBrush);
-    target_->CreateSolidColorBrush(CheckboxCheckColor(), &checkboxCheckBrush);
-    target_->CreateSolidColorBrush(ImagePlaceholderBackgroundColor(), &placeholderBgBrush);
-    target_->CreateSolidColorBrush(ImagePlaceholderBorderColor(), &placeholderBorderBrush);
-    target_->CreateSolidColorBrush(DownsampledBadgeBackgroundColor(), &badgeBgBrush);
-    target_->CreateSolidColorBrush(DownsampledBadgeTextColor(), &badgeTextBrush);
-    target_->CreateSolidColorBrush(FindHighlightColor(), &findHighlightBrush);
-    target_->CreateSolidColorBrush(FindCurrentHighlightColor(), &findCurrentBrush);
-    target_->CreateSolidColorBrush(OverlayBarBackgroundColor(), &overlayBarBgBrush);
-    target_->CreateSolidColorBrush(OverlayBarTextColor(), &overlayBarTextBrush);
-    target_->CreateSolidColorBrush(CodeCopyIconColor(), &copyIconBrush);
-    target_->CreateSolidColorBrush(CodeCopyHoverBackgroundColor(), &copyHoverBgBrush);
-    target_->CreateSolidColorBrush(CodeCopyPaperColor(), &copyPaperBrush);
-    target_->CreateSolidColorBrush(CodeCopyDoneColor(), &copyDoneBrush);
+    target_->CreateSolidColorBrush(palette_->text, &textBrush);
+    target_->CreateSolidColorBrush(palette_->quoteBar, &quoteBrush);
+    target_->CreateSolidColorBrush(palette_->codeBackground, &codeBgBrush);
+    target_->CreateSolidColorBrush(palette_->thematicBreak, &hrBrush);
+    target_->CreateSolidColorBrush(palette_->link, &linkBrush);
+    target_->CreateSolidColorBrush(palette_->tableHeaderBackground, &tableHeaderBrush);
+    target_->CreateSolidColorBrush(palette_->tableGrid, &tableGridBrush);
+    target_->CreateSolidColorBrush(palette_->checkboxBorder, &checkboxBorderBrush);
+    target_->CreateSolidColorBrush(palette_->checkboxCheck, &checkboxCheckBrush);
+    target_->CreateSolidColorBrush(palette_->imagePlaceholderBackground, &placeholderBgBrush);
+    target_->CreateSolidColorBrush(palette_->imagePlaceholderBorder, &placeholderBorderBrush);
+    target_->CreateSolidColorBrush(palette_->downsampledBadgeBackground, &badgeBgBrush);
+    target_->CreateSolidColorBrush(palette_->downsampledBadgeText, &badgeTextBrush);
+    target_->CreateSolidColorBrush(palette_->findHighlight, &findHighlightBrush);
+    target_->CreateSolidColorBrush(palette_->findCurrentHighlight, &findCurrentBrush);
+    target_->CreateSolidColorBrush(palette_->overlayBarBackground, &overlayBarBgBrush);
+    target_->CreateSolidColorBrush(palette_->overlayBarText, &overlayBarTextBrush);
+    target_->CreateSolidColorBrush(palette_->codeCopyIcon, &copyIconBrush);
+    target_->CreateSolidColorBrush(palette_->codeCopyHoverBackground, &copyHoverBgBrush);
+    target_->CreateSolidColorBrush(palette_->codeCopyPaper, &copyPaperBrush);
+    target_->CreateSolidColorBrush(palette_->codeCopyDone, &copyDoneBrush);
 
     D2D1_SIZE_F targetSize = target_->GetSize();
     // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
@@ -1012,7 +983,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (contentWidth < 0.0f) contentWidth = 0.0f;
 
     target_->BeginDraw();
-    target_->Clear(BackgroundColor());
+    target_->Clear(palette_->background);
 
     // 左内边距:水平方向整体平移 leftPaddingDip,每个 DrawXxx 已经在用
     // g.indent 当 x 坐标画东西,不用逐个改。垂直方向的内边距由调用方传入的

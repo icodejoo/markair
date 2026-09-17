@@ -20,6 +20,7 @@ add_executable(mdvn WIN32
     layout/layout.cpp
     layout/table.cpp
     render/renderer.cpp
+    render/theme.cpp
     shell/window.cpp
     shell/clipboard.cpp
     shell/navigate.cpp
