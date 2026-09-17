@@ -21,6 +21,7 @@ add_executable(mdvn_tests
     test_hit_test.cpp
     test_search.cpp
     test_ini.cpp
+    test_corpus_smoke.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/str.cpp
@@ -48,6 +49,12 @@ add_executable(mdvn_tests
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
 target_compile_options(mdvn_tests PRIVATE ${MDVN_COMMON_COMPILE_OPTIONS})
+
+# T41:test_corpus_smoke.cpp 需要知道 bench/corpus 语料目录的绝对路径——
+# ctest 的默认工作目录是 mdvn_tests.exe 所在的构建目录,不是仓库根目录,
+# 用 CMAKE_SOURCE_DIR 直接烘焙一份绝对路径,避免运行期猜测相对路径层数。
+target_compile_definitions(mdvn_tests PRIVATE
+    MDVN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/bench/corpus")
 
 # test_model.cpp 通过 parser.cpp 间接依赖 md4c 的 md_parse；
 # test_font.cpp 通过 font.cpp 依赖 DirectWrite。
