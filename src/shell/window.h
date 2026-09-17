@@ -5,7 +5,9 @@
 // 设计要点:
 //   - 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
 //   - Per-Monitor V2 DPI 感知,`WM_DPICHANGED` 应用系统建议矩形并重建 D2D 资源。
-//   - 窗口类背景刷设为主题背景(当前主题为浅色,取 COLOR_WINDOW),避免首帧白闪(架构 §6)。
+//   - 窗口类背景刷跟随注册时的生效主题(T48):浅色沿用系统 COLOR_WINDOW,
+//     深色改用与 kDarkPalette.background 同色的自建刷子,避免首帧白闪(架构 §6)。
+//     标题栏深浅色另由 DwmSetWindowAttribute 控制(创建时 + Ctrl+Shift+T 热切换)。
 //   - 滚动数值计算全部委托给 shell/scroll.h 里的纯函数,便于单元测试。
 #pragma once
 
@@ -119,19 +121,39 @@ struct WindowState {
 bool EnablePerMonitorV2DpiAwareness();
 
 /**
- * 注册 mdvn 主窗口类(幂等:重复调用只在首次真正注册)。
+ * 注册 mdvn 主窗口类(幂等:重复调用只在首次真正注册,`isDarkTheme` 只在
+ * 首次真正注册时生效)。
  * @param instance 当前进程实例句柄。
+ * @param isDarkTheme 注册时的生效主题是否为深色(调用方用
+ *        `ResolveEffectiveTheme` 提前算好);为 true 时窗口类背景刷改用
+ *        与 `kDarkPalette.background` 同色的自建刷子(T48),避免深色主题下
+ *        首帧白闪,为 false 时沿用系统 `COLOR_WINDOW`。
  * @return 注册成功(或此前已注册成功)返回 true。
- * @example mdvn::RegisterMainWindowClass(hInstance);
+ * @example mdvn::RegisterMainWindowClass(hInstance, true);  // isDarkTheme=true
  */
-bool RegisterMainWindowClass(HINSTANCE instance);
+bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme);
+
+/**
+ * 释放 `RegisterMainWindowClass` 深色主题下自建的窗口类背景刷(T48)。
+ * 幂等:未创建过深色刷子、或已释放过,再次调用都是安全的空操作。
+ * 浅色主题下窗口类背景刷是系统内置的 `COLOR_WINDOW` 句柄,不需要也不能
+ * `DeleteObject`,本函数只处理自建的那一支。
+ *
+ * 调用方(`wWinMain`)应在消息循环结束、进程退出前调用一次。
+ * @example
+ *   int exitCode = mdvn::RunMessageLoop();
+ *   mdvn::ReleaseMainWindowClassResources();
+ *   return exitCode;
+ */
+void ReleaseMainWindowClassResources();
 
 /**
  * 创建并显示主窗口,把窗口过程需要的运行期状态绑定到该窗口上。
  *
  * 调用前须先成功调用 `RegisterMainWindowClass`。窗口采用标准
  * `WS_OVERLAPPEDWINDOW` 标题栏,初始逻辑尺寸 800x600,并按窗口所在显示器的
- * DPI 缩放。
+ * DPI 缩放。拿到 HWND 后会立即按 `state->themeSetting`/`state->systemIsDark`
+ * 解出的生效主题调用一次 `DwmSetWindowAttribute` 切标题栏深浅色(T48)。
  *
  * @param instance 当前进程实例句柄。
  * @param title 窗口标题(UTF-16,非空)。

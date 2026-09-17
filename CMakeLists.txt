@@ -58,9 +58,16 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # Shell 命名空间基础设施,而 mdvn 自己从不使用其中任何 Shell UI/命名空间功能,
 # 纯粹是 ShellExecuteW 这一个入口点带来的"连坐"加载。延迟加载后,不点击任何
 # 外链/图片的会话里,模块列表不应出现这几个 DLL。
+# dwmapi.dll(T48 标题栏深浅色):`DwmSetWindowAttribute` 只是切一个窗口属性,
+# 换来的是"进程启动就无条件静态加载一个 DLL"这个代价,与 shell32 同理不划算。
+# 注意它和 winhttp/shell32 不同:本条会在窗口创建时(而非用户交互后)就调用,
+# 所以 /DELAYLOAD 在这里只做到"不提前于导入表解析阶段加载、按需触发"，
+# dwmapi.dll 实际仍会在启动早期出现在模块列表里——这是预期行为，不是延迟
+# 加载没生效，验收时如实记录这个模块增量即可。
 set(MDVN_DELAYLOAD_LINK_OPTIONS
     /DELAYLOAD:winhttp.dll
     /DELAYLOAD:shell32.dll
+    /DELAYLOAD:dwmapi.dll
 )
 
 # md4c 是 vendored 的第三方源码（third_party/md4c/），不在该目录下新增任何文件，

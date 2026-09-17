@@ -1,10 +1,11 @@
 #include "window.h"
 
+#include <dwmapi.h>    // DwmSetWindowAttribute(T48 标题栏深浅色,/DELAYLOAD)
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #include <cwchar>      // wcscmp
 
 #include "../assets/data_uri.h"
-#include "../render/theme.h"  // kLightPalette/kDarkPalette
+#include "../render/theme.h"  // kLightPalette/kDarkPalette/kDarkBackgroundRgb
 
 namespace mdvn {
 
@@ -33,9 +34,48 @@ constexpr UINT kCopyFeedbackDurationMs = 2000;
 // 窗口类是否已注册成功,保证 RegisterMainWindowClass 幂等(POD 全局,零初始化)。
 bool g_classRegistered = false;
 
+// T48:深色主题下窗口类背景刷是自建的(CreateSolidBrush),进程退出前要
+// DeleteObject 释放;浅色主题下窗口类背景刷沿用系统内置的 COLOR_WINDOW
+// 句柄,该字段保持 nullptr,ReleaseMainWindowClassResources 据此判断要不要
+// 释放(POD 全局,零初始化,无副作用构造)。
+HBRUSH g_darkBackgroundBrush = nullptr;
+
+// DWMWA_USE_IMMERSIVE_DARK_MODE 的两个历史取值:20 是 Win10 2004+/Win11 的
+// 正式值,19 是 Win10 1809~1903 过渡期用的旧值。自行定义而不依赖 SDK 里的
+// 同名宏,是因为旧版 SDK 头文件可能压根没有这个符号(与本文件里
+// kDpiAwarenessContextPerMonitorV2 的做法一致)。
+constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+constexpr DWORD kDwmwaUseImmersiveDarkModeLegacy = 19;
+
 // 从窗口句柄取回绑定的运行期状态;尚未绑定(WM_NCCREATE 之前)时返回 nullptr。
 WindowState* StateOf(HWND hwnd) {
     return reinterpret_cast<WindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+}
+
+// T48:切标题栏深浅色。按官方口径先试新值 20,`DwmSetWindowAttribute` 返回
+// 非 S_OK(比如运行在不支持该属性的老系统上)再试旧值 19;两次都失败就静默
+// 放弃——标题栏保持浅色,这不是错误态,不弹框、不影响其余功能。窗口创建时
+// (CreateMainWindow)与 Ctrl+Shift+T 热切换时(WndProc 的 WM_KEYDOWN 分支)
+// 都调用这一个函数,保证两处行为一致。
+//
+// 2026-09-17 真机验收发现的坑:`DwmSetWindowAttribute` 在已经显示的窗口上
+// 热切换该属性时,调用本身会成功(HRESULT S_OK)但 DWM 不会主动重绘非客户区
+// (标题栏视觉上保持旧状态,只有窗口下一次真正重新合成——比如失焦再获焦——
+// 才会显现新颜色),必须紧跟一次 `SetWindowPos(..., SWP_FRAMECHANGED)` 强制
+// 立即重绘非客户区,这里传 SWP_NOACTIVATE 避免抢焦点、传 SWP_NOMOVE/NOSIZE/
+// NOZORDER 说明这只是通知重绘、不改变窗口的位置/层级。窗口创建时那次调用
+// (窗口尚未 ShowWindow)理论上不需要这一步,但一起做没有额外成本,统一处理
+// 更简单。
+void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
+    BOOL enable = isDark ? TRUE : FALSE;
+    HRESULT hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkMode, &enable, sizeof(enable));
+    if (hr != S_OK) {
+        hr = DwmSetWindowAttribute(hwnd, kDwmwaUseImmersiveDarkModeLegacy, &enable, sizeof(enable));
+    }
+    if (hr == S_OK) {
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 }
 
 // 取窗口当前的 DPI 缩放系数(实际 DPI / 96);系统不支持按窗口查 DPI 时回退 1.0。
@@ -760,10 +800,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         // T47:Ctrl+Shift+T 在 System/Light/Dark 三态间循环,立即按新态重算
         // 生效主题并切调色板——只改指针 + 触发重绘,不做任何重排/重建。
+        // T48:标题栏也要跟着热切换,追加一次 DwmSetWindowAttribute 调用;
+        // 窗口类背景刷是注册时一次性决定的(Win32 限制,运行期无法改
+        // WNDCLASS),热切换时不改也改不了,只影响"D2D 内容重绘之前"那一瞬间
+        // (比如 resize 来不及重绘的边角),不在这里处理。
         if (ctrlDown && shiftDown && wparam == 'T' && state && state->renderer) {
             state->themeSetting = NextThemeSetting(state->themeSetting);
             bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
             state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
+            ApplyTitleBarTheme(hwnd, isDark);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -805,7 +850,7 @@ bool EnablePerMonitorV2DpiAwareness() {
     return setContext(reinterpret_cast<HANDLE>(kDpiAwarenessContextPerMonitorV2)) != FALSE;
 }
 
-bool RegisterMainWindowClass(HINSTANCE instance) {
+bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme) {
     if (g_classRegistered) return true;
 
     WNDCLASSW wc{};
@@ -815,12 +860,30 @@ bool RegisterMainWindowClass(HINSTANCE instance) {
     // 标准箭头光标(IDC_ARROW 的资源序号 32512;工程未定义 UNICODE 宏,
     // 这里显式用宽字符版本的资源 ID 以匹配 LoadCursorW)。
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    // 背景刷取主题背景色(当前浅色主题 = COLOR_WINDOW,与 Renderer 的清屏色一致),
-    // 避免窗口首次显示到首帧绘制之间出现与主题不符的白闪(架构 §6)。
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    // T48:背景刷跟随注册时的生效主题,避免窗口首次显示到首帧绘制之间出现与
+    // 主题不符的白闪(架构 §6)。深色下自建一支与 kDarkPalette.background 同色
+    // 的纯色刷(进程退出前由 ReleaseMainWindowClassResources 释放);浅色沿用
+    // 系统内置的 COLOR_WINDOW 句柄(不需要也不能 DeleteObject)。
+    if (isDarkTheme) {
+        UINT32 rgb = kDarkBackgroundRgb;
+        g_darkBackgroundBrush = CreateSolidBrush(
+            RGB((rgb >> 16) & 0xFFu, (rgb >> 8) & 0xFFu, rgb & 0xFFu));
+    }
+    // CreateSolidBrush 理论上会失败(系统 GDI 句柄耗尽等极端情况),失败时退回
+    // COLOR_WINDOW——深色主题下这一帧仍会白闪,但好过 hbrBackground 为空
+    // (那会导致背景完全不擦除,残留任意脏内容)。
+    wc.hbrBackground = g_darkBackgroundBrush ? g_darkBackgroundBrush
+                                              : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 
     g_classRegistered = RegisterClassW(&wc) != 0;
     return g_classRegistered;
+}
+
+void ReleaseMainWindowClassResources() {
+    if (g_darkBackgroundBrush) {
+        DeleteObject(g_darkBackgroundBrush);
+        g_darkBackgroundBrush = nullptr;
+    }
 }
 
 HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state) {
@@ -839,6 +902,10 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
         CW_USEDEFAULT, CW_USEDEFAULT, kInitialWidthDip, kInitialHeightDip,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
+
+    // T48:标题栏深浅色紧跟着 HWND 一起定下来,与窗口类背景刷用的是同一份
+    // 生效主题判断(themeSetting/systemIsDark 由调用方在创建窗口前填好)。
+    ApplyTitleBarTheme(hwnd, ResolveEffectiveTheme(state->themeSetting, state->systemIsDark));
 
     // 窗口创建成功、显示之前触发一次回调(T14 性能埋点用,为空时零开销)。
     if (state->onWindowCreated) state->onWindowCreated(state->callbackUserData);

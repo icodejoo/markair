@@ -470,7 +470,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // T47:主题偏好读自 state.ini(theme 键),系统深浅色在启动期探测一次。
         settings.theme, systemIsDark};
 
-    if (!mdvn::RegisterMainWindowClass(hInstance)) {
+    // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
+    // settings.theme 解出生效主题(上面第 425~428 行已经算过一次结果给
+    // renderer 用,这里复用同一套输入重新解一次,避免专门存一个中间变量)。
+    if (!mdvn::RegisterMainWindowClass(
+            hInstance, mdvn::ResolveEffectiveTheme(settings.theme, systemIsDark))) {
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
     }
@@ -503,6 +507,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // T36b:正常退出前统一删除本次会话创建过的全部临时文件(裁决:不追踪外部
     // 查看器进程是否退出,异常终止的残留交给 %TEMP% 的系统级清理兜底)。
     tempFiles.CleanupAll();
+
+    // T48:释放深色主题下自建的窗口类背景刷(浅色主题下是系统内置句柄,
+    // 这个函数内部会判断,空操作零开销)。
+    mdvn::ReleaseMainWindowClassResources();
 
     if (g_d2dFactory) g_d2dFactory->Release();
     if (fileMutex) CloseHandle(fileMutex);

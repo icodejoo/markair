@@ -33,8 +33,11 @@ add_executable(mdvn WIN32
 # ——不引用它的任何导出符号,exe 导入表里就没有这个 DLL,比 /DELAYLOAD 更彻底。
 # winhttp:网络图片(T34),走 /DELAYLOAD,需要 delayimp.lib 提供延迟加载桩。
 # pathcch:T36 的相对 .md 链接用 PathCchCombineEx / PathCchCanonicalize 做路径规范化。
+# dwmapi:T48 标题栏深浅色(DwmSetWindowAttribute),同样走 /DELAYLOAD——
+# /DELAYLOAD 只影响运行期何时真正加载 dwmapi.dll，链接期依旧需要 dwmapi.lib
+# 这个导入库才能解析符号，两者不是一回事。
 target_link_libraries(mdvn PRIVATE
-    md4c d2d1 dwrite imm32 shell32 psapi ole32 winhttp pathcch delayimp)
+    md4c d2d1 dwrite imm32 shell32 psapi ole32 winhttp pathcch dwmapi delayimp)
 
 # 主代码在所有配置下都要求 /W4 零警告；Release 追加体积/速度优化选项。
 target_compile_options(mdvn PRIVATE

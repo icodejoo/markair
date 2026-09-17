@@ -93,13 +93,20 @@ inline constexpr Palette kLightPalette{
 };
 
 /**
+ * 深色调色板背景色的原始 0xRRGGBB 值。单独具名一份是因为 T48 窗口类背景刷
+ * 也要用同一个颜色(深色主题下 `CreateSolidBrush` 用的就是它),避免和这里的
+ * `MakeColor` 调用各写一份字面量导致两处颜色不一致。
+ */
+inline constexpr UINT32 kDarkBackgroundRgb = 0x0D1117u;
+
+/**
  * 深色调色板(T46 新增,T49 起接入切换):以 GitHub Dark 的配色基调为参考,
  * 背景/正文对比度按 WCAG 相对亮度公式核算 ≥ 4.5:1(实测约 12.3:1,
  * 见 `tests/test_theme.cpp`),装饰性/半透明槽位(降采样标签、查找高亮、
  * 浮出条)本身已是深底配色,浅色/深色两套主题下都可读,予以保留复用。
  */
 inline constexpr Palette kDarkPalette{
-    /* background                 */ MakeColor(0x0D1117u),
+    /* background                 */ MakeColor(kDarkBackgroundRgb),
     /* text                       */ MakeColor(0xC9D1D9u),
     /* quoteBar                   */ MakeColor(0x8B949Eu),
     /* codeBackground             */ MakeColor(0x161B22u),
