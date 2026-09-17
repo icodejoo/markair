@@ -32,6 +32,8 @@
 #include "../text/font.h"
 #include "../layout/layout.h"
 #include "../render/renderer.h"
+#include "../render/theme.h"
+#include "../shell/theme_state.h"
 #include "../assets/cache.h"
 #include "../assets/remote.h"
 #include "../shell/find.h"
@@ -417,6 +419,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::Renderer renderer;
     renderer.Init(g_d2dFactory, &fonts, &imageCache);
 
+    // T47:启动期探测一次系统深浅色,若 ini 偏好(system 默认跟随/light/dark)
+    // 最终解出深色,就在创建 renderer 之后立即切一次调色板,让程序以正确的
+    // 主题打开(不要求首帧零闪烁的复杂处理)。
+    bool systemIsDark = mdvn::DetectSystemIsDark();
+    if (mdvn::ResolveEffectiveTheme(settings.theme, systemIsDark)) {
+        renderer.SetPalette(&mdvn::kDarkPalette);
+    }
+
     mdvn::ImageResidencyManager residency;
     residency.Init(&renderer, &imageCache, &imageScratch, documentDirectory);
 
@@ -455,8 +465,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // 首屏虚拟化行为与之前完全一致。
         benchArgs.benchEnabled && BenchTargetWantsFullDecode(benchArgs.filePath),
         // T45:剪贴板拼接 Arena;后面两个复制按钮状态字段由 CreateMainWindow
-        // 统一初始化成 kInvalidIndex,这里留给聚合初始化补零即可。
-        &clipboardScratch};
+        // 统一初始化成 kInvalidIndex,这里占位传 0 即可(会被覆盖,值本身不重要)。
+        &clipboardScratch, 0, 0,
+        // T47:主题偏好读自 state.ini(theme 键),系统深浅色在启动期探测一次。
+        settings.theme, systemIsDark};
 
     if (!mdvn::RegisterMainWindowClass(hInstance)) {
         if (fileMutex) CloseHandle(fileMutex);

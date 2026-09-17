@@ -1,8 +1,10 @@
 #include "window.h"
 
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
+#include <cwchar>      // wcscmp
 
 #include "../assets/data_uri.h"
+#include "../render/theme.h"  // kLightPalette/kDarkPalette
 
 namespace mdvn {
 
@@ -559,6 +561,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         OnDpiChanged(hwnd, state, LOWORD(wparam), reinterpret_cast<const RECT*>(lparam));
         return 0;
 
+    case WM_SETTINGCHANGE: {
+        // T47:系统深浅色切换时,Explorer 广播 WM_SETTINGCHANGE 并把 lParam
+        // 指向字符串 "ImmersiveColorSet"(其余系统设置变化也走这个消息,
+        // 用字符串内容筛掉不相关的那些)。重新探测系统值缓存起来;只有当前
+        // 偏好是 System 时才据此改变实际显示的调色板,否则只更新缓存不重绘。
+        const wchar_t* settingName = reinterpret_cast<const wchar_t*>(lparam);
+        if (settingName && wcscmp(settingName, L"ImmersiveColorSet") == 0 && state) {
+            state->systemIsDark = DetectSystemIsDark();
+            if (state->themeSetting == ThemeSetting::System && state->renderer) {
+                state->renderer->SetPalette(state->systemIsDark ? &kDarkPalette : &kLightPalette);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return 0;
+    }
+
     case WM_LBUTTONDOWN: {
         // T35/T36/T36b:统一走命中测试 —— 链接走链接行为,图片走"打开原图"
         // (网络图未下载时是 T34 的"点击加载",见 OnImageClicked)。
@@ -738,6 +756,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             else if (wparam == VK_OEM_MINUS) state->fonts->ZoomOut();
             else state->fonts->ResetZoom();
             ApplyZoomChange(hwnd, state);
+            return 0;
+        }
+        // T47:Ctrl+Shift+T 在 System/Light/Dark 三态间循环,立即按新态重算
+        // 生效主题并切调色板——只改指针 + 触发重绘,不做任何重排/重建。
+        if (ctrlDown && shiftDown && wparam == 'T' && state && state->renderer) {
+            state->themeSetting = NextThemeSetting(state->themeSetting);
+            bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
+            state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         ScrollCommand command = ScrollCommand::Home;

@@ -118,6 +118,7 @@ void DefaultAppSettings(AppSettings* out) {
     out->fontBodyFallback[0] = 0;
     out->fontMonoPrimary[0] = 0;
     out->fontMonoFallback[0] = 0;
+    out->theme = ThemeSetting::System;  // 默认跟随系统
 }
 
 u32 ParseIniSettings(StrSlice text, AppSettings* out) {
@@ -153,6 +154,24 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
                 if (v < 0) v = 0;   // 超范围值钳制到 [0, 1]
                 if (v > 1) v = 1;
                 out->loadRemoteImages = v != 0;
+                applied++;
+            }
+            continue;
+        }
+
+        if (KeyEquals(key, "theme")) {
+            // 非法值口径与 load_remote_images 一致:不识别就整段跳过、不计入
+            // applied、也不改动 out->theme——由于调用方总是先 DefaultAppSettings
+            // 再解析,"不改动"的效果就是保留默认值 System,天然满足"非法值回落
+            // system"的验收要求,不需要另外写一次"回落"逻辑。
+            if (KeyEquals(value, "system")) {
+                out->theme = ThemeSetting::System;
+                applied++;
+            } else if (KeyEquals(value, "light")) {
+                out->theme = ThemeSetting::Light;
+                applied++;
+            } else if (KeyEquals(value, "dark")) {
+                out->theme = ThemeSetting::Dark;
                 applied++;
             }
             continue;

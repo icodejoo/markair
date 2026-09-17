@@ -22,6 +22,7 @@ add_executable(mdvn WIN32
     render/renderer.cpp
     render/theme.cpp
     shell/window.cpp
+    shell/theme_state.cpp
     shell/clipboard.cpp
     shell/navigate.cpp
     shell/hit_test.cpp

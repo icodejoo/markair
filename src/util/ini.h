@@ -10,9 +10,14 @@
 //   font_body_fallback = <族名>   正文回退族名覆盖(中文回退链首选)
 //   font_mono_primary  = <族名>   等宽主字体族名覆盖
 //   font_mono_fallback = <族名>   等宽回退族名覆盖
+//   theme              = system|light|dark  主题偏好(T47),大小写不敏感,
+//                        默认 system,非法值回落 system
 // 明确**不含** `image_cache_mb`(随 T32 二次裁决作废)与 `zoom`(裁决 #4,留给 M2)。
+//
+// 本文件只做**读取**,写盘(`SaveAppSettings`)是 T55 的范围。
 #pragma once
 
+#include "../shell/theme_state.h"
 #include "str.h"
 #include "types.h"
 
@@ -34,6 +39,7 @@ struct AppSettings {
     wchar_t fontBodyFallback[kMaxFontFamilyChars];
     wchar_t fontMonoPrimary[kMaxFontFamilyChars];
     wchar_t fontMonoFallback[kMaxFontFamilyChars];
+    ThemeSetting theme;                            // 主题偏好,默认 ThemeSetting::System
 };
 
 /**
