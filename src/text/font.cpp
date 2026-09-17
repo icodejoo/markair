@@ -9,23 +9,37 @@ namespace {
 // 正文西文主族(裁决 #10)。
 const wchar_t kBodyPrimaryFamily[] = L"Segoe UI";
 
+// 中文回退族名(裁决 #10),正文链与等宽链共用这一份字面量,避免重复。
+const wchar_t kCjkYaHeiUi[] = L"Microsoft YaHei UI";
+const wchar_t kCjkYaHei[] = L"Microsoft YaHei";
+const wchar_t kCjkSimSun[] = L"SimSun";
+
 // 正文中文回退链(裁决 #10):Microsoft YaHei UI → Microsoft YaHei → SimSun。
 // IDWriteFontFallbackBuilder::AddMapping 要求 const WCHAR**(非 const WCHAR* const*),
 // 数组元素本身不加 const 以匹配该签名。
 const wchar_t* kBodyFallbackFamilies[] = {
-    L"Microsoft YaHei UI",
-    L"Microsoft YaHei",
-    L"SimSun",
+    kCjkYaHeiUi,
+    kCjkYaHei,
+    kCjkSimSun,
 };
 
 // 等宽主族(裁决 #10)。
 const wchar_t kMonoPrimaryFamily[] = L"Cascadia Mono";
 
-// 等宽回退链(裁决 #10):Consolas → Courier New。
+// 等宽回退链(裁决 #10 + 2026-09-17 修订):西文等宽 Consolas → Courier New 之后
+// 再接中文回退,代码块里的中文注释/字符串才不会显示成方块。中文族名复用正文
+// 已加载的那三个,不新增字体文件,内存开销可忽略。
 const wchar_t* kMonoFallbackFamilies[] = {
     L"Consolas",
     L"Courier New",
+    kCjkYaHeiUi,
+    kCjkYaHei,
+    kCjkSimSun,
 };
+
+// 等宽回退链元素个数(BuildMonoFallback 与只读暴露入口共用)。
+constexpr u32 kMonoFallbackCount =
+    static_cast<u32>(sizeof(kMonoFallbackFamilies) / sizeof(kMonoFallbackFamilies[0]));
 
 // 覆盖整个 Unicode 码位空间的单条范围,用于把回退链登记为"主族匹配不到
 // 才尝试"的兜底,而不按字符范围拆分(拆分对我们的白名单场景没有必要)。
@@ -145,10 +159,10 @@ IDWriteFontFallback* FontSubsystem::BuildMonoFallback() {
     HRESULT hr = factory_->CreateFontFallbackBuilder(&builder);
     if (FAILED(hr) || !builder) return nullptr;
 
-    const wchar_t* families[1 + sizeof(kMonoFallbackFamilies) / sizeof(kMonoFallbackFamilies[0])];
+    const wchar_t* families[1 + kMonoFallbackCount];
     u32 count = 0;
     if (monoFallbackOverride_[0] != 0) families[count++] = monoFallbackOverride_;
-    for (u32 i = 0; i < sizeof(kMonoFallbackFamilies) / sizeof(kMonoFallbackFamilies[0]); ++i) {
+    for (u32 i = 0; i < kMonoFallbackCount; ++i) {
         families[count++] = kMonoFallbackFamilies[i];
     }
     builder->AddMapping(&kFullUnicodeRange, 1, families, count, nullptr, nullptr, nullptr, 1.0f);
@@ -190,6 +204,12 @@ bool FontSubsystem::CreateMonoFormat() {
 
 // 等宽字体主族名(裁决 #10),布局层按行内代码 run 单独 SetFontFamilyName 时使用。
 const wchar_t* FontSubsystem::MonoFamilyName() { return kMonoPrimaryFamily; }
+
+// 等宽默认回退链(不含 ini 覆盖),只读暴露给测试与诊断,不触碰 DirectWrite。
+const wchar_t* const* FontSubsystem::MonoFallbackFamilies(u32* outCount) {
+    if (outCount) *outCount = kMonoFallbackCount;
+    return kMonoFallbackFamilies;
+}
 
 // 当前生效的缩放系数。
 float FontSubsystem::Scale() const { return kZoomLevels[zoomIndex_]; }

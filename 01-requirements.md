@@ -219,6 +219,19 @@ M2 验收沿用交付计划:exe 体积增量 ≤ 80 KB,BENCH-A 首屏时间增�
 补充:`state.ini` 允许用户覆盖这三条链的族名(纯字符串,零内存代价),但**不提供字体选择下拉框** —— 下拉框意味着 `GetSystemFontCollection` 枚举,是架构 §4 明令禁止的反模式。
 ⚠️ 该白名单成立的前提是"`CreateTextFormat` + 自定义 `IDWriteFontFallbackBuilder` 不触发全量字体枚举",此假设由 M-1 的 `spikes/s02_font_probe` 实测验证,见 `05-m0-tasks.md`。
 
+**2026-09-17 修订 —— 等宽链追加中文回退**
+
+原裁决把等宽链定为纯西文(`Cascadia Mono` → `Consolas` → `Courier New`),现修订为在其后**追加**中文回退,最终优先级:
+
+- 等宽:`Cascadia Mono` → `Consolas` → `Courier New` → `Microsoft YaHei UI` → `Microsoft YaHei` → `SimSun`
+
+理由:
+
+- 代码块里出现中文是真实使用场景(中文注释、中文字符串字面量、mermaid/流程图的中文节点名等)。纯西文链下这些字符一个字形都匹配不到,DirectWrite 全部画成方块(tofu),`bench/demo.md` 的 mermaid 示例已实测复现。
+- 追加的三个族名就是正文中文链已经在用的那三个,**复用已加载的字体资源,不新增任何字体文件**,代价接近零 —— 这与"emoji 短码需要新增约 40 KB 映射表"那类"为边缘收益付出实打实内存"的情况性质不同,不受"内存 vs 体验"原则的否决。
+- 西文等宽族保持在中文族之前,西文代码仍由等宽字体承接,不会被中文字体的非等宽字形接走,代码块的等宽对齐观感不变。
+- 白名单性质未变(仍是固定 6 个族名,不做 `GetSystemFontCollection` 枚举),上面那条"不触发全量枚举"的前提继续成立。
+
 ### #11 测试框架 —— ❌ 不引入,自写极简断言宏
 
 原则适用于**构建复杂度**而非运行时内存(测试产物不影响主 exe):

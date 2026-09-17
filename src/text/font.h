@@ -78,6 +78,18 @@ public:
     static const wchar_t* MonoFamilyName();
 
     /**
+     * 等宽角色的默认回退链族名,按优先级排列(不含 T39 的配置覆盖项)。
+     * 只读,不触发任何 DirectWrite 调用,可在未 Init 时使用。
+     *
+     * @param outCount 输出元素个数,可为 nullptr。
+     * @return 指向内部常量族名表的指针,恒非空,生命周期同进程。
+     * @example
+     *   mdvn::u32 n = 0;
+     *   const wchar_t* const* chain = FontSubsystem::MonoFallbackFamilies(&n);
+     */
+    static const wchar_t* const* MonoFallbackFamilies(u32* outCount);
+
+    /**
      * 用 `state.ini` 的 `font_body_*` / `font_mono_*` 覆盖字体族名(T39)。
      * **须在 `Init` 之前调用**;任一参数为 nullptr 或空串表示该项不覆盖,沿用
      * 裁决 #10 的白名单默认值。覆盖的回退族名会被**插到默认回退链最前面**,

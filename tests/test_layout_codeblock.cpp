@@ -79,6 +79,105 @@ MDVN_TEST(Layout_CodeBlockHeightDoesNotOverlapNextParagraph) {
     MDVN_CHECK(codeGeom.bottom - codeGeom.top >= lineHeight * 7.0f);
 }
 
+// 用例 1b(Bug B):含软换行的普通段落也不能和下一个块重叠——上一轮只给
+// CodeBlock 加了"按真实换行数计数"的分支,Paragraph 仍走纯字符数线性估算,
+// 强制换行被当成 1 个普通字符,预留高度按 1 行算,下一段直接叠上来。
+// 语料取自 bench/demo.md 10.1 节的块级公式(裁决:不解析 LaTeX,原样显示)。
+MDVN_TEST(Layout_ParagraphWithSoftBreaksDoesNotOverlapNextBlock) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "$$\n"
+        "\\int_0^\\infty e^{-x} dx = 1\n"
+        "$$\n"
+        "\n"
+        "The paragraph after the block formula.\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    // 三行之间是软换行,CommonMark 合并成一个段落;空行之后是第二个段落。
+    u32 firstIdx = FindBlockOfType(doc, BlockType::Paragraph, 0);
+    u32 secondIdx = FindBlockOfType(doc, BlockType::Paragraph, 1);
+    MDVN_CHECK(firstIdx != mdvn::kInvalidIndex);
+    MDVN_CHECK(secondIdx != mdvn::kInvalidIndex);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+
+    const BlockGeometry& first = layout.Geometry(firstIdx);
+    const BlockGeometry& second = layout.Geometry(secondIdx);
+
+    // 不重叠是核心验收标准。
+    MDVN_CHECK(second.top >= first.bottom);
+
+    // 段落里有 2 个软换行 → 至少 3 行,预留高度不能按 1 行算。
+    float lineHeight = 20.0f;  // kBaseLineHeightDip,未缩放
+    MDVN_CHECK(first.bottom - first.top >= lineHeight * 3.0f);
+}
+
+// 用例 1c(Bug B):按纯文本退化的 HTML 块(裁决 #1,解析时兜底成 Paragraph)
+// 内部多行内容同理——修复前它和下一个标题之间的间距被吃掉。
+// 语料取自 bench/demo.md 10.3 → 10.4 的交界处。
+MDVN_TEST(Layout_MultiLineHtmlBlockReservesEnoughHeight) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "<div class=\"test-block\">\n"
+        "line inside the html block\n"
+        "</div>\n"
+        "\n"
+        "### Next heading\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    u32 htmlIdx = FindBlockOfType(doc, BlockType::Paragraph, 0);
+    u32 headingIdx = FindBlockOfType(doc, BlockType::Heading, 0);
+    MDVN_CHECK(htmlIdx != mdvn::kInvalidIndex);
+    MDVN_CHECK(headingIdx != mdvn::kInvalidIndex);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+
+    const BlockGeometry& html = layout.Geometry(htmlIdx);
+    const BlockGeometry& heading = layout.Geometry(headingIdx);
+
+    MDVN_CHECK(heading.top >= html.bottom);
+    // 三行内容(开标签 / 正文 / 闭标签)至少要占 3 行高度。
+    float lineHeight = 20.0f;  // kBaseLineHeightDip,未缩放
+    MDVN_CHECK(html.bottom - html.top >= lineHeight * 3.0f);
+}
+
+// 用例 1d(Bug B):行数估算跟"强制换行数"走,而不是跟"总字符数"走——
+// 用两个总字符数相近但换行数差异很大的段落对比高度,这是防回归的关键断言
+// (与用例 2 对代码块的断言同构,只是把块类型换成 Paragraph)。
+MDVN_TEST(Layout_ParagraphHeightTracksForcedBreaksNotCharCount) {
+    // 10 行硬换行(行尾两个空格),每行 1 个字符。
+    const char manyLines[] = "a  \nb  \nc  \nd  \ne  \nf  \ng  \nh  \ni  \nj\n";
+    // 1 行,10 个字符。
+    const char oneLine[] = "abcdefghij\n";
+
+    Arena arenaA, arenaB;
+    arenaA.Init(1 * 1024 * 1024);
+    arenaB.Init(1 * 1024 * 1024);
+
+    Document docA = ParseMarkdown(StrSlice{manyLines, sizeof(manyLines) - 1}, &arenaA);
+    Document docB = ParseMarkdown(StrSlice{oneLine, sizeof(oneLine) - 1}, &arenaB);
+    MDVN_CHECK(!docA.truncated);
+    MDVN_CHECK(!docB.truncated);
+
+    BlockLayoutEngine layoutA, layoutB;
+    MDVN_CHECK(layoutA.Relayout(docA, 760.0f));
+    MDVN_CHECK(layoutB.Relayout(docB, 760.0f));
+
+    u32 idxA = FindBlockOfType(docA, BlockType::Paragraph, 0);
+    u32 idxB = FindBlockOfType(docB, BlockType::Paragraph, 0);
+    MDVN_CHECK(idxA != mdvn::kInvalidIndex);
+    MDVN_CHECK(idxB != mdvn::kInvalidIndex);
+
+    float heightA = layoutA.Geometry(idxA).bottom - layoutA.Geometry(idxA).top;
+    float heightB = layoutB.Geometry(idxB).bottom - layoutB.Geometry(idxB).top;
+
+    MDVN_CHECK(heightA > heightB * 3.0f);
+}
+
 // 用例 2:代码块行数估算应该基本随"真实源码行数"线性增长,而不是随
 // "总字符数"这种和折行宽度绑死的量线性增长——用两份"总字符数相近但行数
 // 差异很大"的代码块对比高度,验证高度差主要来自行数而不是字符数。

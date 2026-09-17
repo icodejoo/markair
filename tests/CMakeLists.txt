@@ -9,6 +9,7 @@ add_executable(mdvn_tests
     test_attr.cpp
     test_front_matter.cpp
     test_font.cpp
+    test_font_fallback.cpp
     test_layout.cpp
     test_layout_codeblock.cpp
     test_list_marker.cpp

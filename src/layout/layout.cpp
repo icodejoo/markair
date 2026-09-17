@@ -380,21 +380,31 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     return g.bottom;
 }
 
-// 围栏/缩进代码块的行数估算:代码块的换行是"每个源码行各自一行",不应该
-// 按"字符总数 / 平均每行字符数"这种韵文式折行去反推行数(那是给会自动
-// 折行的正文准备的近似,对代码块明显不适用,极易把多行代码估算成一整块
-// 挤在一起,导致预留高度小于 DirectWrite 实际渲染高度、和下方块重叠)。
-// 这里改为按"真实换行符数量"数行:遇到 kInlineFlagSyntheticNewline 标记的
-// run 才换到下一行;单行字符数超过可用宽度时,该行再退化成按字符数估算
-// 会被 DirectWrite 二次折行的行数——这部分极端场景(单行超长)仍是近似值,
-// 但最常见的"多行代码、每行不太长"场景能与真实渲染基本吻合。
+// 叶子内容块的行数估算:凡是块内出现强制换行(kInlineFlagSyntheticNewline)的
+// 地方都必须另起一行,不能按"字符总数 / 平均每行字符数"这种韵文式折行去反推
+// 行数(那是给会自动折行的纯文本准备的近似)。否则强制换行被当成 1 个普通
+// 字符,估算行数远小于真实渲染行数,预留高度不够,下一个块的 y 会算早,
+// 视觉上与本块重叠。
 //
-// md4c 的 md_process_verbatim_block_contents 对代码块**每一行**(含最后一行)
-// 都会在内容之后补一个终止换行,所以"合成换行 run 的个数"本身就精确等于
-// 源码行数,不需要再额外给"最后一个换行之后的尾巴"补一行——那样反而会多算
-// 一行空行。只有在"块里完全没有任何换行"(单行代码块)或"末尾确实有一段
-// 没被换行终止的内容"(理论上不会出现,纯防御)时才需要用剩余字符数补一行。
-static u32 CountCodeBlockLines(const Document& doc, const Block& b, u32 charsPerLine) {
+// 这个口径对**所有**叶子块类型都成立,不只代码块:
+//   - 围栏/缩进代码块:每个源码行各自一行;
+//   - 普通段落:软换行(SOFTBR)/硬换行(BR)以及按纯文本退化的 HTML 块
+//     (裁决 #1,解析时兜底成 Paragraph)内部的换行,同样是强制换行;
+//   - 标题:行尾硬换行同理。
+// 单行字符数超过可用宽度时,该行再退化成按字符数估算会被 DirectWrite 二次
+// 折行的行数——单行超长仍是近似值,但"多行、每行不太长"这个最常见场景能与
+// 真实渲染基本吻合。
+//
+// 行数与换行个数的关系交给"末尾是否还剩未被换行终止的内容"自然处理,两类
+// 块因此共用同一套逻辑:md4c 的 md_process_verbatim_block_contents 对代码块
+// **每一行**(含最后一行)都补一个终止换行,所以合成换行个数恰等于源码行数,
+// 末尾没有剩余内容、不再补行(否则会多算一行空行);段落里的软/硬换行是
+// 行"分隔符",最后一行之后没有换行,末尾剩余内容正好补上那一行。
+//
+// 图片 run 的文本是 alt,画在图片块内部(T33),不参与正文排版;脚注引用的
+// 可见文本是合成的 "[n]",按 4 字符量级估算。这两类 flag 在代码块里不会出现,
+// 因此对代码块的行为与改动前完全一致。
+static u32 CountLeafLines(const Document& doc, const Block& b, u32 charsPerLine) {
     u32 totalLines = 0;
     u32 curLineChars = 0;
     for (u32 i = 0; i < b.inlineCount; ++i) {
@@ -403,13 +413,14 @@ static u32 CountCodeBlockLines(const Document& doc, const Block& b, u32 charsPer
             u32 wrapped = curLineChars == 0 ? 1 : (curLineChars + charsPerLine - 1) / charsPerLine;
             totalLines += wrapped;
             curLineChars = 0;
+        } else if (in.flags & kInlineFlagImage) {
+            continue;
+        } else if (in.flags & kInlineFlagFootnoteRef) {
+            curLineChars += 4;
         } else {
             curLineChars += in.textLen;
         }
     }
-    // 收尾:只有当末尾确实剩下未被换行终止的内容时才补一行(单行代码块,
-    // 或防御性场景);正常的每行都以换行结尾的情况,上面的循环已经数完了
-    // 全部行数,这里不再重复计入。
     if (curLineChars > 0) {
         totalLines += (curLineChars + charsPerLine - 1) / charsPerLine;
     }
@@ -425,7 +436,7 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
         float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
         u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
         if (charsPerLine == 0) charsPerLine = 1;
-        u32 lines = CountCodeBlockLines(*doc_, b, charsPerLine);
+        u32 lines = CountLeafLines(*doc_, b, charsPerLine);
         return static_cast<float>(lines) * lineHeight + kLeafVerticalPaddingDip * fontScale_;
     }
 
@@ -447,7 +458,7 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
     }
     // 纯图片段落没有任何正文文字,正文部分高度为 0,整块高度全由图片贡献。
     if (totalChars == 0 && hasImage) return 0.0f;
-    if (totalChars == 0) totalChars = 1;
+    // 无文字且无图片的空块:CountLeafLines 下限就是 1 行,这里不需要再补 totalChars。
 
     float lineHeight = kBaseLineHeightDip * fontScale_;
     float avgCharWidth = kAvgCharWidthDip * fontScale_;
@@ -461,8 +472,10 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
     float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
     u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
     if (charsPerLine == 0) charsPerLine = 1;
-    u32 lines = (totalChars + charsPerLine - 1) / charsPerLine;
-    if (lines == 0) lines = 1;
+    // 与代码块共用同一个行数口径:块内的强制换行(段落的软/硬换行、按纯文本
+    // 退化的 HTML 块内部换行)都会各自另起一行。块内没有任何强制换行时,
+    // 这个函数退化成原来的 ceil(总字符数 / 每行字符数),行为不变。
+    u32 lines = CountLeafLines(*doc_, b, charsPerLine);
     return static_cast<float>(lines) * lineHeight + kLeafVerticalPaddingDip * fontScale_;
 }
 
