@@ -7,6 +7,7 @@
 #include "../src/util/str.h"
 #include "../src/doc/model.h"
 #include "../src/doc/parser.h"
+#include "../src/hl/languages.h"
 
 #include <cstring>
 #include <cstdio>
@@ -26,6 +27,10 @@ using mdvn::kInlineFlagItalic;
 using mdvn::kInlineFlagLink;
 using mdvn::kInlineFlagStrike;
 using mdvn::kInvalidIndex;
+using mdvn::kLanguageCpp;
+using mdvn::kLanguageJs;
+using mdvn::kLanguageNone;
+using mdvn::kLanguagePython;
 using mdvn::LinkTargetKind;
 using mdvn::ParseMarkdown;
 using mdvn::StrSlice;
@@ -180,6 +185,13 @@ u32 FindFirstInlineWithFlag(const Document& doc, u32 flag) {
         if (doc.inlines[i].flags & flag) return i;
     }
     return kInvalidIndex;
+}
+
+// 比较 StrSlice 与 C 字符串是否完全相等(长度+内容),测试专用小工具。
+bool SliceEquals(StrSlice s, const char* literal) {
+    size_t n = strlen(literal);
+    if (s.len != n) return false;
+    return memcmp(s.data, literal, n) == 0;
 }
 
 } // namespace
@@ -453,4 +465,126 @@ MDVN_TEST(ModelGfm_ListItemWithParagraphCodeAndNestedList) {
     const char* actual = Summarize(buf, doc);
     MDVN_CHECK_STREQ(actual,
         "UL LI P(-) CODE(c,c) UL LI(-)");
+}
+
+// 样本 16(T50):围栏代码块 ```cpp,验证 lang 原文与归一化 languageId。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangCpp) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```cpp\nint x;\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK(SliceEquals(d.lang, "cpp"));
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageCpp));
+    }
+}
+
+// 样本 17(T50):空 lang 围栏 ```,与缩进代码块一样应归一化为 kLanguageNone。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangEmpty) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```\nplain\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK_EQ(d.lang.len, 0u);
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageNone));
+    }
+}
+
+// 样本 18(T50):缩进代码块(无围栏),lang 应为空、languageId 为 kLanguageNone。
+MDVN_TEST(ModelGfm_CodeBlockIndentedNoLang) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "    indented code\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK_EQ(d.lang.len, 0u);
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageNone));
+    }
+}
+
+// 样本 19(T50):```Python 大小写不敏感,应归一化为 kLanguagePython,
+// 但 lang 原文保留原始大小写("Python")。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangPythonCase) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```Python\nx = 1\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK(SliceEquals(d.lang, "Python"));
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguagePython));
+    }
+}
+
+// 样本 20(T50):```jsx,jsx 是 JS 的别名,应归一化为 kLanguageJs。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangJsx) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```jsx\nconst a = 1;\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK(SliceEquals(d.lang, "jsx"));
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageJs));
+    }
+}
+
+// 样本 21(T50):```mermaid 不在 T52 支持的 11 种语言列表里,应归一化为
+// kLanguageNone,但 lang 原文仍保留 "mermaid"。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangMermaidUnsupported) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```mermaid\ngraph TD;\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK(SliceEquals(d.lang, "mermaid"));
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageNone));
+    }
+}
+
+// 样本 22(T50):```js title="a.js" 带附加参数,只取第一个空白前的词("js"),
+// languageId 应归一化为 kLanguageJs。
+MDVN_TEST(ModelGfm_CodeBlockFenceLangWithExtraArgs) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] = "```js title=\"a.js\"\nconst a = 1;\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+    u32 idx = FindFirstBlockOfType(doc, BlockType::CodeBlock);
+    MDVN_CHECK(idx != kInvalidIndex);
+    if (idx != kInvalidIndex) {
+        const Block& b = doc.blocks[idx];
+        MDVN_CHECK(b.detailIdx != kInvalidIndex);
+        const auto& d = doc.codeBlockDetails[b.detailIdx];
+        MDVN_CHECK(SliceEquals(d.lang, "js"));
+        MDVN_CHECK_EQ(static_cast<int>(d.languageId), static_cast<int>(kLanguageJs));
+    }
 }

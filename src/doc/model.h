@@ -142,6 +142,7 @@ struct Document {
     Vec<ListItemDetail> listItemDetails; // 任务列表项(ListItem,仅 is_task 时分配)
     Vec<OrderedListDetail> orderedListDetails; // 有序列表起始序号/分隔符(T44,BlockType::OrderedList)
     Vec<FootnoteDetail> footnoteDetails; // 脚注定义(FootnoteDef)
+    Vec<CodeBlockDetail> codeBlockDetails; // 代码块围栏语言信息(T50,BlockType::CodeBlock)
     StrSlice source;  // 原始 Markdown 字节,零拷贝引用调用方缓冲区,生命周期由调用方保证
     bool truncated;   // true 表示因超出节点数/嵌套深度上限被安全截断
 
@@ -149,11 +150,15 @@ struct Document {
     explicit Document(Arena* arena)
         : blocks(arena), inlines(arena), linkTargets(arena), tableDetails(arena),
           cellDetails(arena), listItemDetails(arena), orderedListDetails(arena),
-          footnoteDetails(arena), source{nullptr, 0}, truncated(false) {}
+          footnoteDetails(arena), codeBlockDetails(arena), source{nullptr, 0},
+          truncated(false) {}
 };
 
 // sizeof(Block) == 32、sizeof(Inline) == 16(M1 新增 detailIdx 借用了
-// layoutCache 前既有的对齐 padding,两者大小相比 M0 均未变化)。
+// layoutCache 前既有的对齐 padding,两者大小相比 M0 均未变化)。T50 新增
+// CodeBlockDetail 走既有侧表机制(Block::detailIdx),不改动 Block 自身字段,
+// 下面用 static_assert 固化这个约束,防止后续误改。
+static_assert(sizeof(Block) == 32, "Block 结构体大小必须保持 32 字节不变");
 
 /**
  * 取一个 Inline run 用于渲染/拼接/统计的字节起点。

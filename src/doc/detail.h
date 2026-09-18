@@ -4,6 +4,7 @@
 
 #include "../util/str.h"
 #include "../util/types.h"
+#include "../hl/languages.h"
 
 namespace mdvn {
 
@@ -42,6 +43,17 @@ struct ListItemDetail {
 struct OrderedListDetail {
     u32 start;          // 起始序号,默认 1
     char markDelimiter; // 序号分隔符,如 '.' 或 ')'
+};
+
+/**
+ * 代码块(BlockType::CodeBlock)的附加信息(T50)。
+ * lang 是围栏信息串裁切出的第一个词(缩进代码块无此信息,取空切片);
+ * languageId 是归一化后的语言 ID(T52 的 ResolveLanguageId 结果),
+ * 供 T51 词法器/T53 渲染直接使用,不必重新解析 lang 文本。
+ */
+struct CodeBlockDetail {
+    StrSlice lang;     // 围栏语言标记原文(裁切后的第一个词),无标记为空切片
+    u8 languageId;     // 归一化语言 ID(LanguageId),T50 阶段固定按 lang 计算
 };
 
 /** 脚注定义块(FootnoteDef)的附加信息。 */

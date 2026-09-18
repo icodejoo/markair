@@ -2,6 +2,7 @@
 #include "parser.h"
 
 #include "attr.h"
+#include "../hl/languages.h"
 
 #include "../../third_party/md4c/md4c.h"
 
@@ -107,6 +108,15 @@ BlockType ToBlockType(MD_BLOCKTYPE t) {
     }
 }
 
+// 取围栏 info string 展开后文本的第一个空白前的词(附加参数如
+// ```js title="a.js" 只取 "js")。CommonMark 允许的空白只有空格/Tab,
+// md4c 已经把围栏行尾的换行排除在 lang 属性之外,这里不需要处理换行。
+StrSlice FirstWord(StrSlice s) {
+    u32 i = 0;
+    while (i < s.len && s.data[i] != ' ' && s.data[i] != '\t') ++i;
+    return StrSlice{s.data, i};
+}
+
 // enter_block 回调:压入一个新 Block 节点,检查深度/节点数上限。
 int OnEnterBlock(MD_BLOCKTYPE type, void* detail, void* userdata) {
     ParseContext* ctx = static_cast<ParseContext*>(userdata);
@@ -183,6 +193,22 @@ int OnEnterBlock(MD_BLOCKTYPE type, void* detail, void* userdata) {
                 }
             }
             break;
+        case MD_BLOCK_CODE: {
+            // 缩进代码块 detail 非空但 lang 属性为空(fence_char==0);围栏代码块的
+            // lang 可能为空(``` 无标记)或带附加参数,统一走 FirstWord 裁切。
+            StrSlice lang{nullptr, 0};
+            if (detail != nullptr) {
+                auto* d = static_cast<MD_BLOCK_CODE_DETAIL*>(detail);
+                lang = FirstWord(ExpandAttribute(d->lang, ctx->arena));
+            }
+            CodeBlockDetail cbd{lang, static_cast<u8>(ResolveLanguageId(lang))};
+            b.detailIdx = ctx->doc->codeBlockDetails.Size();
+            if (!ctx->doc->codeBlockDetails.Push(cbd)) {
+                ctx->Truncate();
+                return 1;
+            }
+            break;
+        }
         case MD_BLOCK_FOOTNOTE_DEF:
             if (detail != nullptr) {
                 auto* d = static_cast<MD_BLOCK_FOOTNOTE_DEF_DETAIL*>(detail);
