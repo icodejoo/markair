@@ -280,3 +280,53 @@ MDVN_TEST(Layout_CodeBlockUnknownLanguageProducesNoHighlightRuns) {
     MDVN_CHECK(codeGeom.textLayout != nullptr);
     MDVN_CHECK(codeGeom.codeHighlights.len == 0);
 }
+
+// 用例 5:代码块反复滚出/滚回可见范围时,codeHighlights 必须沿用第一次算好的
+// 那一份,不能每次重新在 geometryArena 上分配——否则来回滚动会让 arena 单调
+// 增长(内存回归排查时实测到的真实缺陷)。判据是 Span 的首地址保持不变:
+// 地址相同即证明没有发生第二次分配。
+MDVN_TEST(Layout_CodeHighlightsReusedAcrossVirtualizationCycles) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "```cpp\n"
+        "int add(int a, int b) { return a + b; }  // sum\n"
+        "```\n\n"
+        "正文占位,用来把代码块推出可见范围。\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
+    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+
+    BlockLayoutEngine layout;
+    FontSubsystem fonts;
+    MDVN_CHECK(fonts.Init());
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+
+    // 第一次进入可见范围:算出高亮 run,记下首地址与数量。
+    layout.UpdateVisibleRange(0.0f, 50.0f, fonts);
+    MDVN_CHECK(layout.Geometry(codeIdx).textLayout != nullptr);
+    const mdvn::CodeHighlightRun* firstData = layout.Geometry(codeIdx).codeHighlights.data;
+    u32 firstLen = layout.Geometry(codeIdx).codeHighlights.len;
+    MDVN_CHECK(firstLen > 0);
+    MDVN_CHECK(firstData != nullptr);
+
+    // 反复滚出去再滚回来:textLayout 会被淘汰并重建,但高亮 run 不应重算。
+    for (u32 round = 0; round < 8; ++round) {
+        float offscreenY = layout.TotalHeight() + 10000.0f;
+        layout.UpdateVisibleRange(offscreenY, offscreenY + 50.0f, fonts);
+        MDVN_CHECK(layout.Geometry(codeIdx).textLayout == nullptr);
+
+        layout.UpdateVisibleRange(0.0f, 50.0f, fonts);
+        MDVN_CHECK(layout.Geometry(codeIdx).textLayout != nullptr);
+        MDVN_CHECK(layout.Geometry(codeIdx).codeHighlights.data == firstData);
+        MDVN_CHECK(layout.Geometry(codeIdx).codeHighlights.len == firstLen);
+    }
+
+    // 重新 Relayout 之后必须重新算(sideDataReady 复位),否则换视口宽度后
+    // 沿用的会是按旧宽度算出的偏移。
+    MDVN_CHECK(layout.Relayout(doc, 400.0f));
+    MDVN_CHECK(layout.Geometry(codeIdx).codeHighlights.len == 0);
+    layout.UpdateVisibleRange(0.0f, 50.0f, fonts);
+    MDVN_CHECK(layout.Geometry(codeIdx).codeHighlights.len > 0);
+}

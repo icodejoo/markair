@@ -71,6 +71,13 @@ T45~T49（阶段 K 的窗口状态/主题状态机相关任务）已经在 T44 �
 | t_process_to_present_ms（首屏时间） | 73.314 ms | 81.800 ms |
 | private_bytes（常驻内存代理指标） | 16515072 字节 ≈ 15.75 MB | 17113088 字节 ≈ 16.32 MB |
 
+> 补充（M2 收尾内存排查）：本节记的 `private_bytes` 后来成了 BENCH-A 那道
+> 16MB 门禁波动排查的起点。排查结论、完整归因与本次做出的修复见
+> [`bench/M2-MEMORY-REGRESSION.md`](M2-MEMORY-REGRESSION.md)：**高亮本身只占
+> 约 120KB（0.8%）**，15MB 里约 95.7% 是 D2D 软件渲染目标与 DirectWrite 软件
+> 文字光栅化；真正修掉的是滚动时 `codeHighlights`/`linkBoxes` 在
+> `geometryArena_` 上重复分配导致的无界增长。
+
 对比同一批次 BENCH-A 当前值（中位数 61.255ms / 16515072 vs BENCH-A 的
 15380480 字节 private_bytes），BENCH-C 的首屏时间比 BENCH-A 多约 12ms、
 private_bytes 多约 1.09MB，属于"代码块占比高、11 种语言全触发词法扫描"的

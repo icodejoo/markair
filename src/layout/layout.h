@@ -94,11 +94,14 @@ struct BlockGeometry {
     LayoutRect quoteBar;         // 引用块左侧竖线矩形;非引用块恒为全 0
     LayoutRect codeBackground;   // 围栏代码块背景矩形;非代码块恒为全 0
     IDWriteTextLayout* textLayout; // 视口 ± 1 屏内才非空,其余淘汰为 nullptr,见虚拟化策略说明
-    Span<LinkBox> linkBoxes;      // 该块内的链接/自动链接 run(T24),仅创建 layout 时才非空
+    Span<LinkBox> linkBoxes;      // 该块内的链接/自动链接 run(T24),首次创建 layout 时算好并一直保留
     // 围栏代码块的语法着色 run(T53):仅 CodeBlock 且语言被识别(languageId !=
-    // kLanguageNone)时才非空,与 textLayout 同生共死——随 textLayout 一起创建,
-    // 块滚出可见 ± 1 屏、textLayout 被淘汰时一并清空,不单独管理生命周期。
+    // kLanguageNone)时才非空。首次创建 layout 时算好后一直保留到下一次
+    // Relayout,textLayout 被淘汰时**不**清空(读取方都先判 textLayout 非空),
+    // 这样反复滚动不会在 geometryArena 上重复分配同一份数据。
     Span<CodeHighlightRun> codeHighlights;
+    // linkBoxes/codeHighlights 是否已经算过一次(每次 Relayout 复位为 false)。
+    bool sideDataReady;
     Span<ImageBox> imageBoxes;    // 该块内的图片/占位块(T33),Relayout 阶段即确定,不随虚拟化失效
     Span<float> tableColWidths;   // 表格各列宽度(T25/T26),仅 Table 块非空
     Span<float> tableRowTops;     // 表格每行顶部 y(相对文档,DIP),长度 = 行数 + 1(末尾是表格底边)

@@ -244,6 +244,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     g.codeCopyButton = LayoutRect{0, 0, 0, 0};
     g.linkBoxes = Span<LinkBox>{nullptr, 0};
     g.codeHighlights = Span<CodeHighlightRun>{nullptr, 0};
+    g.sideDataReady = false;
     g.imageBoxes = Span<ImageBox>{nullptr, 0};
     g.tableColWidths = Span<float>{nullptr, 0};
     g.tableRowTops = Span<float>{nullptr, 0};
@@ -873,9 +874,11 @@ void BlockLayoutEngine::UpdateVisibleRange(float topY, float bottomY, FontSubsys
             // 淘汰时机:块的几何区间与"可见 ± 1 屏"目标区间不再相交。
             g.textLayout->Release();
             g.textLayout = nullptr;
-            g.linkBoxes = Span<LinkBox>{nullptr, 0};  // 随 layout 一起失效,避免渲染器读到悬空 range
-            // T53:代码高亮 run 与 textLayout 同生共死,一并清空(见 layout.h 字段注释)。
-            g.codeHighlights = Span<CodeHighlightRun>{nullptr, 0};
+            // linkBoxes/codeHighlights 指向 geometryArena(活到下一次 Relayout),
+            // 这里**故意不清空**:清空只会让块再次滚进来时重新分配一份同样的
+            // 数据,而 geometryArena 在 Relayout 之间不回收,来回滚动就会单调
+            // 增长。读取方(renderer/hit_test)都先判 textLayout 非空,保留这两
+            // 个 Span 不会让它们读到本该失效的数据。
         }
     }
 }
@@ -969,7 +972,9 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
     // T53:围栏代码块语法着色——只有语言被识别(languageId != kLanguageNone)才跑
     // 词法器;未识别语言(含缩进代码块,detailIdx 可能为 kInvalidIndex)一行都不
     // 执行,codeHighlights 保持初始的空 Span,渲染层走原有纯色路径。
-    if (b.type == BlockType::CodeBlock && b.detailIdx != kInvalidIndex) {
+    // sideDataReady 为 true 说明这个块本轮 Relayout 内已经算过一次,直接沿用
+    // 上次的 Span,不重复扫描、也不在 geometryArena 上再占一份空间。
+    if (!g.sideDataReady && b.type == BlockType::CodeBlock && b.detailIdx != kInvalidIndex) {
         const CodeBlockDetail& cbd = doc_->codeBlockDetails[b.detailIdx];
         LanguageId langId = static_cast<LanguageId>(cbd.languageId);
         if (langId != kLanguageNone) {
@@ -1114,7 +1119,8 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
         }
     }
 
-    if (tempLinkBoxes.Size() > 0) {
+    // 同 codeHighlights:本轮 Relayout 内只落盘一次,块反复滚进滚出时沿用。
+    if (!g.sideDataReady && tempLinkBoxes.Size() > 0) {
         LinkBox* stored = static_cast<LinkBox*>(
             geometryArena_.Alloc(sizeof(LinkBox) * tempLinkBoxes.Size(), alignof(LinkBox)));
         if (stored) {
@@ -1122,6 +1128,7 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
             g.linkBoxes = Span<LinkBox>{stored, tempLinkBoxes.Size()};
         }
     }
+    g.sideDataReady = true;
 
     return layout;
 }
