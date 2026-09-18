@@ -1,0 +1,122 @@
+# mdvn 单文件 Release 构建 workflow。
+#
+# 与 ci.yml 的分工:ci.yml 管"每次 push/PR 的性能门禁"(01§4 全部硬指标),
+# 本文件只管"产出一份可下载的单文件 exe 发布物",复用已有的
+# ci\verify_release.ps1 做验收(不加壳/不压缩、无 CRT 动态依赖、WINDOWS
+# 子系统、LICENSE/THIRD-PARTY-NOTICES 打包清单),不重复定义第二套判据。
+#
+# Single-file mdvn.exe release build workflow.
+#
+# Division of labor vs ci.yml: ci.yml owns the per-push/PR performance
+# budget gate (all hard metrics in 01§4); this file only produces a
+# downloadable single-file exe artifact, reusing the existing
+# ci\verify_release.ps1 for verification (no packer/compression, no CRT
+# DLL dependency, WINDOWS subsystem, LICENSE/THIRD-PARTY-NOTICES packaging
+# manifest) rather than defining a second set of criteria.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+# GitHub Release 创建/上传附件需要 contents:write;workflow_dispatch(无
+# tag)那次运行不会走到发布步骤(见下方 if 条件),这个权限只在真正打 tag
+# 触发时才用得上。
+#
+# Creating a GitHub Release and uploading its assets needs contents:write.
+# The workflow_dispatch (no tag) run never reaches the publish step below
+# (gated by an `if` condition), so this permission is only exercised on an
+# actual tag push.
+permissions:
+  contents: write
+
+jobs:
+  build-release-exe:
+    # mdvn 是 Win32 桌面应用,必须在 Windows runner 上构建。
+    #
+    # mdvn is a Win32 desktop app; must build on a Windows runner.
+    runs-on: windows-latest
+
+    steps:
+      - name: 拉取代码 / Checkout
+        uses: actions/checkout@v4
+
+      - name: 安装/校验 CMake / Set up CMake
+        uses: lukka/get-cmake@latest
+
+      - name: 配置 MSVC 开发者命令行环境 / Set up MSVC dev command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Release 配置已在根 CMakeLists.txt 里固定为"内存占用优先"策略
+      # (/O1 体积最小化预设 + /GL /Gy /Gw + /OPT:REF /OPT:ICF /LTCG),
+      # 本步骤不重复传编译选项,避免这里与源码里的设置产生第二份定义、
+      # 后续改一处漏改另一处。
+      #
+      # The Release config already bakes in the "memory footprint first"
+      # policy in the root CMakeLists.txt (/O1 minimize-size preset +
+      # /GL /Gy /Gw + /OPT:REF /OPT:ICF /LTCG). This step does not pass
+      # extra compile options, to avoid a second source of truth that can
+      # drift from the one in CMakeLists.txt.
+      - name: 配置 / Configure (CMake, Release)
+        shell: powershell
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: 构建 / Build (Release)
+        shell: powershell
+        run: cmake --build build --config Release --target mdvn
+
+      - name: 跑单元测试 / Run unit tests
+        shell: powershell
+        run: |
+          cmake --build build --config Release --target mdvn_tests
+          .\build\tests\Release\mdvn_tests.exe
+
+      # 复用既有验收脚本:不加壳/不压缩声明性检查、无 CRT 动态依赖、
+      # WINDOWS 子系统、体积记录、LICENSE/THIRD-PARTY-NOTICES 打包清单、
+      # 子进程数恒为 0。失败即整个 job 失败,不允许发布不合格产物。
+      #
+      # Reuse the existing verification script: no-packer declaration
+      # check, no CRT DLL dependency, WINDOWS subsystem, size record,
+      # LICENSE/THIRD-PARTY-NOTICES packaging manifest, zero subprocess
+      # count. Any failure fails the whole job — no shipping a
+      # non-conforming artifact.
+      - name: 验收产物 / Verify release artifact
+        shell: powershell
+        run: .\ci\verify_release.ps1
+
+      - name: 上传单文件 exe / Upload single-file exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdvn-exe
+          path: build\src\Release\mdvn.exe
+          if-no-files-found: error
+
+      - name: 上传发布包(exe+LICENSE+THIRD-PARTY-NOTICES) / Upload release zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdvn-release-zip
+          path: bench\artifacts\mdvn-release.zip
+          if-no-files-found: error
+
+      # 只在真正打 tag(v*)推送时才发布到 GitHub Release,供用户下载;
+      # workflow_dispatch 手动触发(没有 tag)只产出上面两份 workflow
+      # artifact,不创建/更新 Release —— GitHub Release 本来就要绑定一个
+      # tag,手动触发时没有合适的 tag 可挂。
+      #
+      # Only publish to a GitHub Release (for users to download) on an
+      # actual v* tag push; a manual workflow_dispatch run (no tag) only
+      # produces the two workflow artifacts above and does not create/update
+      # a Release — a GitHub Release needs a tag to attach to, and a manual
+      # run has none.
+      - name: 发布到 GitHub Release / Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build\src\Release\mdvn.exe
+            bench\artifacts\mdvn-release.zip
+          generate_release_notes: true

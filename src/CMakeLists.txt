@@ -6,6 +6,7 @@ add_executable(mdvn WIN32
     util/cmdline.cpp
     util/str.cpp
     util/ini.cpp
+    util/recent_files.cpp
     doc/file_map.cpp
     doc/encoding.cpp
     doc/parser.cpp

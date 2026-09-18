@@ -11,10 +11,10 @@
 namespace mdvn {
 
 // 滚动条宽度(DIP),正文与大纲侧栏共用同一数值。
-constexpr float kScrollbarWidthDip = 8.0f;
+constexpr float kScrollbarWidthDip = 6.0f;
 
 // 滑块圆角半径(DIP),取宽度的一半画成"胶囊"形状。
-constexpr float kScrollbarCornerRadiusDip = 4.0f;
+constexpr float kScrollbarCornerRadiusDip = 3.0f;
 
 // 滑块距视口右边缘的外边距(DIP)。
 constexpr float kScrollbarMarginDip = 4.0f;

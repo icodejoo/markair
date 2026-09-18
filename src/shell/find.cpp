@@ -6,7 +6,7 @@ namespace mdvn {
 
 FindSession::FindSession(Arena* results, Arena* scratch)
     : results_(results), scratch_(scratch), matches_(results), queryLen_(0),
-      current_(kInvalidIndex), visible_(false) {
+      current_(kInvalidIndex), visible_(false), dirty_(false) {
     query_[0] = 0;
 }
 
@@ -17,6 +17,7 @@ void FindSession::Close() {
     queryLen_ = 0;
     query_[0] = 0;
     current_ = kInvalidIndex;
+    dirty_ = false;
     // Vec 没有 Clear 接口;重新绑定同一个 Arena 即可让命中集合归零
     // (与 layout.cpp / navigate.cpp 同样的手法)。
     matches_ = Vec<Match>(results_);
@@ -28,21 +29,38 @@ bool FindSession::AppendChar(wchar_t ch) {
     if (queryLen_ >= kMaxFindQueryChars) return false;
     query_[queryLen_++] = ch;
     query_[queryLen_] = 0;
+    dirty_ = true;
     return true;
 }
 
 bool FindSession::Backspace() {
     if (queryLen_ == 0) return false;
     query_[--queryLen_] = 0;
+    dirty_ = true;
     return true;
+}
+
+void FindSession::SetQuery(const wchar_t* text, u32 len) {
+    if (len > kMaxFindQueryChars) len = kMaxFindQueryChars;
+    for (u32 i = 0; i < len; ++i) query_[i] = text[i];
+    queryLen_ = len;
+    query_[queryLen_] = 0;
+    dirty_ = true;
+}
+
+void FindSession::ClearMatches() {
+    current_ = kInvalidIndex;
+    matches_ = Vec<Match>(results_);
+    if (results_) results_->Reset();
 }
 
 u32 FindSession::Rerun(const Document& doc) {
     current_ = kInvalidIndex;
+    dirty_ = false;
     if (!results_ || !scratch_) return 0;
 
-    // 整体 Reset 后重建:命中集合不做增量维护,增量输入时重搜一次即可
-    // (一次全文扫描本来就在 50ms 预算内)。
+    // 整体 Reset 后重建:命中集合不做增量维护,一次全文扫描本来就在 50ms
+    // 预算内,回车触发一次即可。
     results_->Reset();
     matches_ = Vec<Match>(results_);
     if (queryLen_ == 0) return 0;

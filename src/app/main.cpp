@@ -28,6 +28,7 @@
 #include "../util/arena.h"
 #include "../util/cmdline.h"
 #include "../util/ini.h"
+#include "../util/recent_files.h"
 #include "../util/str.h"
 #include "../doc/model.h"
 #include "../doc/parser.h"
@@ -73,6 +74,7 @@ constexpr char kSampleMarkdown[] =
 // 以下全局变量均为 POD / 普通指针,零初始化,不含任何有副作用的构造函数。
 ID2D1Factory* g_d2dFactory = nullptr;
 wchar_t g_displayText[MAX_PATH + 16] = L"mdvn";
+mdvn::RecentFiles g_recentFiles{};
 
 // mdvn 命名互斥体/窗口属性统一使用的前缀,避免和系统其它对象重名冲突。
 constexpr wchar_t kMutexNamePrefix[] = L"mdvn_filemutex_";
@@ -311,7 +313,18 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
 
     // 底部栏状态区:换文档成功后同步更新大小,直接用 fileMap 映射出的字节数,
     // 与启动期首次打开同一口径,不必再调一次 GetFileSizeEx。
-    if (host->windowState) host->windowState->currentDocumentSizeBytes = host->fileMap->Data().len;
+    // 换文档成功后同步追加到历史记录 (bench 模式跳过写盘)。追加本身只是
+    // 内存里的数组移位,同步做;真正的磁盘写入交给 500ms 去抖定时器
+    // (RequestRecentFilesSave),避免连续点击文档内链接时每次都触发一次
+    // CreateFileW/WriteFile/FlushFileBuffers 造成的 UI 卡顿(见代码评审
+    // 2026-09-19 发现:此前是同步落盘)。
+    if (host->windowState) {
+        host->windowState->currentDocumentSizeBytes = host->fileMap->Data().len;
+        if (!host->benchMode && host->windowState->recentFiles) {
+            mdvn::AddRecentFile(host->windowState->recentFiles, fullPath);
+            mdvn::RequestRecentFilesSave(host->hwnd, host->windowState);
+        }
+    }
 
     // ③ 更新"当前文档目录"(相对路径的图片与再下一跳链接都据此解析)与窗口标题。
     ExtractDirectory(fullPath, host->documentDirectory, MAX_PATH);
@@ -556,23 +569,39 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // Per-Monitor V2 DPI 感知必须在创建任何窗口之前开启(T12)。
     mdvn::EnablePerMonitorV2DpiAwareness();
 
-    // mdvn 是只读查看器,不需要文字输入;禁用 IME/TSF 激活可避免第三方
-    // 输入法把自己的模块注入进来(架构决策 #1)。
-    ImmDisableIME(static_cast<DWORD>(-1));
+    // 架构决策 #1(mdvn 是只读查看器,不需要文字输入)已被 T37 查找条的原生
+    // EDIT 控件推翻——查找条要支持中文关键词,必须让 IME 正常工作,这里不再
+    // 调用 ImmDisableIME。
 
     RunArenaSmokeTest();
     RunMd4cSmokeTest();
 
+    bool hasTarget = benchArgs.filePath != nullptr;
+
+    // 未带文件参数时,默认打开历史记录第一条并自动展开历史侧栏——需要提前
+    // 把历史记录加载出来(原来这一步在下面靠后的位置,现在挪到这里,同一份
+    // 数据只加载一次,不重复读盘;bench 模式一律跳过磁盘读写,不走这条路)。
+    mdvn::InitRecentFiles(&g_recentFiles);
+    if (!benchArgs.benchEnabled) {
+        mdvn::LoadRecentFiles(&g_recentFiles);
+    }
+    bool autoOpenedFromHistory = false;
+    const wchar_t* effectiveFilePath = benchArgs.filePath;
+    if (!hasTarget && !benchArgs.benchEnabled && g_recentFiles.count > 0) {
+        effectiveFilePath = g_recentFiles.entries[0].path;
+        hasTarget = true;
+        autoOpenedFromHistory = true;
+    }
+
     // T13:同一文件路径的命名互斥体 + 尽力而为的"前置已有窗口"。每个文件
     // 仍然独立开一个新窗口([裁决 #6]),这里不阻止、不提前退出。
-    bool hasTarget = benchArgs.filePath != nullptr;
     wchar_t normalizedPath[MAX_PATH]{};
     HANDLE fileMutex = nullptr;
     if (hasTarget) {
-        DWORD fullPathLen = GetFullPathNameW(benchArgs.filePath, MAX_PATH, normalizedPath, nullptr);
+        DWORD fullPathLen = GetFullPathNameW(effectiveFilePath, MAX_PATH, normalizedPath, nullptr);
         if (fullPathLen == 0 || fullPathLen >= MAX_PATH) {
             // 规范化失败/路径过长:退化为直接使用原始路径参与哈希与显示。
-            wcsncpy_s(normalizedPath, MAX_PATH, benchArgs.filePath, _TRUNCATE);
+            wcsncpy_s(normalizedPath, MAX_PATH, effectiveFilePath, _TRUNCATE);
         }
         uint64_t pathHash = HashPathCaseInsensitive(normalizedPath);
         fileMutex = AcquireFileMutexAndMaybeFocusExisting(pathHash);
@@ -778,6 +807,38 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         windowState.onBenchLoopTick = &OnBenchLoopTickHook;
     }
 
+    // 历史记录已在函数前面加载过一次(见 effectiveFilePath 的计算),这里
+    // 只需接上指针,不重复读盘。
+    //
+    // Recent-files history was already loaded once earlier in this function
+    // (see the effectiveFilePath computation above); just wire the pointer
+    // here rather than reloading from disk.
+    //
+    // --bench 模式下保持为空:WM_DESTROY 等收尾路径一律靠
+    // `state->recentFiles` 是否为空来判断要不要落盘,留空指针即可让那些调用
+    // 点自然短路,避免 bench 运行仍然创建/写入 %LOCALAPPDATA%\mdvn\history.txt
+    // 这个磁盘副作用(与 T71 对 state.ini 窗口矩形做的隔离是同一类问题)。
+    //
+    // Left null in --bench mode: shutdown paths such as WM_DESTROY decide
+    // whether to persist purely from whether `state->recentFiles` is null,
+    // so leaving the pointer unset lets those call sites short-circuit
+    // naturally, avoiding the disk side effect of creating/writing
+    // %LOCALAPPDATA%\mdvn\history.txt during a bench run (the same class of
+    // isolation T71 already applies to the persisted window rect in
+    // state.ini).
+    if (!benchArgs.benchEnabled) {
+        windowState.recentFiles = &g_recentFiles;
+    }
+
+    // 成功打开文件后是否需要在 hwnd 创建之后请求一次历史记录去抖写盘(见下方
+    // CreateMainWindow 成功之后的用点)。声明在 if (fileOpened) 之外,好让
+    // 那个后置调用点能看到这个标志。
+    //
+    // Whether we need to request a debounced recent-files save once hwnd
+    // exists (used right after CreateMainWindow succeeds, below). Declared
+    // outside the `if (fileOpened)` block so that later use site can see it.
+    bool needsRecentFilesSave = false;
+
     if (fileOpened) {
         size_t i = 0;
         for (; normalizedPath[i] != 0 && i + 1 < mdvn::kHistoryPathCapacity; ++i) {
@@ -787,6 +848,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // 底部栏状态区:大小直接用 fileMap 已经映射出的字节数,不必再调一次
         // GetFileSizeEx——内容已经读到内存里了。
         windowState.currentDocumentSizeBytes = fileMap.Data().len;
+
+        // 成功打开文件后加入历史记录 (bench 模式跳过;自动从历史记录第一条
+        // 打开时它本就已经是榜首,不需要再写一次盘)。AddRecentFile 只是
+        // 内存里的数组移位,这里先做;真正的写盘挪到 hwnd 创建之后,用
+        // RequestRecentFilesSave 走去抖定时器(见下方),不在 hwnd 还不存在
+        // 的这一刻同步调用 SaveRecentFiles(内部 FlushFileBuffers 会阻塞到
+        // 首帧之前,拖慢启动)。
+        if (!benchArgs.benchEnabled && !autoOpenedFromHistory) {
+            mdvn::AddRecentFile(windowState.recentFiles, normalizedPath);
+            needsRecentFilesSave = true;
+        }
     }
 
     // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
@@ -801,6 +873,28 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (!hwnd) {
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
+    }
+    if (needsRecentFilesSave) {
+        mdvn::RequestRecentFilesSave(hwnd, &windowState);
+    }
+
+    // 未带文件参数、自动打开历史记录第一条时的收尾:成功则让历史侧栏直接
+    // 以展开态出现(不放开屏动画);目标文件已不存在则走与手动点击该条目
+    // 完全相同的"文件不存在,是否删除?"流程——同一套失败处理。
+    // CreateMainWindow 内部会把 historyAnimState 重置为 Closed,所以这里的
+    // 覆盖必须在它返回之后才生效。
+    if (autoOpenedFromHistory) {
+        if (fileOpened) {
+            windowState.historyAnimState = mdvn::SidebarAnimState::Open;
+            windowState.historyAnimProgress = 1.0f;
+        } else {
+            mdvn::ConfirmAndRemoveMissingHistoryEntry(hwnd, &windowState, 0);
+            if (windowState.recentFiles->count > 0) {
+                windowState.historyAnimState = mdvn::SidebarAnimState::Open;
+                windowState.historyAnimProgress = 1.0f;
+            }
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
     }
 
     // T34/T39:绑定"下载完成"通知窗口与 load_remote_images 开关(现在读自 state.ini,

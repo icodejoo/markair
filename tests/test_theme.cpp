@@ -48,9 +48,11 @@ int FirstUnassignedSlot(const Palette& p) {
         &p.findHighlight,     &p.findCurrentHighlight,
         &p.selectionHighlight,
         &p.overlayBarBackground, &p.overlayBarText,
+        &p.findBarBackground, &p.findBarText,
         &p.bottomBarBackground, &p.bottomBarIcon,
         &p.bottomBarText,     &p.bottomBarDivider,
         &p.outlineOverlayMaskBackground,
+        &p.historyRowButtonBackground,
     };
     for (int i = 0; i < static_cast<int>(sizeof(slots) / sizeof(slots[0])); ++i) {
         if (IsDefaultZero(*slots[i])) return i;
@@ -60,13 +62,13 @@ int FirstUnassignedSlot(const Palette& p) {
 
 }  // namespace
 
-// 用例:sizeof(Palette) 不超过验收给的字节上限——自绘滚动条(方案A)的
-// Idle/Active 双档透明度(4 个槽位替代原来 2 个)后由 640 上调到 672
-// (41 个 D2D1_COLOR_F * 16 字节 = 656,留一点余量,不是刚好顶格),防止
-// 后续再无节制地往里堆槽位。
+// 用例:sizeof(Palette) 不超过验收给的字节上限——2026-09-19 查找条主题适配
+// 新增 findBarBackground/findBarText 两个槏位,由 688 上调到 720
+// (45 个 D2D1_COLOR_F * 16 字节 = 720,刚好顶格),防止后续再无节制地
+// 往里堆槏位。
 MDVN_TEST(Theme_PaletteSizeWithinBudget) {
     size_t paletteSize = sizeof(Palette);
-    MDVN_CHECK(paletteSize <= 672);
+    MDVN_CHECK(paletteSize <= 720);
 }
 
 // 用例:浅色调色板每个槽位都已显式赋值,不残留透明黑默认值。

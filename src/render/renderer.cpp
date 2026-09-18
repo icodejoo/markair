@@ -100,7 +100,28 @@ constexpr float kOverlayBarCornerRadiusDip = 6.0f;
 constexpr float kOverlayBarPaddingXDip = 10.0f;
 constexpr float kOverlayBarPaddingYDip = 5.0f;
 constexpr float kOverlayBarMarginDip = 10.0f;   // 距客户区右上角的外边距
-constexpr float kOverlayBarMaxWidthDip = 520.0f; // 查找条最大宽度,超长查询串自行截断
+constexpr float kOverlayBarMaxWidthDip = 520.0f; // 状态提示条最大宽度,超长文字自行截断
+
+// 查找条几何(2026-09-19 改版)。数值必须与 shell/find_bar.h 的同名常量保持
+// 一致——render 不反向 include shell 头文件,这里只重复几个纯数字,真正的
+// "唯一权威定义"(含 Edit 控件矩形换算)在 shell 侧,window.cpp 按那份常量
+// 摆放原生 Edit 子窗口。
+constexpr float kFindBarPaddingXDip = 10.0f;
+constexpr float kFindBarPrefixWidthDip = 44.0f;
+constexpr float kFindBarEditWidthDip = 150.0f;
+constexpr float kFindBarGapDip = 8.0f;
+constexpr float kFindBarStatusNavGapDip = 4.0f;   // 须与 shell/find_bar.h 的同名常量一致
+constexpr float kFindBarStatusWidthDip = 50.0f;
+constexpr float kFindBarNavButtonWidthDip = 22.0f;
+constexpr float kFindBarCloseButtonWidthDip = 22.0f;  // 须与 shell/find_bar.h 的同名常量一致
+constexpr float kFindBarHeightDip = 26.0f;
+constexpr float kFindBarMarginDip = 10.0f;
+constexpr float kFindBarFontSizeDip = 13.0f;
+constexpr float kFindBarCornerRadiusDip = 6.0f;
+constexpr float kFindBarWidthDip = kFindBarPaddingXDip * 2.0f + kFindBarPrefixWidthDip +
+                                    kFindBarEditWidthDip + kFindBarGapDip + kFindBarStatusWidthDip +
+                                    kFindBarStatusNavGapDip + kFindBarNavButtonWidthDip * 2.0f +
+                                    kFindBarGapDip + kFindBarCloseButtonWidthDip;
 
 // 单个查找命中最多跨几行:HitTestTextRange 的输出上限,超出部分不画(极端长命中)。
 constexpr UINT32 kMaxFindHitMetrics = 16;
@@ -123,8 +144,8 @@ constexpr float kOutlineRowFontSizeDip = 13.0f;
 // 自绘滚动条几何常量(方案A)。数值必须与 shell/scrollbar.h 的同名常量保持
 // 一致——render 层不反向 include shell 目录下的头文件,这里只重复几个纯
 // 数字,与 T63 大纲侧栏常量同一约束(见上方注释)。
-constexpr float kScrollbarWidthDip = 8.0f;
-constexpr float kScrollbarCornerRadiusDip = 4.0f;
+constexpr float kScrollbarWidthDip = 6.0f;
+constexpr float kScrollbarCornerRadiusDip = 3.0f;
 constexpr float kScrollbarMarginDip = 4.0f;
 constexpr float kScrollbarMinThumbHeightDip = 24.0f;
 constexpr u32 kMaxOutlineTitleChars = 256;
@@ -133,12 +154,19 @@ constexpr u32 kMaxOutlineTitleChars = 256;
 // ——同一条"render 不反向 include shell"的约束(见上面大纲侧栏的注释),
 // 这里只重复几个纯数字,真正的"唯一权威定义"(含命中测试/文字标签)在 shell 侧。
 // 新布局(2026-09-18):栏高 32px 画不下"图标+文字"两行,图标改为在整条栏
-// 高度内垂直居中,不再画常驻文字标签;左侧按钮固定宽度紧贴排列,右侧是
-// 状态文字区。
+// 高度内垂直居中,不再画常驻文字标签;左侧 5 个按钮固定宽度紧贴排列,右侧最右边是历史记录按钮,中间是状态文字区。
 constexpr float kBottomBarHeightDip = 32.0f;
-constexpr u32 kBottomBarButtonCount = 5;
+constexpr u32 kBottomBarButtonCount = 8;
+constexpr u32 kBottomBarLeftButtonCount = 6;
+// 右侧固定图标位下标(与 shell/bottom_bar.h::BottomBarButton 保持一致)。
+// CopyPath 仅当前有打开文档时存在,不存在时不占位、不参与命中/绘制。
+constexpr u32 kBottomBarCopyPathIndex = 6;
+constexpr u32 kBottomBarHistoryIndex = 7;
 constexpr float kBottomBarButtonWidthDip = kBottomBarHeightDip;  // 正方形按钮,与栏高相等
-constexpr float kBottomBarIconSizeDip = 15.0f;   // 图标绘制区正方形边长
+constexpr float kBottomBarIconSizeDip = 15.0f;   // 图标绘制区正方形边长(右侧固定按钮群)
+// 左侧 6 个按钮(大纲/打开/主题/缩小/放大/查找)整体比右侧固定按钮群小 2px,
+// 视觉上更轻——2026-09-19 新增查找按钮时一并调整。
+constexpr float kBottomBarLeftIconSizeDip = kBottomBarIconSizeDip - 2.0f;
 constexpr float kBottomBarIconStrokeWidthDip = 1.4f;
 constexpr float kBottomBarStatusFontSizeDip = 11.0f;    // 右侧状态文字字号
 constexpr float kBottomBarStatusPaddingDip = 10.0f;     // 状态文字右侧留白
@@ -150,12 +178,27 @@ constexpr float kBottomBarTooltipPaddingDip = 6.0f;    // 气泡文字左右各�
 constexpr float kBottomBarTooltipHeightDip = 22.0f;
 constexpr float kBottomBarTooltipGapDip = 4.0f;        // 气泡底边与底部栏顶边的间隙
 
-// 5 个按钮从左到右的悬浮提示文案,下标须与 shell/bottom_bar.h 的
+// 7 个按钮从左到右的悬浮提示文案,下标须与 shell/bottom_bar.h 的
 // BottomBarButton 枚举顺序一一对应。数值/文案必须与那边的 kBottomBarLabels
 // 保持一致——同一条"render 不反向 include shell"的约束。
 constexpr const wchar_t* kBottomBarTooltipLabels[kBottomBarButtonCount] = {
-    L"大纲", L"打开", L"主题", L"缩小", L"放大",
+    L"大纲", L"打开", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
 };
+
+// 侧栏列表项通用几何常量（与 shell/sidebar.h 保持数值一致）。
+constexpr float kSidebarRowHeightDip = 28.0f;
+constexpr float kSidebarPanelPaddingDip = 10.0f;
+constexpr float kSidebarRowFontSizeDip = 13.0f;
+// 顶部标题栏高度，必须与 shell/sidebar.h::kSidebarHeaderHeightDip 一致——
+// SidebarHitTestItem 命中测试按这个高度偏移，这里画的行必须同样偏移，
+// 否则视觉行位置与命中判定的行位置错位(T曾经的 bug:此处漏画标题栏偏移)。
+constexpr float kSidebarHeaderHeightDip = 40.0f;
+constexpr float kSidebarHeaderFontSizeDip = 14.0f;
+// 每行关闭/删除按钮几何，须与 shell/sidebar.h 的同名常量一致。
+constexpr float kSidebarCloseButtonSizeDip = 20.0f;
+constexpr float kSidebarCloseButtonMarginDip = 6.0f;
+constexpr float kSidebarCloseButtonGlyphPaddingDip = 6.0f;  // X 图标相对按钮矩形的内边距
+constexpr float kSidebarFolderButtonGapDip = 4.0f;  // 须与 shell/sidebar.h 的同名常量一致
 
 // 标题级别 -> 缩进量,口径与 mdvn::OutlineItemIndentDip 一致。
 float OutlineRowIndentDip(u8 level) {
@@ -193,26 +236,17 @@ u32 AppendLiteral(wchar_t* buf, u32 cursor, u32 cap, const wchar_t* s) {
     return cursor;
 }
 
-// 拼出查找条上显示的一行文字:`查找: <关键词>  (3/12)`。
-// 没有关键词时只显示提示语,有关键词但零命中时显示"无匹配"。
-u32 ComposeFindBarText(const ShellOverlay* overlay, wchar_t* buf, u32 cap) {
-    u32 cursor = AppendLiteral(buf, 0, cap, L"查找: ");
-    const wchar_t* query = overlay->findQuery;
-    if (!query || query[0] == 0) {
-        cursor = AppendLiteral(buf, cursor, cap, L"(输入关键词,Esc 关闭)");
-        buf[cursor] = 0;
-        return cursor;
-    }
-    cursor = AppendLiteral(buf, cursor, cap, query);
-    cursor = AppendLiteral(buf, cursor, cap, L"   ");
-    if (overlay->matchCount == 0) {
-        cursor = AppendLiteral(buf, cursor, cap, L"无匹配");
-    } else {
-        u32 ordinal = (overlay->currentMatch == kInvalidIndex) ? 1u : overlay->currentMatch + 1u;
-        cursor = AppendDecimal(buf, cursor, cap, ordinal);
-        cursor = AppendLiteral(buf, cursor, cap, L"/");
-        cursor = AppendDecimal(buf, cursor, cap, overlay->matchCount);
-    }
+// 拼出查找条右侧的状态文字(2026-09-19 改版:查询串本身由原生 Edit 控件
+// 显示,这里只拼状态区那一小段):固定"当前序号/命中总数"格式,零命中
+// (含还没搜过/搜过但没命中两种情况,不再区分)统一显示"0/0",不再出现
+// "回车搜索"/"无匹配"这类文案(与 images/7.png 的参考样式对齐)。
+u32 ComposeFindBarStatusText(const ShellOverlay* overlay, wchar_t* buf, u32 cap) {
+    u32 total = overlay->matchCount;
+    u32 ordinal = (total == 0 || overlay->currentMatch == kInvalidIndex) ? 0u
+                                                                          : overlay->currentMatch + 1u;
+    u32 cursor = AppendDecimal(buf, 0, cap, ordinal);
+    cursor = AppendLiteral(buf, cursor, cap, L"/");
+    cursor = AppendDecimal(buf, cursor, cap, total);
     buf[cursor] = 0;
     return cursor;
 }
@@ -385,12 +419,18 @@ void ImageResidencyManager::ReleaseResident(const ImageBox* boxes, u32 count) {
 
 // 构造一个未绑定工厂、未创建渲染目标的渲染器。
 Renderer::Renderer()
-    : factory_(nullptr), fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
+    : zoomInIconGeometry_(nullptr), zoomOutIconGeometry_(nullptr), factory_(nullptr),
+      fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
       overlay_(nullptr), frameViewportHeight_(0.0f), palette_(&kLightPalette),
       outlineScratchInited_(false) {}
 
 // 析构时释放渲染目标本体;工厂/字体子系统均不归本对象所有,不在此释放。
-Renderer::~Renderer() { ReleaseRenderTarget(); }
+// 放大/缩小图标几何挂在 factory_(设备无关资源),本对象持有引用,这里一并释放。
+Renderer::~Renderer() {
+    ReleaseRenderTarget();
+    if (zoomInIconGeometry_) zoomInIconGeometry_->Release();
+    if (zoomOutIconGeometry_) zoomOutIconGeometry_->Release();
+}
 
 void Renderer::Init(ID2D1Factory* factory, FontSubsystem* fonts, ImageCache* images) {
     factory_ = factory;
@@ -633,6 +673,98 @@ void Renderer::DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLe
     layout->Release();
 }
 
+void Renderer::DrawFindBar(float targetWidth, const wchar_t* statusText, u32 statusTextLen,
+                            ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush) {
+    if (!target_ || !fonts_ || !bgBrush) return;
+
+    // 几何口径必须跟 shell/find_bar.h::ComputeFindBarLayout 算出同一个矩形,
+    // 窗口才会把原生 Edit 控件摆在这条背景条中间正确的位置——两边独立算,
+    // 用的是完全相同的公式与常量(见上面 kFindBar* 常量的注释)。
+    float right = targetWidth - kFindBarMarginDip;
+    float left = right - kFindBarWidthDip;
+    if (left < kFindBarMarginDip) left = kFindBarMarginDip;
+    float top = kFindBarMarginDip;
+
+    D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
+        D2D1::RectF(left, top, left + kFindBarWidthDip, top + kFindBarHeightDip),
+        kFindBarCornerRadiusDip, kFindBarCornerRadiusDip);
+    target_->FillRoundedRectangle(rounded, bgBrush);
+
+    if (!textBrush) return;
+
+    // "查找: " 前缀,固定在左侧;中间的 kFindBarEditWidthDip 那一段留白,
+    // 原生 Edit 子窗口盖在上面画查询串本身与光标。
+    const wchar_t prefix[] = L"查找:";
+    IDWriteTextLayout* prefixLayout = fonts_->CreateTextLayout(
+        prefix, WideLength(prefix), FontRole::Body, kFindBarPrefixWidthDip, kFindBarHeightDip);
+    if (prefixLayout) {
+        prefixLayout->SetFontSize(kFindBarFontSizeDip, DWRITE_TEXT_RANGE{0, WideLength(prefix)});
+        prefixLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        target_->DrawTextLayout(D2D1::Point2F(left + kFindBarPaddingXDip, top), prefixLayout,
+                                textBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+        prefixLayout->Release();
+    }
+
+    float statusLeft = left + kFindBarPaddingXDip + kFindBarPrefixWidthDip + kFindBarEditWidthDip +
+                        kFindBarGapDip;
+    if (statusText && statusTextLen > 0) {
+        IDWriteTextLayout* statusLayout = fonts_->CreateTextLayout(
+            statusText, statusTextLen, FontRole::Body, kFindBarStatusWidthDip, kFindBarHeightDip);
+        if (statusLayout) {
+            statusLayout->SetFontSize(kFindBarFontSizeDip, DWRITE_TEXT_RANGE{0, statusTextLen});
+            statusLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            // 靠右贴紧箭头按钮画("0/0"这类短文案默认左对齐会在 50px 状态栏宽度
+            // 里留一大截空白,视觉上和后面的按钮离得远),不改布局宽度/命中
+            // 几何,只调文字在自己框内的水平对齐。
+            statusLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+            target_->DrawTextLayout(D2D1::Point2F(statusLeft, top), statusLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            statusLayout->Release();
+        }
+    }
+
+    // "上一个"/"下一个"箭头按钮(几何口径必须与 shell/find_bar.h::
+    // ComputeFindBarLayout 的 prevLeft/nextLeft 完全一致,否则画的箭头位置
+    // 会跟 window.cpp 里做点击命中测试用的矩形错位)。用两条折线画 ^/v 形,
+    // 不额外引入图标字体或 PathGeometry。
+    float prevLeft = statusLeft + kFindBarStatusWidthDip + kFindBarStatusNavGapDip;
+    float nextLeft = prevLeft + kFindBarNavButtonWidthDip;
+    float chevronHalfW = kFindBarNavButtonWidthDip * 0.18f;
+    float chevronHalfH = kFindBarNavButtonWidthDip * 0.14f;
+    float chevronStroke = 1.4f;
+    // 上一个:朝上的 "^"。
+    {
+        float cx = prevLeft + kFindBarNavButtonWidthDip * 0.5f;
+        float cy = top + kFindBarHeightDip * 0.5f;
+        target_->DrawLine(D2D1::Point2F(cx - chevronHalfW, cy + chevronHalfH),
+                          D2D1::Point2F(cx, cy - chevronHalfH), textBrush, chevronStroke);
+        target_->DrawLine(D2D1::Point2F(cx, cy - chevronHalfH),
+                          D2D1::Point2F(cx + chevronHalfW, cy + chevronHalfH), textBrush,
+                          chevronStroke);
+    }
+    // 下一个:朝下的 "v"。
+    {
+        float cx = nextLeft + kFindBarNavButtonWidthDip * 0.5f;
+        float cy = top + kFindBarHeightDip * 0.5f;
+        target_->DrawLine(D2D1::Point2F(cx - chevronHalfW, cy - chevronHalfH),
+                          D2D1::Point2F(cx, cy + chevronHalfH), textBrush, chevronStroke);
+        target_->DrawLine(D2D1::Point2F(cx, cy + chevronHalfH),
+                          D2D1::Point2F(cx + chevronHalfW, cy - chevronHalfH), textBrush,
+                          chevronStroke);
+    }
+    // 关闭按钮:最右侧一个 "X"(点击关闭整条查找条,与 Esc 同效果)。
+    {
+        float closeLeft = nextLeft + kFindBarNavButtonWidthDip + kFindBarGapDip;
+        float cx = closeLeft + kFindBarCloseButtonWidthDip * 0.5f;
+        float cy = top + kFindBarHeightDip * 0.5f;
+        float half = kFindBarCloseButtonWidthDip * 0.18f;
+        target_->DrawLine(D2D1::Point2F(cx - half, cy - half), D2D1::Point2F(cx + half, cy + half),
+                          textBrush, chevronStroke);
+        target_->DrawLine(D2D1::Point2F(cx - half, cy + half), D2D1::Point2F(cx + half, cy - half),
+                          textBrush, chevronStroke);
+    }
+}
+
 void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
                                        ID2D1SolidColorBrush* maskBrush) {
     // 与 DrawOutlinePanel 同一个"侧栏是否打开"判断依据,侧栏关闭时本函数
@@ -837,37 +969,303 @@ void Renderer::DrawOutlinePanel(float targetHeight,
     }
 }
 
+void Renderer::DrawHistoryOverlayMask(float targetWidth, float targetHeight,
+                                      ID2D1SolidColorBrush* maskBrush) {
+    if (!overlay_ || !overlay_->historyEntries || overlay_->historyItemCount == 0) return;
+    if (!maskBrush || !target_) return;
+
+    float animProgress = overlay_->historyAnimProgress;
+    if (animProgress <= 0.0001f) return;
+
+    float visibleWidth = overlay_->historyPanelWidthDip * animProgress;
+    if (visibleWidth < 0.0f) visibleWidth = 0.0f;
+    if (visibleWidth > overlay_->historyPanelWidthDip) visibleWidth = overlay_->historyPanelWidthDip;
+
+    D2D1_RECT_F maskRect = D2D1::RectF(0.0f, 0.0f, targetWidth - visibleWidth, targetHeight);
+    target_->FillRectangle(maskRect, maskBrush);
+}
+
+void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
+                                ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                                ID2D1SolidColorBrush* highlightBgBrush,
+                                ID2D1SolidColorBrush* buttonBgBrush,
+                                ID2D1SolidColorBrush* scrollbarTrackBrush,
+                                ID2D1SolidColorBrush* scrollbarThumbBrush) {
+    if (!overlay_ || !overlay_->historyEntries || overlay_->historyItemCount == 0) return;
+    if (!fonts_ || !bgBrush || !textBrush || !target_) return;
+
+    float animProgress = overlay_->historyAnimProgress;
+    if (animProgress <= 0.0001f) return;
+
+    float panelWidth = overlay_->historyPanelWidthDip;
+    float slideOffset = 0.0f;
+    if (animProgress < 1.0f) {
+        slideOffset = (1.0f - animProgress) * panelWidth;
+    }
+
+    target_->SetTransform(D2D1::Matrix3x2F::Translation(slideOffset + (targetWidth - panelWidth), 0.0f));
+
+    D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, panelWidth, targetHeight);
+    target_->FillRectangle(panelRect, bgBrush);
+
+    if (highlightBgBrush) {
+        target_->DrawLine(D2D1::Point2F(0.0f, 0.0f), D2D1::Point2F(0.0f, targetHeight),
+                          highlightBgBrush, 1.0f);
+    }
+
+    // 标题栏("历史记录"),占据顶部 kSidebarHeaderHeightDip 高度——这段高度
+    // 同样是 SidebarHitTestItem 命中测试跳过的区域,行必须从这个高度之后
+    // 开始画,否则视觉行位置与命中判定的行位置会错位一段距离。
+    {
+        static const wchar_t kHistoryHeaderText[] = L"历史记录";
+        u32 headerLen = static_cast<u32>(wcslen(kHistoryHeaderText));
+        IDWriteTextLayout* headerLayout = fonts_->CreateTextLayout(
+            kHistoryHeaderText, headerLen, FontRole::Body,
+            panelWidth - kSidebarPanelPaddingDip * 2.0f, kSidebarHeaderHeightDip);
+        if (headerLayout) {
+            headerLayout->SetFontSize(kSidebarHeaderFontSizeDip, DWRITE_TEXT_RANGE{0, headerLen});
+            float textTop = (kSidebarHeaderHeightDip - kSidebarHeaderFontSizeDip - 4.0f) * 0.5f;
+            target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, textTop),
+                                    headerLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            headerLayout->Release();
+        }
+        target_->DrawLine(D2D1::Point2F(0.0f, kSidebarHeaderHeightDip),
+                          D2D1::Point2F(panelWidth, kSidebarHeaderHeightDip),
+                          textBrush, 1.0f);
+    }
+
+    // 文案永远用满宽度——关闭/文件夹按钮只在 hover 时无背景色地悬浮在文案
+    // 之上,不为它们预留固定空间(否则未 hover 的行会白白截断文案)。
+    float maxTextWidth = panelWidth - kSidebarPanelPaddingDip * 2.0f;
+
+    for (u32 i = 0; i < overlay_->historyItemCount; ++i) {
+        float rowTop = kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(i) -
+                       overlay_->historyScrollY;
+        if (rowTop + kSidebarRowHeightDip < kSidebarHeaderHeightDip || rowTop > targetHeight) continue;
+
+        bool highlighted = (i == overlay_->historyHoverItem);
+        if (highlighted && highlightBgBrush) {
+            target_->FillRectangle(
+                D2D1::RectF(0.0f, rowTop, panelWidth, rowTop + kSidebarRowHeightDip),
+                highlightBgBrush);
+        }
+
+        const wchar_t* path = overlay_->historyEntries[i].path;
+        u32 pathLen = WideLength(path);
+        if (pathLen != 0) {
+            // 效率排查(2026-09-19)发现:此前用手写二分查找 + 每次二分探测都
+            // 重新 CreateTextLayout 来算省略号截断点,单行最坏要建 10+ 份
+            // IDWriteTextLayout,而这是每帧(侧栏可见/动画时)、每一可见行都
+            // 要跑一遍的路径。改成直接让 DirectWrite 原生截断
+            // (IDWriteTextLayout::SetTrimming + CreateEllipsisTrimmingSign)
+            // ——用已经为绘制而创建的这一份 layout 本身,不再额外建任何探测
+            // 用的 layout。
+            //
+            // Efficiency review (2026-09-19) found: this used to hand-roll a
+            // binary search for the ellipsis cut point, creating a fresh
+            // IDWriteTextLayout on every probe (10+ layouts per row in the
+            // worst case) — on a path that runs every visible row, every
+            // frame the sidebar is visible or animating. Switched to native
+            // DirectWrite trimming (SetTrimming + CreateEllipsisTrimmingSign)
+            // on the single layout already needed for drawing — no extra
+            // probe layouts at all.
+            IDWriteTextLayout* rowLayout = fonts_->CreateTextLayout(
+                path, pathLen, FontRole::Body, maxTextWidth, kSidebarRowHeightDip);
+            if (rowLayout) {
+                rowLayout->SetFontSize(kSidebarRowFontSizeDip, DWRITE_TEXT_RANGE{0, pathLen});
+                IDWriteInlineObject* ellipsisSign = nullptr;
+                if (fonts_->Factory() &&
+                    SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(rowLayout, &ellipsisSign))) {
+                    DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+                    rowLayout->SetTrimming(&trimming, ellipsisSign);
+                    ellipsisSign->Release();
+                }
+                float textTop = rowTop + (kSidebarRowHeightDip - kSidebarRowFontSizeDip - 4.0f) * 0.5f;
+                target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, textTop),
+                                        rowLayout, textBrush,
+                                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                rowLayout->Release();
+            }
+        }
+
+        // 悬浮该行时,右侧画关闭按钮("X")+ 紧贴其左侧的文件夹按钮,点击
+        // 分别删除该项/打开所在文件夹——命中测试矩形须与 shell/sidebar.h::
+        // SidebarCloseButtonLocalRectDip / SidebarFolderButtonLocalRectDip
+        // 的几何公式保持一致。文案永远铺满整行(见上面 maxTextWidth 的
+        // 注释),两个按钮会悬浮在文案之上——先用与悬浮高亮同色、铺满整个
+        // 行高的底色盖住这段文案,图标不至于跟文字重叠糊在一起;颜色与
+        // 行高亮相同,视觉上是"融进"高亮底色,不会显得像多贴了一块。
+        if (highlighted && textBrush) {
+            float btnRight = panelWidth - kSidebarCloseButtonMarginDip;
+            float btnLeft = btnRight - kSidebarCloseButtonSizeDip;
+            float btnTop = rowTop + (kSidebarRowHeightDip - kSidebarCloseButtonSizeDip) * 0.5f;
+            float btnBottom = btnTop + kSidebarCloseButtonSizeDip;
+            float pad = kSidebarCloseButtonGlyphPaddingDip;
+
+            float folderRight = btnLeft - kSidebarFolderButtonGapDip;
+            float folderLeft = folderRight - kSidebarCloseButtonSizeDip;
+
+            if (buttonBgBrush) {
+                target_->FillRectangle(
+                    D2D1::RectF(folderLeft, rowTop, btnRight, rowTop + kSidebarRowHeightDip),
+                    buttonBgBrush);
+            }
+
+            target_->DrawLine(D2D1::Point2F(btnLeft + pad, btnTop + pad),
+                              D2D1::Point2F(btnRight - pad, btnBottom - pad), textBrush, 1.4f);
+            target_->DrawLine(D2D1::Point2F(btnRight - pad, btnTop + pad),
+                              D2D1::Point2F(btnLeft + pad, btnBottom - pad), textBrush, 1.4f);
+
+            // "打开所在文件夹"按钮:图标画一个简化的文件夹轮廓(矩形 + 左上角标签)。
+            float bodyLeft = folderLeft + pad;
+            float bodyRight = folderRight - pad;
+            float bodyTop = btnTop + pad + 2.0f;
+            float bodyBottom = btnBottom - pad;
+            target_->DrawRectangle(D2D1::RectF(bodyLeft, bodyTop, bodyRight, bodyBottom), textBrush, 1.2f);
+            float tabWidth = (bodyRight - bodyLeft) * 0.45f;
+            target_->DrawLine(D2D1::Point2F(bodyLeft, bodyTop),
+                              D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f), textBrush, 1.2f);
+            target_->DrawLine(D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f),
+                              D2D1::Point2F(bodyLeft + tabWidth, bodyTop), textBrush, 1.2f);
+        }
+    }
+
+    float contentHeight = kSidebarHeaderHeightDip +
+                          kSidebarRowHeightDip * static_cast<float>(overlay_->historyItemCount);
+    DrawScrollbar(panelWidth, targetHeight, contentHeight, overlay_->historyScrollY,
+                  scrollbarTrackBrush, scrollbarThumbBrush);
+
+    target_->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+// 按给定 SVG 路径数据(viewBox 0 0 24 24,全直线段,无曲线)构建"放大"/"缩小"
+// 图标的填充几何。三个子轮廓(字母 "A" 外形 + "A" 内部三角镂空 + 右下角
+// "+"/"-" 号)按 SVG 原始点序原样搬入,镂空子轮廓的绕向与外轮廓相反,
+// nonzero 缠绕规则下天然抠出镂空,不需要额外布尔运算。
+ID2D1PathGeometry* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
+    if (!factory_) return nullptr;
+    ID2D1PathGeometry* geo = nullptr;
+    if (FAILED(factory_->CreatePathGeometry(&geo)) || !geo) return nullptr;
+    ID2D1GeometrySink* sink = nullptr;
+    if (FAILED(geo->Open(&sink)) || !sink) {
+        geo->Release();
+        return nullptr;
+    }
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+
+    auto figure = [&](const D2D1_POINT_2F* pts, u32 count) {
+        sink->BeginFigure(pts[0], D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLines(pts + 1, count - 1);
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    };
+
+    if (zoomIn) {
+        const D2D1_POINT_2F outerA[] = {
+            {1.0f, 19.0f},    {6.25f, 5.0f},   {8.75f, 5.0f},    {14.0f, 19.0f},
+            {11.6f, 19.0f},   {10.325f, 15.425f}, {4.675f, 15.425f}, {3.4f, 19.0f},
+        };
+        figure(outerA, static_cast<u32>(sizeof(outerA) / sizeof(outerA[0])));
+
+        const D2D1_POINT_2F holeA[] = {
+            {5.4f, 13.4f}, {9.6f, 13.4f}, {7.55f, 7.6f}, {7.45f, 7.6f},
+        };
+        figure(holeA, static_cast<u32>(sizeof(holeA) / sizeof(holeA[0])));
+
+        const D2D1_POINT_2F plus[] = {
+            {18.0f, 16.0f}, {18.0f, 13.0f}, {15.0f, 13.0f}, {15.0f, 11.0f},
+            {18.0f, 11.0f}, {18.0f, 8.0f},  {20.0f, 8.0f},  {20.0f, 11.0f},
+            {23.0f, 11.0f}, {23.0f, 13.0f}, {20.0f, 13.0f}, {20.0f, 16.0f},
+        };
+        figure(plus, static_cast<u32>(sizeof(plus) / sizeof(plus[0])));
+    } else {
+        const D2D1_POINT_2F outerA[] = {
+            {0.99f, 19.0f}, {3.41f, 19.0f}, {4.68f, 15.42f}, {10.33f, 15.42f},
+            {11.59f, 19.0f}, {14.01f, 19.0f}, {8.75f, 5.0f}, {6.25f, 5.0f},
+        };
+        figure(outerA, static_cast<u32>(sizeof(outerA) / sizeof(outerA[0])));
+
+        const D2D1_POINT_2F holeA[] = {
+            {5.41f, 13.39f}, {7.44f, 7.6f}, {7.56f, 7.6f}, {9.59f, 13.39f},
+        };
+        figure(holeA, static_cast<u32>(sizeof(holeA) / sizeof(holeA[0])));
+
+        const D2D1_POINT_2F minus[] = {
+            {23.0f, 11.0f}, {23.0f, 13.0f}, {15.0f, 13.0f}, {15.0f, 11.0f},
+        };
+        figure(minus, static_cast<u32>(sizeof(minus) / sizeof(minus[0])));
+    }
+
+    sink->Close();
+    sink->Release();
+    return geo;
+}
+
 // 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
-// 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧是状态文字
-// (当前文档路径 + 大小)。挤压布局——正文视口高度已经在 window.cpp 里减去
-// 了本栏高度,这里只管画,不参与任何几何计算。图标不再带常驻文字标签
-// (32px 高度画不下两行),文字改成鼠标悬浮时的提示气泡,悬浮态由
-// window.cpp 判定后通过 hoverButtonIndex 传入,本函数只负责画。
+// 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧最右边是历史按钮,
+// 中间是状态文字(当前文档路径 + 大小)。
 void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                               ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                               const wchar_t* documentPath, u64 documentSizeBytes,
-                              u32 hoverButtonIndex) {
+                              u32 hoverButtonIndex, bool pathCopied) {
     if (!target_ || !bgBrush) return;
+    bool hasDocument = documentPath && documentPath[0] != L'\0';
 
     float barTop = targetHeight - kBottomBarHeightDip;
     D2D1_RECT_F barRect = D2D1::RectF(0.0f, barTop, targetWidth, targetHeight);
     target_->FillRectangle(barRect, bgBrush);
 
+    // 底部栏顶边 1px 深色分割线,区分内容区与底部操作栏(与滚动条分隔线复用
+    // 同一 dividerBrush,同一条"1px 分割线"口径)。
+    if (dividerBrush) {
+        target_->DrawLine(D2D1::Point2F(0.0f, barTop), D2D1::Point2F(targetWidth, barTop),
+                          dividerBrush, 1.0f);
+    }
+
     float btnW = kBottomBarButtonWidthDip;
     float iconCenterY = barTop + kBottomBarHeightDip * 0.5f;  // 图标整体垂直居中于栏高度内
 
-    for (u32 i = 0; i < kBottomBarButtonCount; ++i) {
-        float left = btnW * static_cast<float>(i);
-        float centerX = left + btnW * 0.5f;
-        float half = kBottomBarIconSizeDip * 0.5f;
+    // 每个按钮的水平中心,下面画悬浮提示气泡时直接查表,不重新推导一遍
+    // 同样的三段式布局公式(避免两份独立维护、按钮布局一改就悄悄错位)。
+    //
+    // Each button's horizontal center, looked up directly when drawing the
+    // hover tooltip below instead of re-deriving the same three-way layout
+    // formula a second time (avoiding two independently-maintained copies
+    // that silently drift apart whenever the button layout changes).
+    float centerXs[kBottomBarButtonCount] = {};
 
-        // 分隔线只画在图标按钮之间,不画到按钮区与状态区的交界——那条线
-        // 不是"两个按钮之间",跨过去会让状态区看起来像多出来的第 6 个按钮。
-        if (i > 0 && dividerBrush) {
-            target_->DrawLine(D2D1::Point2F(left, barTop + 4.0f),
-                              D2D1::Point2F(left, targetHeight - 4.0f), dividerBrush,
-                              1.0f);
+    for (u32 i = 0; i < kBottomBarButtonCount; ++i) {
+        // 左侧 6 个按钮用略小一档的图标尺寸(kBottomBarLeftIconSizeDip),
+        // 右侧固定按钮群(CopyPath/History)保持原尺寸——两组独立计算 half。
+        float half = (i < kBottomBarLeftButtonCount ? kBottomBarLeftIconSizeDip
+                                                      : kBottomBarIconSizeDip) * 0.5f;
+        // CopyPath 仅当前有打开文档时存在——未打开文档时整个跳过(不占位、
+        // 不画、不留分隔线),该区域让给中间的状态文字区。
+        if (i == kBottomBarCopyPathIndex && !hasDocument) continue;
+        bool isHistory = (i == kBottomBarHistoryIndex);
+
+        float left;
+        if (i < kBottomBarLeftButtonCount) {
+            left = btnW * static_cast<float>(i);
+        } else if (i == kBottomBarCopyPathIndex) {
+            left = targetWidth - btnW * 2.0f;
+        } else {  // History,始终贴最右
+            left = targetWidth - btnW;
+        }
+        float centerX = left + btnW * 0.5f;
+        centerXs[i] = centerX;
+
+        // 分隔线画在:左侧图标按钮之间、状态文字区与右侧固定按钮群之间的
+        // 第一条分界、以及(CopyPath 存在时)CopyPath 与 History 之间。
+        if (dividerBrush) {
+            bool dividerHere = (i > 0 && i < kBottomBarLeftButtonCount) ||
+                               (i == kBottomBarLeftButtonCount && hasDocument) || isHistory;
+            if (dividerHere) {
+                target_->DrawLine(D2D1::Point2F(left, barTop + 4.0f),
+                                  D2D1::Point2F(left, targetHeight - 4.0f), dividerBrush,
+                                  1.0f);
+            }
         }
 
         if (iconBrush) {
@@ -894,16 +1292,17 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                 target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
                 break;
             }
-            case 2: {  // 主题:太阳(圆 + 四条短射线)
-                float r = half * 0.5f;
+            case 2: {  // 主题:太阳(圆 + 8条短射线,包含顶部)
+                float r = half * 0.45f;
                 D2D1_ELLIPSE sun{D2D1::Point2F(centerX, iconCenterY), r, r};
                 target_->DrawEllipse(sun, iconBrush, kBottomBarIconStrokeWidthDip);
-                float rayLen = half * 0.35f;
+                float rayLen = half * 0.32f;
                 const float kDiag = 0.7071f;
-                D2D1_POINT_2F dirs[4] = {
-                    {1.0f, 0.0f}, {-1.0f, 0.0f}, {kDiag, kDiag}, {-kDiag, kDiag},
+                D2D1_POINT_2F dirs[8] = {
+                    {0.0f, -1.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {1.0f, 0.0f},
+                    {kDiag, -kDiag}, {-kDiag, -kDiag}, {kDiag, kDiag}, {-kDiag, kDiag},
                 };
-                for (int d = 0; d < 4; ++d) {
+                for (int d = 0; d < 8; ++d) {
                     float sx = centerX + dirs[d].x * (r + 1.5f);
                     float sy = iconCenterY + dirs[d].y * (r + 1.5f);
                     float ex = centerX + dirs[d].x * (r + 1.5f + rayLen);
@@ -913,34 +1312,76 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                 }
                 break;
             }
-            case 3:  // 缩小:放大镜 + "-"
-            case 4:
-            default: {  // 放大:放大镜 + "+"
-                float r = half * 0.65f;
-                D2D1_ELLIPSE circle{D2D1::Point2F(centerX - r * 0.3f, iconCenterY - r * 0.3f), r, r};
-                target_->DrawEllipse(circle, iconBrush, kBottomBarIconStrokeWidthDip);
-                target_->DrawLine(
-                    D2D1::Point2F(centerX - r * 0.3f + r * 0.7f, iconCenterY - r * 0.3f + r * 0.7f),
-                    D2D1::Point2F(centerX + half * 0.75f, iconCenterY + half * 0.75f), iconBrush,
-                    kBottomBarIconStrokeWidthDip);
-                float signCx = circle.point.x, signCy = circle.point.y;
-                target_->DrawLine(D2D1::Point2F(signCx - r * 0.45f, signCy),
-                                  D2D1::Point2F(signCx + r * 0.45f, signCy), iconBrush,
-                                  kBottomBarIconStrokeWidthDip);
-                if (i == 4) {
-                    target_->DrawLine(D2D1::Point2F(signCx, signCy - r * 0.45f),
-                                      D2D1::Point2F(signCx, signCy + r * 0.45f), iconBrush,
-                                      kBottomBarIconStrokeWidthDip);
+            case 3:    // 缩小:给定 SVG("A" + 右下角 "-")的精确复刻几何
+            case 4: {  // 放大:给定 SVG("A" + 右下角 "+")的精确复刻几何,
+                       // 首次用到才建、按角色缓存复用(见 zoomInIconGeometry_ /
+                       // zoomOutIconGeometry_ 的注释)。
+                bool isZoomIn = (i == 4);
+                ID2D1PathGeometry*& cached = isZoomIn ? zoomInIconGeometry_ : zoomOutIconGeometry_;
+                if (!cached) cached = BuildZoomFontIconGeometry(isZoomIn);
+                if (cached && iconBrush) {
+                    // 原 SVG viewBox 是 24x24,换算到本图标的正方形绘制区(用
+                    // half*2 而不是固定常量,自动跟随左侧图标缩小 2px 的尺寸)。
+                    float iconBoxSize = half * 2.0f * 1.35f;
+                    float svgScale = iconBoxSize / 24.0f;
+                    float iconLeft = centerX - iconBoxSize * 0.5f;
+                    float iconTop = iconCenterY - iconBoxSize * 0.5f;
+                    target_->SetTransform(D2D1::Matrix3x2F::Scale(svgScale, svgScale) *
+                                          D2D1::Matrix3x2F::Translation(iconLeft, iconTop));
+                    target_->FillGeometry(cached, iconBrush);
+                    target_->SetTransform(D2D1::Matrix3x2F::Identity());
                 }
+                break;
+            }
+            case 5: {  // 查找:放大镜(圆 + 右下角短柄),点击唤起查找条
+                float r = half * 0.55f;
+                D2D1_POINT_2F center = D2D1::Point2F(centerX - half * 0.15f, iconCenterY - half * 0.15f);
+                D2D1_ELLIPSE lens{center, r, r};
+                target_->DrawEllipse(lens, iconBrush, kBottomBarIconStrokeWidthDip);
+                const float kDiag = 0.7071f;
+                D2D1_POINT_2F handleStart{center.x + r * kDiag, center.y + r * kDiag};
+                D2D1_POINT_2F handleEnd{centerX + half * 0.55f, iconCenterY + half * 0.55f};
+                target_->DrawLine(handleStart, handleEnd, iconBrush,
+                                  kBottomBarIconStrokeWidthDip * 1.2f);
+                break;
+            }
+            case kBottomBarCopyPathIndex: {
+                if (pathCopied) {
+                    // 短暂的"已复制"成功态:一个对勾,与代码块复制按钮的
+                    // 反馈图案同一画法(两段折线),只是复用底部栏的单色
+                    // iconBrush,不额外引入绿色刷子。
+                    D2D1_POINT_2F p1 = D2D1::Point2F(centerX - half * 0.5f, iconCenterY);
+                    D2D1_POINT_2F p2 = D2D1::Point2F(centerX - half * 0.1f, iconCenterY + half * 0.4f);
+                    D2D1_POINT_2F p3 = D2D1::Point2F(centerX + half * 0.55f, iconCenterY - half * 0.4f);
+                    target_->DrawLine(p1, p2, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
+                    target_->DrawLine(p2, p3, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
+                } else {
+                    // "复制"图标:与代码块复制按钮同一份画法(DrawCopySheetsGlyph),
+                    // 前纸用底部栏背景色填实,保证两处图标视觉一致。
+                    float iconSize = kBottomBarIconSizeDip;
+                    DrawCopySheetsGlyph(centerX - iconSize * 0.5f, iconCenterY - iconSize * 0.5f,
+                                        iconSize, iconBrush, bgBrush);
+                }
+                break;
+            }
+            case kBottomBarHistoryIndex:
+            default: {  // 历史记录:时钟图标(圆圈 + 12点/3点表针)
+                float r = half * 0.65f;
+                D2D1_ELLIPSE clockCircle{D2D1::Point2F(centerX, iconCenterY), r, r};
+                target_->DrawEllipse(clockCircle, iconBrush, kBottomBarIconStrokeWidthDip);
+                target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
+                                  D2D1::Point2F(centerX, iconCenterY - r * 0.5f), iconBrush,
+                                  kBottomBarIconStrokeWidthDip);
+                target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
+                                  D2D1::Point2F(centerX + r * 0.45f, iconCenterY), iconBrush,
+                                  kBottomBarIconStrokeWidthDip);
                 break;
             }
             }
         }
     }
 
-    // 悬浮提示气泡(2026-09-18 新增,取代常驻文字标签):鼠标落在哪个按钮上
-    // 就在其正上方画一个小文字气泡,移出后(hoverButtonIndex 越界)不画。
-    // 纯 D2D 绘制,不引入 Win32 TOOLTIPS_CLASS 控件——风险更小、改动更集中。
+    // 悬浮提示气泡
     if (fonts_ && textBrush && bgBrush && hoverButtonIndex < kBottomBarButtonCount) {
         const wchar_t* label = kBottomBarTooltipLabels[hoverButtonIndex];
         u32 labelLen = WideLength(label);
@@ -951,9 +1392,10 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
             DWRITE_TEXT_METRICS metrics{};
             tipLayout->GetMetrics(&metrics);
             float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
-            float buttonCenterX =
-                kBottomBarButtonWidthDip * (static_cast<float>(hoverButtonIndex) + 0.5f);
+            float buttonCenterX = centerXs[hoverButtonIndex];
             float bubbleLeft = buttonCenterX - bubbleWidth * 0.5f;
+            if (bubbleLeft < 4.0f) bubbleLeft = 4.0f;
+            if (bubbleLeft + bubbleWidth > targetWidth - 4.0f) bubbleLeft = targetWidth - 4.0f - bubbleWidth;
             float bubbleBottom = barTop - kBottomBarTooltipGapDip;
             float bubbleTop = bubbleBottom - kBottomBarTooltipHeightDip;
             D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
@@ -968,14 +1410,15 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
         }
     }
 
-    // 右侧状态区:显示当前文档路径 + 大小,单行居中于栏高度内。path 为空
-    // (未打开任何文件)时整个状态区不画任何文字,不留占位文案。
+    // 右侧状态区:显示当前文档路径 + 大小
     if (fonts_ && textBrush && documentPath && documentPath[0] != L'\0') {
         wchar_t statusText[MAX_PATH + 40];
         u32 textLen = ComposeBottomBarStatusText(documentPath, documentSizeBytes, statusText,
                                                   MAX_PATH + 40);
-        float statusAreaLeft = kBottomBarButtonWidthDip * static_cast<float>(kBottomBarButtonCount);
-        float statusAreaWidth = targetWidth - statusAreaLeft - kBottomBarStatusPaddingDip;
+        float statusAreaLeft = btnW * static_cast<float>(kBottomBarLeftButtonCount);
+        // hasDocument 为 true 时 CopyPath 按钮占用一个额外的右侧位置。
+        float statusAreaRight = targetWidth - btnW * (hasDocument ? 2.0f : 1.0f);
+        float statusAreaWidth = statusAreaRight - statusAreaLeft - kBottomBarStatusPaddingDip;
         if (statusAreaWidth > 0.0f) {
             IDWriteTextLayout* statusLayout = fonts_->CreateTextLayout(
                 statusText, textLen, FontRole::Body, statusAreaWidth, kBottomBarHeightDip);
@@ -1051,10 +1494,18 @@ void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float 
     // 悬浮:先铺一层浅灰圆角底,盖住代码块背景,底色本身就是悬浮反馈。
     if (hovered && hoverBgBrush) target_->FillRoundedRectangle(roundedBox, hoverBgBrush);
 
-    if (!iconBrush) return;
+    DrawCopySheetsGlyph(left, top, size, iconBrush, paperBrush);
+}
 
-    // "复制"图标 = 两张叠压的圆角纸:后面那张只露出左上一角,前面那张先用
-    // 纸面色填实再描边,叠压关系因此清晰可辨(纯几何,不依赖任何字体字形)。
+// "复制"图标本体(T45,2026-09-19 抽成公共函数供底部栏复制路径按钮复用):
+// 两张叠压的圆角纸——后面那张只露出左上一角,前面那张先用纸面色填实再描边,
+// 叠压关系因此清晰可辨(纯几何,不依赖任何字体字形)。
+void Renderer::DrawCopySheetsGlyph(float left, float top, float size,
+                                    ID2D1SolidColorBrush* strokeBrush,
+                                    ID2D1SolidColorBrush* paperBrush) {
+    if (!target_ || !strokeBrush || size <= 0.0f) return;
+
+    float stroke = size * kCopyStrokeWidthRatio;
     float sheetRadius = size * kCopySheetCornerRadiusRatio;
     D2D1_ROUNDED_RECT backSheet = D2D1::RoundedRect(
         D2D1::RectF(left + size * kCopyBackSheetLeftRatio, top + size * kCopyBackSheetTopRatio,
@@ -1067,9 +1518,9 @@ void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float 
                     top + size * kCopyFrontSheetBottomRatio),
         sheetRadius, sheetRadius);
 
-    target_->DrawRoundedRectangle(backSheet, iconBrush, stroke);
+    target_->DrawRoundedRectangle(backSheet, strokeBrush, stroke);
     if (paperBrush) target_->FillRoundedRectangle(frontSheet, paperBrush);
-    target_->DrawRoundedRectangle(frontSheet, iconBrush, stroke);
+    target_->DrawRoundedRectangle(frontSheet, strokeBrush, stroke);
 }
 
 void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush) {
@@ -1470,7 +1921,8 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
                             float leftPaddingDip, const ShellOverlay* overlay,
                             bool mainScrollbarActive, const wchar_t* documentPath,
-                            u64 documentSizeBytes, u32 bottomBarHoverButtonIndex) {
+                            u64 documentSizeBytes, u32 bottomBarHoverButtonIndex,
+                            bool bottomBarPathCopied) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -1494,9 +1946,12 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* selectionBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarBgBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* findBarBgBrush = nullptr;
+    ID2D1SolidColorBrush* findBarTextBrush = nullptr;
     ID2D1SolidColorBrush* outlineHighlightBgBrush = nullptr;
     ID2D1SolidColorBrush* outlineHighlightTextBrush = nullptr;
     ID2D1SolidColorBrush* outlineOverlayMaskBrush = nullptr;
+    ID2D1SolidColorBrush* historyRowButtonBgBrush = nullptr;
     // 大纲侧栏底色改跟正文背景同色(浅色主题白底黑字、深色主题黑底白字),
     // 不再借用查找条那套固定深色浮出条配色——蒙层已经把侧栏之外的正文
     // 压暗,侧栏本身用主题背景色天然就能在视觉上分离出来。
@@ -1530,16 +1985,25 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->selectionHighlight, &selectionBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarBackground, &overlayBarBgBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarText, &overlayBarTextBrush);
+    target_->CreateSolidColorBrush(palette_->findBarBackground, &findBarBgBrush);
+    target_->CreateSolidColorBrush(palette_->findBarText, &findBarTextBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightBackground, &outlineHighlightBgBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
+    target_->CreateSolidColorBrush(palette_->historyRowButtonBackground, &historyRowButtonBgBrush);
 
-    // Fade-in / fade-out alpha animation for outline mask overlay.
+    // Fade-in / fade-out alpha animation for outline & history mask overlay.
     //
-    // 大纲蒙层淡入淡出透明度动画。
+    // 大纲及历史记录蒙层淡入淡出透明度动画。
     D2D1_COLOR_F maskColor = palette_->outlineOverlayMaskBackground;
-    float animProgress = (overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0)
-                             ? overlay_->outlineAnimProgress
-                             : 0.0f;
+    float animProgress = 0.0f;
+    if (overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0 &&
+        overlay_->outlineAnimProgress > animProgress) {
+        animProgress = overlay_->outlineAnimProgress;
+    }
+    if (overlay_ && overlay_->historyEntries && overlay_->historyItemCount > 0 &&
+        overlay_->historyAnimProgress > animProgress) {
+        animProgress = overlay_->historyAnimProgress;
+    }
     if (animProgress < 0.0f) animProgress = 0.0f;
     if (animProgress > 1.0f) animProgress = 1.0f;
     maskColor.a *= animProgress;
@@ -1605,17 +2069,18 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // 大纲侧栏打开时正文整块被蒙层盖住、也不可滚动(见 window.cpp 的
-    // WM_MOUSEWHEEL/WM_LBUTTONDOWN 对应改动),此时正文滚动条不画——盖着
-    // 蒙层的滑块既看不清楚也不该被当成可交互控件。
-    bool outlineOpen = overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0;
+    // 大纲或历史侧栏打开时正文整块被蒙层盖住、也不可滚动，此时正文滚动条不画。
+    bool outlineOpen = overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0 &&
+                       overlay_->outlineAnimProgress > 0.0001f;
+    bool historyOpen = overlay_ && overlay_->historyEntries && overlay_->historyItemCount > 0 &&
+                       overlay_->historyAnimProgress > 0.0001f;
 
     // 正文滚动条(方案A,替代原生 WS_VSCROLL):内容超过一屏就画,不依赖
     // overlay_ 是否为空(除了上面这条"侧栏打开时隐藏"的例外)。scrollY/
     // leftPaddingDip 已经是外壳层减去过 kContentPaddingDip 的"有效滚动偏移",
     // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
     // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
-    if (!outlineOpen) {
+    if (!outlineOpen && !historyOpen) {
         float scrollbarHeight = targetSize.height - kBottomBarHeightDip;
         if (scrollbarHeight < 0.0f) scrollbarHeight = 0.0f;
         // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
@@ -1629,7 +2094,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     }
 
     // 底部操作栏(常驻,不依赖 overlay_ 是否为空——它不是可选叠加层)。画在
-    // 正文/滚动条之后、蒙层与查找条/侧栏之前,这样大纲侧栏打开时蒙层能盖住
+    // 正文/滚动条之后、蒙层与查找条/侧栏之前,这样大纲/历史侧栏打开时蒙层能盖住
     // 底部栏(裁决:蒙层应完整遮住正文可交互区域,底部栏也不例外)。
     {
         ID2D1SolidColorBrush* bottomBarBgBrush = nullptr;
@@ -1642,7 +2107,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         target_->CreateSolidColorBrush(palette_->bottomBarDivider, &bottomBarDividerBrush);
         DrawBottomBar(targetSize.width, targetSize.height, bottomBarBgBrush, bottomBarIconBrush,
                       bottomBarTextBrush, bottomBarDividerBrush, documentPath, documentSizeBytes,
-                      bottomBarHoverButtonIndex);
+                      bottomBarHoverButtonIndex, bottomBarPathCopied);
         if (bottomBarBgBrush) bottomBarBgBrush->Release();
         if (bottomBarIconBrush) bottomBarIconBrush->Release();
         if (bottomBarTextBrush) bottomBarTextBrush->Release();
@@ -1653,9 +2118,9 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (overlay_) {
         float topOffset = 0.0f;
         if (overlay_->findBarVisible) {
-            wchar_t bar[kMaxOverlayBarChars];
-            u32 len = ComposeFindBarText(overlay_, bar, kMaxOverlayBarChars);
-            DrawOverlayBar(targetSize.width, bar, len, overlayBarBgBrush, overlayBarTextBrush, 0.0f);
+            wchar_t status[kMaxOverlayBarChars];
+            u32 len = ComposeFindBarStatusText(overlay_, status, kMaxOverlayBarChars);
+            DrawFindBar(targetSize.width, status, len, findBarBgBrush, findBarTextBrush);
             topOffset = kOverlayBarStackStepDip;
         }
         if (overlay_->statusMessage && overlay_->statusMessage[0] != 0) {
@@ -1666,14 +2131,19 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         // 大纲侧栏打开时先盖一层半透明蒙层(盖住侧栏外的正文区域,聚焦视觉
         // 到侧栏本身),再画侧栏——侧栏必须最后画,否则会被蒙层盖住。
         DrawOutlineOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
-        // 大纲侧栏底色/文字色跟随主题(palette_->background/text),与正文
-        // 保持一致(浅色主题白底黑字、深色主题黑底白字),不再借用查找条的
-        // 固定深色浮出条配色;当前阅读位置高亮仍用专门的高亮槽位。
         bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
         DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
                          outlineHighlightBgBrush, outlineHighlightTextBrush,
                          scrollbarTrackIdleBrush,
                          outlineScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
+
+        // 历史记录侧栏 (右抽屉)
+        DrawHistoryOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
+        bool historyScrollbarActive = overlay_->historyScrollbarActive;
+        DrawHistoryPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
+                         outlineHighlightBgBrush, historyRowButtonBgBrush,
+                         scrollbarTrackIdleBrush,
+                         historyScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
     }
 
     if (textBrush) textBrush->Release();
@@ -1694,7 +2164,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (selectionBrush) selectionBrush->Release();
     if (overlayBarBgBrush) overlayBarBgBrush->Release();
     if (overlayBarTextBrush) overlayBarTextBrush->Release();
+    if (findBarBgBrush) findBarBgBrush->Release();
+    if (findBarTextBrush) findBarTextBrush->Release();
     if (outlineHighlightBgBrush) outlineHighlightBgBrush->Release();
+    if (historyRowButtonBgBrush) historyRowButtonBgBrush->Release();
     if (outlineHighlightTextBrush) outlineHighlightTextBrush->Release();
     if (outlineOverlayMaskBrush) outlineOverlayMaskBrush->Release();
     if (outlinePanelBgBrush) outlinePanelBgBrush->Release();

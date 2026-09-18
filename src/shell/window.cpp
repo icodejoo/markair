@@ -2,6 +2,7 @@
 
 #include <new>         // placement new(T63 侧栏在 outlineArena 上就地构造 OutlinePanel)
 #include <dwmapi.h>    // DwmSetWindowAttribute(T48 标题栏深浅色,/DELAYLOAD)
+#include <imm.h>       // ImmAssociateContextEx(主窗口按窗口关闭 IME,见下方说明)
 #include <uxtheme.h>   // SetWindowTheme(原生滚动条深浅色,/DELAYLOAD)
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
 #include <cwchar>      // wcscmp
@@ -10,6 +11,7 @@
 #include "../render/theme.h"  // kLightPalette/kDarkPalette/kDarkBackgroundRgb
 #include "../util/str.h"      // Utf8ToUtf16(T80 选区复制)
 #include "bottom_bar.h"        // 底部操作栏(新需求):几何/命中测试
+#include "find_bar.h"          // 查找条几何(2026-09-19 改版:原生 EDIT 子窗口定位)
 #include "open_dialog.h"       // 底部栏"打开文档"按钮:IFileOpenDialog + 新开进程
 
 namespace mdvn {
@@ -51,12 +53,23 @@ constexpr UINT_PTR kBenchLoopTimerId = 4;
 // 真正跑完一轮消息循环,不与自身重叠。
 constexpr UINT kBenchLoopIntervalMs = 30;
 
-// Outline drawer slide & mask fade animation timer ID and parameters.
+// Outline & History drawer slide & mask fade animation timer ID and parameters.
 //
-// 大纲侧栏滑动与蒙层淡入淡出动画的定时器 ID 及参数。
+// 大纲及历史记录侧栏滑动与蒙层淡入淡出动画的定时器 ID 及参数。
 constexpr UINT_PTR kOutlineAnimTimerId = 5;
+constexpr UINT_PTR kHistoryAnimTimerId = 6;
 constexpr UINT kOutlineAnimIntervalMs = 16;       // ~60 FPS
 constexpr float kOutlineAnimDurationMs = 180.0f;  // 180 ms transition / 180毫秒过渡时长
+
+// Debounce timer for persisting recent-files history to disk: matches the
+// existing window-geometry pattern (kWindowGeometryTimerId above) — clicking
+// several in-document links in quick succession must not fsync once per
+// click, only once 500ms after the last one.
+//
+// 历史记录写盘的去抖定时器,与上面窗口矩形去抖同一手法——连续点击好几个
+// 文档内链接时不应该每次点击都落一次盘,只在最后一次点击 500ms 后写一次。
+constexpr UINT_PTR kRecentFilesSaveTimerId = 7;
+constexpr UINT kRecentFilesSaveDebounceMs = 500;
 
 // T56:枚举显示器/已有本程序窗口时的固定容量上限,均放在栈上,不做动态分配。
 // 显示器 16 个、已有窗口 32 个,远超真实使用场景(验收要求"连开 5 个窗口"),
@@ -73,6 +86,26 @@ bool g_classRegistered = false;
 // 释放(POD 全局,零初始化,无副作用构造)。
 HBRUSH g_darkBackgroundBrush = nullptr;
 
+// 查找条 EDIT 子窗口的控件 ID(WM_COMMAND 的 LOWORD(wparam) 据此识别来源)。
+constexpr int kFindEditControlId = 101;
+
+// 查找条 EDIT 子窗口的背景刷,跟随亮/暗主题(与 render/theme.h 的
+// kLightPalette.findBarBackground / kDarkPalette.findBarBackground 同一份
+// 数值),各主题一份、懒创建,进程退出前由 ReleaseMainWindowClassResources
+// 释放。数值是编译期常量,不必每帧重建,切主题也只是换选用哪一支。
+HBRUSH g_findEditBgBrushLight = nullptr;
+HBRUSH g_findEditBgBrushDark = nullptr;
+
+// Convert a D2D1_COLOR_F (0~1 float channels) to a GDI COLORREF, dropping
+// alpha (GDI brushes/text color have no alpha channel).
+//
+// D2D1_COLOR_F(0~1 浮点通道)转成 GDI 的 COLORREF,忽略 alpha(GDI 画刷/
+// 文字色不支持透明通道)。
+COLORREF ColorFToColorRef(const D2D1_COLOR_F& c) {
+    return RGB(static_cast<BYTE>(c.r * 255.0f + 0.5f), static_cast<BYTE>(c.g * 255.0f + 0.5f),
+               static_cast<BYTE>(c.b * 255.0f + 0.5f));
+}
+
 // DWMWA_USE_IMMERSIVE_DARK_MODE 的两个历史取值:20 是 Win10 2004+/Win11 的
 // 正式值,19 是 Win10 1809~1903 过渡期用的旧值。自行定义而不依赖 SDK 里的
 // 同名宏,是因为旧版 SDK 头文件可能压根没有这个符号(与本文件里
@@ -83,6 +116,74 @@ constexpr DWORD kDwmwaUseImmersiveDarkModeLegacy = 19;
 // 从窗口句柄取回绑定的运行期状态;尚未绑定(WM_NCCREATE 之前)时返回 nullptr。
 WindowState* StateOf(HWND hwnd) {
     return reinterpret_cast<WindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+}
+
+// 查找条 EDIT 子窗口的子类过程,把 Enter/Esc/F3/Shift+F3 这几个"查找条自己的
+// 快捷键"转发给父窗口(与主窗口 WM_KEYDOWN 分支同一套处理,不重复实现),
+// 其余按键原样交给系统默认 EDIT 过程(光标移动/选区/剪贴板/IME 全部免费)。
+// 原始 EDIT 过程指针存在该子窗口自己的 GWLP_USERDATA 上——EDIT 控件本身不用
+// 这个字段,借用它不会跟系统冲突,与主窗口用同一字段存 WindowState* 是两个
+// 不同 HWND,互不影响。
+LRESULT CALLBACK FindEditSubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    WNDPROC orig = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_KEYDOWN &&
+        (wparam == VK_RETURN || wparam == VK_ESCAPE || wparam == VK_F3)) {
+        HWND parent = GetParent(hwnd);
+        if (parent) SendMessageW(parent, WM_KEYDOWN, wparam, lparam);
+        return 0;
+    }
+    // 查找条 EDIT 一旦拿到焦点,主窗口再也收不到 WM_KEYDOWN——之前"查找条自己
+    // 的几个键"之外的全局快捷键(Ctrl+W 关窗口、Ctrl+Shift+T 切主题、Ctrl+\
+    // 切大纲侧栏、Ctrl+=/-/0 缩放、F5 重新加载等)全部失效。这里按"白名单"
+    // 转发这几个具体的全局快捷键给父窗口走同一套 WM_KEYDOWN 分支,其余按键
+    // (含 Ctrl+Home/End/Left/Right/Backspace 这些 EDIT 自带的单词级导航/
+    // 编辑组合键)一律交给默认 EDIT 过程处理。
+    //
+    // 代码评审(2026-09-19)发现:原先是"黑名单"写法(排除 Ctrl+A/C/V/X/Y/Z
+    // 之外的所有 Ctrl 组合键都转发),误伤了 Ctrl+Home/End/Left/Right/
+    // Backspace 这些 EDIT 控件自己的单词导航/删词快捷键——找不到新按键出现
+    // 就会漏转发的问题,改成显式列出真正需要转发的这几个全局快捷键,与
+    // 下面主窗口 WM_KEYDOWN 分支里出现的按键一一对应,不会因为将来 EDIT
+    // 支持了什么新组合键而重新踩坑。
+    //
+    // Once the find EDIT control has keyboard focus, the main window never
+    // sees WM_KEYDOWN again — every global shortcut other than the find
+    // bar's own keys (Ctrl+W close window, Ctrl+Shift+T theme toggle,
+    // Ctrl+\ outline toggle, Ctrl+=/-/0 zoom, F5 reload, etc.) silently
+    // stopped working. Forward exactly these specific global shortcuts to
+    // the parent's same WM_KEYDOWN switch by an explicit allowlist; every
+    // other key (including Ctrl+Home/End/Left/Right/Backspace, the EDIT
+    // control's own word-navigation/word-delete combos) goes to the default
+    // EDIT proc.
+    //
+    // Code review (2026-09-19) found: the previous denylist approach
+    // (forward every Ctrl-combo except A/C/V/X/Y/Z) also swallowed
+    // Ctrl+Home/End/Left/Right/Backspace, breaking word navigation/delete
+    // inside the find box. Switched to an explicit allowlist matching the
+    // main window's WM_KEYDOWN branches below, so it can't regress again
+    // just because the EDIT control starts using some new combo.
+    if (msg == WM_KEYDOWN) {
+        bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        bool isGlobalShortcut =
+            (!ctrlDown && wparam == VK_F5) ||
+            (ctrlDown && !shiftDown && wparam == 'W') ||
+            (ctrlDown && !shiftDown &&
+             (wparam == VK_OEM_PLUS || wparam == VK_OEM_MINUS || wparam == '0')) ||
+            (ctrlDown && !shiftDown && wparam == VK_OEM_5) ||
+            (ctrlDown && shiftDown && wparam == 'T');
+        if (isGlobalShortcut) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessageW(parent, WM_KEYDOWN, wparam, lparam);
+            return 0;
+        }
+    }
+    if (msg == WM_CHAR && (wparam == VK_RETURN || wparam == VK_ESCAPE)) {
+        // 吞掉这两个键对应的 WM_CHAR,否则默认 EDIT 过程会当成"未处理的
+        // 控制字符"发出系统提示音(单行 EDIT 对 Enter/Esc 没有默认动作)。
+        return 0;
+    }
+    return CallWindowProcW(orig, hwnd, msg, wparam, lparam);
 }
 
 // T48:切标题栏深浅色。按官方口径先试
@@ -172,6 +273,9 @@ void CycleTheme(HWND hwnd, WindowState* state) {
     state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
     ApplyTitleBarTheme(hwnd, isDark);
     InvalidateRect(hwnd, nullptr, FALSE);
+    // 查找条 EDIT 子窗口是独立 HWND,上面这行 InvalidateRect 不会连带失效它;
+    // 主题热切换时要单独让它重绘一次,否则背景色会停在切换前的旧主题。
+    if (state->findEditHwnd) InvalidateRect(state->findEditHwnd, nullptr, TRUE);
     if (state->onWindowGeometryChanged) {
         state->onWindowGeometryChanged(state->callbackUserData);
     }
@@ -188,6 +292,148 @@ float DipScaleOf(HWND hwnd) {
     UINT dpi = getDpi(hwnd);
     if (dpi == 0) return 1.0f;
     return static_cast<float>(dpi) / static_cast<float>(kBaselineDpi);
+}
+
+/**
+ * Reposition the native find-bar EDIT child to match the current
+ * ComputeFindBarLayout geometry (client size / DPI changed).
+ *
+ * 按当前 ComputeFindBarLayout 几何重新定位查找条的原生 EDIT 子窗口
+ * (客户区尺寸或 DPI 变化后调用)。
+ *
+ * @param hwnd 主窗口句柄。
+ *
+ *   主窗口句柄。
+ *
+ * @param state 运行期状态,findEditHwnd 为空时静默返回。
+ *
+ *   运行期状态,findEditHwnd 为空时静默返回。
+ *
+ * @example RepositionFindEdit(hwnd, state);
+ */
+void RepositionFindEdit(HWND hwnd, WindowState* state) {
+    if (!state || !state->findEditHwnd) return;
+    float scale = DipScaleOf(hwnd);
+    FindBarLayout layout = ComputeFindBarLayout(ClientWidthDip(hwnd), 0.0f);
+    int x = static_cast<int>(layout.editLeft * scale + 0.5f);
+    int y = static_cast<int>(layout.editTop * scale + 0.5f);
+    int w = static_cast<int>(layout.editWidth * scale + 0.5f);
+    int h = static_cast<int>(layout.editHeight * scale + 0.5f);
+    SetWindowPos(state->findEditHwnd, HWND_TOP, x, y, w, h, SWP_NOACTIVATE);
+
+    // EDIT 控件字号跟 DIP 缩放走,与 renderer.cpp 画的"查找:"前缀/状态文字
+    // 用同一个 kFindBarFontSizeDip,DPI 变化(含窗口拖到不同显示器)时字号
+    // 要跟着重算,否则会跟旁边 D2D 画的文字大小不一致。RepositionFindEdit
+    // 本身在纯尺寸变化(WM_SIZE)时也会被频繁调用(拖边框时一秒内触发多次),
+    // scale 没变就不用重新 CreateFontIndirectW/DeleteObject 一次 GDI 字体
+    // 对象——按 findEditFontScale 缓存的上一次缩放系数判断是否真的需要重建。
+    if (state->findEditFontScale != scale) {
+        HFONT oldFont = reinterpret_cast<HFONT>(SendMessageW(state->findEditHwnd, WM_GETFONT, 0, 0));
+        LOGFONTW lf{};
+        lf.lfHeight = -static_cast<LONG>(kFindBarFontSizeDip * scale + 0.5f);
+        lf.lfWeight = FW_NORMAL;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI");
+        HFONT newFont = CreateFontIndirectW(&lf);
+        if (newFont) {
+            SendMessageW(state->findEditHwnd, WM_SETFONT, reinterpret_cast<WPARAM>(newFont), TRUE);
+            if (oldFont) DeleteObject(oldFont);
+            state->findEditFontScale = scale;
+        }
+    }
+}
+
+/**
+ * Close the find session and hide/reset the native EDIT child in one call,
+ * so every VK_ESCAPE / Ctrl+W / document-swap close path stays in sync.
+ *
+ * 一次性关掉查找会话并隐藏/清空原生 EDIT 子窗口,让"关闭查找条"的每个触发
+ * 点(Esc、Ctrl+W、换文档)都不会漏掉子窗口这一半状态。
+ *
+ * @param hwnd 主窗口句柄,焦点收回给它。
+ *
+ *   主窗口句柄,关闭后把键盘焦点收回给它。
+ *
+ * @param state 运行期状态,find/findEditHwnd 任一为空时对应部分静默跳过。
+ *
+ *   运行期状态,find/findEditHwnd 任一为空时对应部分静默跳过。
+ *
+ * @example CloseFindUi(hwnd, state);
+ */
+void CloseFindUi(HWND hwnd, WindowState* state) {
+    if (!state) return;
+    if (state->findEditHwnd) {
+        // SetWindowTextW 会对原生 EDIT 控件同步派发 EN_CHANGE,命中 WM_COMMAND
+        // 里的"查询串变了"分支并调用 FindSession::SetQuery,而 SetQuery 总是
+        // 把 dirty_ 置回 true——如果先调用 find->Close()(dirty_=false)再执行
+        // 这一步,关闭后 Dirty() 会被这次同步回调重新置脏。因此把 find->Close()
+        // 挪到 SetWindowTextW 之后,确保"关闭 = 不脏"这个不变式在函数返回时
+        // 始终成立(与 OpenFindUi 里 2026-09-19 那次评审记录的是同一个坑)。
+        //
+        // SetWindowTextW synchronously dispatches EN_CHANGE on a plain EDIT
+        // control, hitting the "query changed" branch in WM_COMMAND, which
+        // calls FindSession::SetQuery — and SetQuery always sets dirty_ back
+        // to true. Calling find->Close() (dirty_=false) before this line
+        // would let that synchronous callback re-dirty the session right
+        // after closing. Moving find->Close() to run after SetWindowTextW
+        // keeps the "closed implies not dirty" invariant true when this
+        // function returns (the same pitfall recorded for OpenFindUi in the
+        // 2026-09-19 review note above).
+        SetWindowTextW(state->findEditHwnd, L"");
+        ShowWindow(state->findEditHwnd, SW_HIDE);
+    }
+    if (state->find) state->find->Close();
+    if (GetFocus() == state->findEditHwnd) SetFocus(hwnd);
+}
+
+/**
+ * Open the find bar and hand keyboard focus to its native EDIT child, with
+ * any existing query text selected. Shared by Ctrl+F and the bottom-bar
+ * magnifying-glass button so both trigger the exact same behavior.
+ *
+ * 打开查找条并把键盘焦点交给原生 EDIT 子窗口,已有查询串全选——Ctrl+F 与
+ * 底部栏放大镜按钮共用这一个函数,保证两个入口行为完全一致。
+ *
+ * @param hwnd 主窗口句柄。
+ *
+ *   主窗口句柄。
+ *
+ * @param state 运行期状态,find 为空时静默返回。
+ *
+ *   运行期状态,find 为空时静默返回。
+ *
+ * @example OpenFindUi(hwnd, state);
+ */
+void OpenFindUi(HWND hwnd, WindowState* state) {
+    if (!state || !state->find) return;
+    // 代码评审(2026-09-19)发现:Ctrl+F/放大镜按钮在查找条已经打开时会
+    // 再次触发这里,SetWindowTextW 重写同样的查询串会同步派发 EN_CHANGE,
+    // 命中 WM_COMMAND 里的"查询串变了就清空匹配列表"分支,把用户已经搜到
+    // 的 x/y 结果清空成 0/0——查找条已经可见时提前返回,不重复这一整套
+    // 初始化,只把焦点交回去、重选文字,与真正首次打开区分开。
+    //
+    // Code review (2026-09-19) found: Ctrl+F / the magnifier button re-enters
+    // here even when the find bar is already open. Re-writing the same query
+    // text via SetWindowTextW synchronously fires EN_CHANGE, hitting the
+    // "query changed -> clear matches" branch in WM_COMMAND and wiping the
+    // x/y result the user already had, down to 0/0. Bail out early once the
+    // bar is already visible — just re-focus and re-select, don't repeat the
+    // full open sequence.
+    if (state->findEditHwnd && IsWindowVisible(state->findEditHwnd)) {
+        SetFocus(state->findEditHwnd);
+        SendMessageW(state->findEditHwnd, EM_SETSEL, 0, -1);
+        return;
+    }
+    state->find->Open();
+    state->statusMessage = nullptr;
+    if (state->findEditHwnd) {
+        RepositionFindEdit(hwnd, state);
+        SetWindowTextW(state->findEditHwnd, state->find->Query());
+        ShowWindow(state->findEditHwnd, SW_SHOW);
+        SetFocus(state->findEditHwnd);
+        SendMessageW(state->findEditHwnd, EM_SETSEL, 0, -1);
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 // T56:取一个近似的"新窗口所在显示器"DPI 缩放系数,用于把 kCascadeOffsetDip
@@ -439,9 +685,176 @@ void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
         state->outlineAnimStartProgress = state->outlineAnimProgress;
     }
 
+    // If history drawer is open/opening, smoothly close it
+    if (state->historyAnimState == SidebarAnimState::Open ||
+        state->historyAnimState == SidebarAnimState::Opening) {
+        state->historyAnimState = SidebarAnimState::Closing;
+        state->historyAnimStartTick = GetTickCount64();
+        state->historyAnimStartProgress = state->historyAnimProgress;
+        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
     state->outlineAnimState = OutlineAnimState::Opening;
     state->outlineAnimStartTick = GetTickCount64();
     SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+/**
+ * Toggle history sidebar drawer (right side) with slide animation.
+ *
+ * 切换右侧历史记录抽屉侧栏的展开/收起状态（带滑动与蒙层动画）。
+ *
+ * @param hwnd Window handle.
+ *
+ *   窗口句柄。
+ *
+ * @param state Pointer to WindowState.
+ *
+ *   指向窗口运行期状态的指针。
+ */
+void ToggleHistoryPanel(HWND hwnd, WindowState* state) {
+    if (!state) return;
+
+    if (state->historyAnimState == SidebarAnimState::Open ||
+        state->historyAnimState == SidebarAnimState::Opening) {
+        state->historyAnimState = SidebarAnimState::Closing;
+        state->historyAnimStartTick = GetTickCount64();
+        state->historyAnimStartProgress = state->historyAnimProgress;
+        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    if (state->historyAnimState == SidebarAnimState::Closed) {
+        state->historyAnimStartProgress = 0.0f;
+        state->historyAnimProgress = 0.0f;
+        state->historyScrollY = 0.0f;
+        state->historyHoverIndex = kInvalidIndex;
+        if (state->historyPanelWidthDip <= 0.0f) {
+            state->historyPanelWidthDip = kSidebarDefaultWidthDip;
+        }
+    } else {
+        state->historyAnimStartProgress = state->historyAnimProgress;
+    }
+
+    // If outline drawer is open/opening, smoothly close it
+    if (state->outlineAnimState == OutlineAnimState::Open ||
+        state->outlineAnimState == OutlineAnimState::Opening) {
+        state->outlineAnimState = OutlineAnimState::Closing;
+        state->outlineAnimStartTick = GetTickCount64();
+        state->outlineAnimStartProgress = state->outlineAnimProgress;
+        KillTimer(hwnd, kOutlineHighlightTimerId);
+        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
+    state->historyAnimState = SidebarAnimState::Opening;
+    state->historyAnimStartTick = GetTickCount64();
+    SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+/**
+ * Handle user clicking on a recent file entry in history sidebar.
+ * If file exists, launch in new instance; if missing, prompt to delete.
+ *
+ * 处理用户点击历史记录侧栏条目事件。
+ * 若文件存在则新窗口打开；若不存在则弹窗询问是否删除。
+ *
+ * @param hwnd Window handle.
+ *
+ *   窗口句柄。
+ *
+ * @param state Pointer to WindowState.
+ *
+ *   指向窗口运行期状态的指针。
+ *
+ * @param item History entry index.
+ *
+ *   历史记录条目下标。
+ */
+void OnHistoryItemClicked(HWND hwnd, WindowState* state, u32 item) {
+    if (!state || !state->recentFiles || item >= state->recentFiles->count) return;
+
+    const wchar_t* path = state->recentFiles->entries[item].path;
+    if (MarkdownFileExists(path)) {
+        if (!LaunchNewInstance(path)) {
+            state->statusMessage = L"打开新窗口失败";
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+    } else {
+        ConfirmAndRemoveMissingHistoryEntry(hwnd, state, item);
+    }
+}
+
+/**
+ * Open the folder containing a history entry's file in Explorer, with the
+ * file itself selected. If the file no longer exists, falls back to the
+ * exact same "file missing, delete from history?" flow as a normal failed
+ * open (OnHistoryItemClicked's missing-file branch) — same failure handling,
+ * not a separate dialog.
+ *
+ * 在系统文件管理器里打开某条历史条目文件所在的文件夹，并选中该文件。若文件
+ * 已不存在，走与普通打开失败(OnHistoryItemClicked 的文件缺失分支)完全相同的
+ * "文件不存在，是否从历史记录中删除？"流程——同一套失败处理，不另造弹窗。
+ *
+ * @param hwnd Window handle.
+ *
+ *   窗口句柄。
+ *
+ * @param state Pointer to WindowState.
+ *
+ *   指向窗口运行期状态的指针。
+ *
+ * @param item History entry index whose folder to open.
+ *
+ *   要打开所在文件夹的历史记录条目下标。
+ */
+void OnHistoryItemOpenFolderClicked(HWND hwnd, WindowState* state, u32 item) {
+    if (!state || !state->recentFiles || item >= state->recentFiles->count) return;
+
+    const wchar_t* path = state->recentFiles->entries[item].path;
+    if (MarkdownFileExists(path)) {
+        if (!OpenContainingFolderAndSelect(path)) {
+            state->statusMessage = L"打开文件夹失败";
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+    } else {
+        ConfirmAndRemoveMissingHistoryEntry(hwnd, state, item);
+    }
+}
+
+/**
+ * Delete a history entry via its per-row hover close button. Unlike
+ * OnHistoryItemClicked, this never opens the file and never confirms —
+ * clicking the explicit "X" button is itself the confirmation.
+ *
+ * 通过某一行悬浮出现的关闭按钮删除该历史条目。与 OnHistoryItemClicked 不同,
+ * 这里永不打开文件、也不弹确认框——点击这个明确的"X"按钮本身即是确认。
+ *
+ * @param hwnd Window handle.
+ *
+ *   窗口句柄。
+ *
+ * @param state Pointer to WindowState.
+ *
+ *   指向窗口运行期状态的指针。
+ *
+ * @param item History entry index to remove.
+ *
+ *   要删除的历史记录条目下标。
+ */
+void OnHistoryItemDeleteClicked(HWND hwnd, WindowState* state, u32 item) {
+    if (!state || !state->recentFiles || item >= state->recentFiles->count) return;
+
+    RemoveRecentFileAt(state->recentFiles, item);
+    // 走去抖写盘,避免连续点击多行删除按钮时每次都同步读写一次磁盘。
+    //
+    // Route through the debounced save to avoid a synchronous disk
+    // read/write on every click when the user deletes several rows in a row.
+    RequestRecentFilesSave(hwnd, state);
+    // 删除后原下标的行不再存在,悬浮态按旧下标去比对会指错行,直接清空。
+    state->historyHoverIndex = kInvalidIndex;
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -568,6 +981,26 @@ void OnCodeCopyButtonClicked(HWND hwnd, WindowState* state, u32 blockIndex) {
     state->copyButtonCopied = blockIndex;
     // 同一个定时器 ID 重复 SetTimer 会重置计时(不会堆积多个定时器),
     // 因此连续点多个按钮时只有最后一次的反馈态,时长也从最后一次重新算。
+    SetTimer(hwnd, kCopyFeedbackTimerId, kCopyFeedbackDurationMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// Bottom-bar "copy path" button -> copies the current document's full path,
+// sharing the same "copied" feedback timer (kCopyFeedbackTimerId /
+// kCopyFeedbackDurationMs) as the code-block copy buttons. The button is
+// hidden and never hit-tested when no document is open, so the empty-path
+// check here is defensive (should never actually be reached).
+//
+// 底部栏"复制路径"按钮 -> 复制当前文档全路径,与代码块复制按钮共用同一套
+// "已复制"反馈态定时器(kCopyFeedbackTimerId/kCopyFeedbackDurationMs)。
+// 未打开文档时该按钮不显示、也不会被命中测试选中,这里的空路径判断是
+// 防御性的(理论上不会被调用到)。
+void OnBottomBarCopyPathClicked(HWND hwnd, WindowState* state) {
+    if (!state || state->currentDocumentPath[0] == 0) return;
+    u32 len = static_cast<u32>(wcslen(state->currentDocumentPath));
+    if (!SetClipboardUnicodeText(hwnd, state->currentDocumentPath, len)) return;
+
+    state->bottomBarPathCopied = true;
     SetTimer(hwnd, kCopyFeedbackTimerId, kCopyFeedbackDurationMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
@@ -744,7 +1177,7 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
             if (state->history) state->history->PushNavigation(oldPath, oldScrollY);
             CopyTruncatedPath(state->currentDocumentPath, kHistoryPathCapacity, fullPath);
             // 新文档从头开始看;旧文档的查找结果指向的是旧的块下标,必须一并作废。
-            if (state->find) state->find->Close();
+            CloseFindUi(hwnd, state);
             // T45:复制按钮的悬浮/已复制态同样是按旧文档的块下标记的,换文档后
             // 那个下标在新文档里可能是别的块,必须一并作废。
             state->copyButtonHover = kInvalidIndex;
@@ -804,7 +1237,7 @@ void NavigateHistoryDirection(HWND hwnd, WindowState* state, bool isBack) {
 
     CopyTruncatedPath(state->currentDocumentPath, kHistoryPathCapacity, entry.path);
     state->statusMessage = nullptr;
-    if (state->find) state->find->Close();
+    CloseFindUi(hwnd, state);
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
     KillTimer(hwnd, kCopyFeedbackTimerId);
@@ -860,7 +1293,7 @@ void ReloadCurrentDocument(HWND hwnd, WindowState* state) {
     state->statusMessage = nullptr;
     // 查找结果与复制按钮悬浮/已复制态都是按旧文档的块下标记的,重载后
     // 那个下标在新文档里可能指向别的块,必须一并作废(与换文档同一口径)。
-    if (state->find) state->find->Close();
+    CloseFindUi(hwnd, state);
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
     KillTimer(hwnd, kCopyFeedbackTimerId);
@@ -973,8 +1406,9 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     bool hasCopyButtonState =
         state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
     bool hasSelection = state->selection && state->selection->HasSelection();
+    bool hasHistory = state->recentFiles && state->historyAnimState != SidebarAnimState::Closed;
     if (state->find || state->statusMessage || hasCopyButtonState || state->outline ||
-        hasSelection) {
+        hasSelection || hasHistory) {
         // T80:鼠标拖选高亮,选区为空时保持聚合初始化留下的 false/0,渲染层
         // 不画任何高亮,零额外开销。
         if (hasSelection) {
@@ -1020,6 +1454,23 @@ void PaintOnce(HWND hwnd, WindowState* state) {
             overlay.outlineCurrentItem = kInvalidIndex;
             overlay.outlineAnimProgress = 0.0f;
         }
+
+        // 历史记录侧栏 (右侧抽屉)
+        if (hasHistory) {
+            overlay.historyEntries = state->recentFiles ? state->recentFiles->entries : nullptr;
+            overlay.historyItemCount = state->recentFiles ? state->recentFiles->count : 0u;
+            overlay.historyHoverItem = state->historyHoverIndex;
+            overlay.historyScrollY = state->historyScrollY;
+            overlay.historyPanelWidthDip = state->historyPanelWidthDip;
+            overlay.historyAnimProgress = state->historyAnimProgress;
+            overlay.historyScrollbarActive =
+                state->historyScrollbarHover ||
+                state->scrollbarDragTarget == ScrollbarDragTarget::History;
+        } else {
+            overlay.historyHoverItem = kInvalidIndex;
+            overlay.historyAnimProgress = 0.0f;
+        }
+
         overlayPtr = &overlay;
     }
     // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
@@ -1035,7 +1486,7 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     bool presented = state->renderer->RenderFrame(
         hwnd, *state->layout, effectiveScrollY, kContentPaddingDip, overlayPtr,
         mainScrollbarActive, state->currentDocumentPath, state->currentDocumentSizeBytes,
-        static_cast<u32>(state->bottomBarHoverButton));
+        static_cast<u32>(state->bottomBarHoverButton), state->bottomBarPathCopied);
 
     if (state->onFrameEnd) state->onFrameEnd(state->callbackUserData);
 
@@ -1068,6 +1519,10 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
                                            usableViewportHeight);
     }
+    // 查找条 EDIT 子窗口跟客户区宽度绑定(贴右上角),尺寸变化要重新定位;
+    // RepositionFindEdit 内部对 findEditHwnd 为空静默返回,不额外判断可见性
+    // (隐藏态重定位没有副作用,下次 Show 时位置已经是对的)。
+    RepositionFindEdit(hwnd, state);
     // T56:尺寸变化(含最大化/还原)去抖后写盘;放在这里而不是只放 WM_MOVE,
     // 因为纯拖边框改尺寸不会触发 WM_MOVE。
     OnWindowGeometryMaybeChanged(hwnd, state);
@@ -1107,7 +1562,7 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
     if (state->onWindowGeometryChanged) state->onWindowGeometryChanged(state->callbackUserData);
 }
 
-// 底部操作栏(新需求):5 个按钮各自的动作全部复用现有函数,不另写一套——
+// 底部操作栏(新需求):6 个按钮各自的动作全部复用现有函数,不另写一套——
 // 放大/缩小复用 T29 的 FontSubsystem::ZoomIn/ZoomOut + ApplyZoomChange(与
 // Ctrl+± 同一路径),主题复用 T47 的 CycleTheme(与 Ctrl+Shift+T 同一路径),
 // 大纲复用 T63 的 ToggleOutlinePanel(与 Ctrl+\ 同一路径)。"打开文档"是唯一
@@ -1131,6 +1586,9 @@ void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn
     case BottomBarButton::Theme:
         CycleTheme(hwnd, state);
         return;
+    case BottomBarButton::Find:
+        OpenFindUi(hwnd, state);
+        return;
     case BottomBarButton::Outline:
         ToggleOutlinePanel(hwnd, state);
         return;
@@ -1143,6 +1601,12 @@ void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn
         }
         return;
     }
+    case BottomBarButton::CopyPath:
+        OnBottomBarCopyPathClicked(hwnd, state);
+        return;
+    case BottomBarButton::History:
+        ToggleHistoryPanel(hwnd, state);
+        return;
     case BottomBarButton::None:
     default:
         return;
@@ -1160,7 +1624,30 @@ void OnDpiChanged(HWND hwnd, WindowState* state, UINT newDpi, const RECT* sugges
     if (state && state->renderer) {
         state->renderer->OnDpiChanged(static_cast<float>(newDpi));
     }
+    RepositionFindEdit(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// 大纲/历史侧栏展开或正在动画时,渲染层的半透明蒙层会整块盖住底部栏(裁决:
+// 蒙层应完整遮住正文可交互区域,底部栏也不例外,见 renderer.cpp 对应注释)。
+// WM_LBUTTONDOWN 与 WM_MOUSEMOVE 的底部栏命中测试都要用同一个判断,抽成
+// 一个函数而不是各自重复一遍这个布尔表达式——代码评审(2026-09-19)发现
+// WM_MOUSEMOVE 那份复制漏掉了这个判断,导致蒙层盖住底部栏期间悬浮态/光标
+// 仍显示成"可点按钮",与实际点击行为(关闭侧栏)不一致。
+//
+// While the outline/history sidebar is open or animating, the renderer's
+// translucent mask fully covers the bottom bar (per decision: the mask
+// should completely cover the interactive content area, bottom bar
+// included — see the matching comment in renderer.cpp). Both
+// WM_LBUTTONDOWN and WM_MOUSEMOVE need this same check for the bottom bar
+// hit-test; factored into one function instead of each repeating the
+// boolean expression — code review (2026-09-19) found the WM_MOUSEMOVE
+// copy was missing this check, so hover feedback/cursor still showed a
+// "clickable button" while the mask covered it, disagreeing with the
+// actual click behavior (closes the sidebar).
+bool SidebarMaskCoversBottomBar(const WindowState* state) {
+    return state && ((state->outline && state->outlineAnimState != OutlineAnimState::Closed) ||
+                      state->historyAnimState != SidebarAnimState::Closed);
 }
 
 // 主窗口过程:绘制、尺寸/DPI 变化、滚轮与键盘滚动、Ctrl+W / Esc 关闭。
@@ -1209,17 +1696,46 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
 
     case WM_LBUTTONDOWN: {
+        // 查找条打开时,"上一个"/"下一个"箭头按钮优先命中——它俩浮在最上层,
+        // 且只在查找条可见时才存在(与其余命中测试用同一套"指针/状态为空
+        // 即不存在"口径)。
+        if (state && state->find && state->find->Visible()) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            FindBarLayout layout = ComputeFindBarLayout(ClientWidthDip(hwnd), 0.0f);
+            FindBarNavHit hit = FindBarNavHitTest(layout, dipX, dipY);
+            if (hit == FindBarNavHit::Prev) {
+                StepFind(hwnd, state, /*forward=*/false);
+                return 0;
+            }
+            if (hit == FindBarNavHit::Next) {
+                StepFind(hwnd, state, /*forward=*/true);
+                return 0;
+            }
+            if (hit == FindBarNavHit::Close) {
+                CloseFindUi(hwnd, state);
+                return 0;
+            }
+        }
+
         // 底部操作栏(新需求):最高优先级短路——它是持久化、常驻在最上层
         // (最后一个画,盖在正文/大纲侧栏之上)的控件带,点击落在其区域内时
-        // 一律不再往下走任何正文/侧栏命中测试。
-        if (state) {
+        // 一律不再往下走任何正文/侧栏命中测试。但大纲/历史侧栏展开或正在
+        // 动画时,渲染层的半透明蒙层会整块盖住底部栏(裁决:蒙层应完整遮住
+        // 正文可交互区域,底部栏也不例外,见 renderer.cpp 对应注释),此时
+        // 点击底部栏的视觉区域实际点在蒙层上,应该走下面的蒙层命中测试
+        // (点蒙层关闭侧栏),不能再当成底部栏按钮点击处理。
+        bool sidebarMaskCoversBottomBar = SidebarMaskCoversBottomBar(state);
+        if (state && !sidebarMaskCoversBottomBar) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float clientHeightDip = ClientHeightDip(hwnd);
             if (IsPointInBottomBar(clientHeightDip, dipY)) {
                 float clientWidthDip = ClientWidthDip(hwnd);
-                BottomBarButton btn = HitTestBottomBar(clientWidthDip, dipX);
+                bool hasDocument = state->currentDocumentPath[0] != 0;
+                BottomBarButton btn = HitTestBottomBar(clientWidthDip, dipX, hasDocument);
                 OnBottomBarButtonClicked(hwnd, state, btn);
                 return 0;
             }
@@ -1234,6 +1750,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 state->outlinePanelResizeStartMouseXDip =
                     static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
                 state->outlinePanelResizeStartWidthDip = state->outlinePanelWidthDip;
+                SetCapture(hwnd);
+                return 0;
+            }
+        }
+
+        // 历史记录侧栏左边缘拖拽调宽度的抓手——仅在历史侧栏完全展开时允许。
+        if (state && state->historyAnimState == SidebarAnimState::Open) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            SidebarHitArea hit = SidebarHitTest(
+                SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                state->historyPanelWidthDip, state->historyAnimProgress, dipX, dipY);
+            if (hit == SidebarHitArea::ResizeHandle) {
+                state->historyPanelResizing = true;
+                state->historyPanelResizeStartMouseXDip = dipX;
+                state->historyPanelResizeStartWidthDip = state->historyPanelWidthDip;
                 SetCapture(hwnd);
                 return 0;
             }
@@ -1263,8 +1796,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
                            IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX)) {
                     // Click on the outline scrollbar track: jump and initiate dragging.
-                    //
-                    // 点击大纲侧栏滚动条轨道:跳转到对应位置并直接进入拖动状态。
                     float newY = ScrollYAfterTrackClick(dipY, viewportHeight, contentHeight);
                     state->outline->SetScrollY(newY, viewportHeight);
                     state->scrollbarDragTarget = ScrollbarDragTarget::Outline;
@@ -1274,7 +1805,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
-            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) && state->layout) {
+            } else if (state->historyAnimState == SidebarAnimState::Open &&
+                       dipX >= ClientWidthDip(hwnd) - state->historyPanelWidthDip) {
+                float viewportHeight = ClientHeightDip(hwnd);
+                u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                float contentHeight =
+                    kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                float localX = dipX - (ClientWidthDip(hwnd) - state->historyPanelWidthDip);
+                ScrollbarMetrics m = CalcScrollbarMetrics(state->historyPanelWidthDip, viewportHeight,
+                                                          contentHeight, state->historyScrollY);
+                if (IsPointInScrollbarThumb(m, localX, dipY)) {
+                    state->scrollbarDragTarget = ScrollbarDragTarget::History;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = state->historyScrollY;
+                    SetCapture(hwnd);
+                    return 0;
+                } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
+                           IsPointInScrollbarColumn(state->historyPanelWidthDip, localX)) {
+                    // Click on history scrollbar track
+                    float newY = ScrollYAfterTrackClick(dipY, viewportHeight, contentHeight);
+                    state->historyScrollY = ClampScrollOffset(newY, contentHeight, viewportHeight);
+                    state->scrollbarDragTarget = ScrollbarDragTarget::History;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = newY;
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
+                       state->historyAnimState == SidebarAnimState::Closed && state->layout) {
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
@@ -1288,8 +1847,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
                            IsPointInScrollbarColumn(viewportWidth, dipX)) {
                     // Click on the main scrollbar track: jump and initiate dragging.
-                    //
-                    // 点击正文滚动条轨道:跳转到对应位置并直接进入拖动状态。
                     float newY = ScrollYAfterTrackClick(dipY, viewportHeight, state->layout->TotalHeight());
                     SetScrollY(hwnd, state, newY);
                     state->scrollbarDragTarget = ScrollbarDragTarget::Main;
@@ -1314,6 +1871,51 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             } else {
                 // 点击蒙层区域(侧栏之外的正文区域):关闭侧栏,同 Ctrl+\。
                 ToggleOutlinePanel(hwnd, state);
+            }
+            return 0;
+        }
+
+        // 历史记录侧栏区域与正文互不干扰 —— 历史侧栏打开或正在动画时短路正文命中
+        if (state && state->historyAnimState != SidebarAnimState::Closed) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            SidebarHitArea hit = SidebarHitTest(
+                SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                state->historyPanelWidthDip, state->historyAnimProgress, dipX, dipY);
+            if (hit == SidebarHitArea::InsideDrawer) {
+                if (state->historyAnimState == SidebarAnimState::Open) {
+                    u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                    i32 item = SidebarHitTestItem(
+                        SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                        state->historyPanelWidthDip, count,
+                        state->historyScrollY, dipX, dipY);
+                    if (item >= 0) {
+                        // 悬浮该行时右侧会画关闭按钮 + 紧贴其左侧的文件夹按钮
+                        // (见 DrawHistoryPanel);分别命中删除/打开所在文件夹,
+                        // 否则才是正常的"打开该文档"。
+                        float localX = dipX - (ClientWidthDip(hwnd) - state->historyPanelWidthDip);
+                        SidebarRectDip closeRect = SidebarCloseButtonLocalRectDip(
+                            state->historyPanelWidthDip, static_cast<u32>(item),
+                            state->historyScrollY);
+                        SidebarRectDip folderRect = SidebarFolderButtonLocalRectDip(
+                            state->historyPanelWidthDip, static_cast<u32>(item),
+                            state->historyScrollY);
+                        bool onCloseButton = localX >= closeRect.left && localX < closeRect.right &&
+                                             dipY >= closeRect.top && dipY < closeRect.bottom;
+                        bool onFolderButton = localX >= folderRect.left && localX < folderRect.right &&
+                                              dipY >= folderRect.top && dipY < folderRect.bottom;
+                        if (onCloseButton) {
+                            OnHistoryItemDeleteClicked(hwnd, state, static_cast<u32>(item));
+                        } else if (onFolderButton) {
+                            OnHistoryItemOpenFolderClicked(hwnd, state, static_cast<u32>(item));
+                        } else {
+                            OnHistoryItemClicked(hwnd, state, static_cast<u32>(item));
+                        }
+                    }
+                }
+            } else if (hit == SidebarHitArea::Mask) {
+                ToggleHistoryPanel(hwnd, state);
             }
             return 0;
         }
@@ -1371,6 +1973,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
 
+        // 历史记录侧栏左边缘拖拽调宽度——按鼠标横向位移换算新宽度(向左拖增加宽度)。
+        if (state && state->historyPanelResizing && (wparam & MK_LBUTTON)) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dragDelta = state->historyPanelResizeStartMouseXDip - dipX;
+            state->historyPanelWidthDip =
+                ClampSidebarWidth(state->historyPanelResizeStartWidthDip + dragDelta, ClientWidthDip(hwnd));
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
         // 自绘滚动条(方案A):正在拖滑块——按鼠标位移换算新的滚动偏移。
         // 与 T80 文本拖选互斥(按下时二者只会有一个进入,见 WM_LBUTTONDOWN),
         // 这里提前 return,不再往下走选区更新/悬浮态判定。
@@ -1391,6 +2004,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
                                                    viewportHeight, contentHeight);
                 state->outline->SetScrollY(newY, viewportHeight);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (state->scrollbarDragTarget == ScrollbarDragTarget::History) {
+                float viewportHeight = ClientHeightDip(hwnd);
+                u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                float contentHeight =
+                    kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
+                                                   viewportHeight, contentHeight);
+                state->historyScrollY = ClampScrollOffset(newY, contentHeight, viewportHeight);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
@@ -1432,21 +2054,43 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
 
             bool newOutlineHover = false;
+            bool newHistoryHover = false;
             bool newMainHover = false;
+            u32 newHistoryItemHover = kInvalidIndex;
+
             if (state->outline && state->outlineAnimState == OutlineAnimState::Open) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
                 newOutlineHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                    IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX);
-            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) && state->layout) {
+            } else if (state->historyAnimState == SidebarAnimState::Open) {
+                float drawerLeft = ClientWidthDip(hwnd) - state->historyPanelWidthDip;
+                float viewportHeight = ClientHeightDip(hwnd);
+                if (dipX >= drawerLeft) {
+                    float localX = dipX - drawerLeft;
+                    newHistoryHover = dipY >= 0.0f && dipY <= viewportHeight &&
+                                      IsPointInScrollbarColumn(state->historyPanelWidthDip, localX);
+                    u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                    i32 hitItem = SidebarHitTestItem(
+                        SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                        state->historyPanelWidthDip, count,
+                        state->historyScrollY, dipX, dipY);
+                    newHistoryItemHover = (hitItem >= 0) ? static_cast<u32>(hitItem) : kInvalidIndex;
+                }
+            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
+                       state->historyAnimState == SidebarAnimState::Closed && state->layout) {
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                 IsPointInScrollbarColumn(viewportWidth, dipX);
             }
             if (newOutlineHover != state->outlineScrollbarHover ||
-                newMainHover != state->mainScrollbarHover) {
+                newHistoryHover != state->historyScrollbarHover ||
+                newMainHover != state->mainScrollbarHover ||
+                newHistoryItemHover != state->historyHoverIndex) {
                 state->outlineScrollbarHover = newOutlineHover;
+                state->historyScrollbarHover = newHistoryHover;
                 state->mainScrollbarHover = newMainHover;
+                state->historyHoverIndex = newHistoryItemHover;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
 
@@ -1456,8 +2100,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             // (BottomBarButton::None)时同样不显示提示。
             float clientHeightDip = ClientHeightDip(hwnd);
             BottomBarButton newBottomBarHover = BottomBarButton::None;
-            if (IsPointInBottomBar(clientHeightDip, dipY)) {
-                newBottomBarHover = HitTestBottomBar(ClientWidthDip(hwnd), dipX);
+            if (!SidebarMaskCoversBottomBar(state) && IsPointInBottomBar(clientHeightDip, dipY)) {
+                bool hasDocument = state->currentDocumentPath[0] != 0;
+                newBottomBarHover = HitTestBottomBar(ClientWidthDip(hwnd), dipX, hasDocument);
             }
             if (newBottomBarHover != state->bottomBarHoverButton) {
                 state->bottomBarHoverButton = newBottomBarHover;
@@ -1471,6 +2116,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // T63b:结束侧栏调宽度拖拽。
         if (state && state->outlinePanelResizing) {
             state->outlinePanelResizing = false;
+            ReleaseCapture();
+        }
+        if (state && state->historyPanelResizing) {
+            state->historyPanelResizing = false;
             ReleaseCapture();
         }
         // 自绘滚动条(方案A):结束拖动。
@@ -1497,9 +2146,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             changed = true;
         }
         if (state && state->scrollbarDragTarget == ScrollbarDragTarget::None &&
-            (state->mainScrollbarHover || state->outlineScrollbarHover)) {
+            (state->mainScrollbarHover || state->outlineScrollbarHover || state->historyScrollbarHover)) {
             state->mainScrollbarHover = false;
             state->outlineScrollbarHover = false;
+            state->historyScrollbarHover = false;
+            changed = true;
+        }
+        if (state && state->historyHoverIndex != kInvalidIndex) {
+            state->historyHoverIndex = kInvalidIndex;
             changed = true;
         }
         // 底部栏图标悬浮提示同理清掉,鼠标移出窗口就不该再挂着提示气泡。
@@ -1515,7 +2169,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // T45:"已复制"反馈态到点 -> 清状态、杀掉一次性定时器、重绘回默认态。
         if (wparam == kCopyFeedbackTimerId) {
             KillTimer(hwnd, kCopyFeedbackTimerId);
-            if (state) state->copyButtonCopied = kInvalidIndex;
+            if (state) {
+                state->copyButtonCopied = kInvalidIndex;
+                state->bottomBarPathCopied = false;
+            }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -1524,6 +2181,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             KillTimer(hwnd, kWindowGeometryTimerId);
             if (state && state->onWindowGeometryChanged) {
                 state->onWindowGeometryChanged(state->callbackUserData);
+            }
+            return 0;
+        }
+        // 历史记录写盘去抖到点 -> 杀掉一次性定时器、真正落一次盘。
+        //
+        // Recent-files save debounce fires -> kill the one-shot timer,
+        // actually write to disk now.
+        if (wparam == kRecentFilesSaveTimerId) {
+            KillTimer(hwnd, kRecentFilesSaveTimerId);
+            if (state && state->recentFiles) {
+                SaveRecentFiles(*state->recentFiles);
             }
             return 0;
         }
@@ -1569,6 +2237,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        // History drawer slide & mask fade animation timer tick (~60 FPS).
+        //
+        // 历史记录侧栏滑动与蒙层淡入淡出动画节拍 (~60 FPS)。
+        if (wparam == kHistoryAnimTimerId) {
+            if (!state) return 0;
+            ULONGLONG now = GetTickCount64();
+            float elapsed = static_cast<float>(now - state->historyAnimStartTick);
+            float t = elapsed / kSidebarAnimDurationMs;
+            if (t > 1.0f) t = 1.0f;
+            float easeT = EaseOutCubic(t);
+
+            if (state->historyAnimState == SidebarAnimState::Opening) {
+                state->historyAnimProgress =
+                    state->historyAnimStartProgress + (1.0f - state->historyAnimStartProgress) * easeT;
+                if (t >= 1.0f || state->historyAnimProgress >= 1.0f) {
+                    state->historyAnimProgress = 1.0f;
+                    state->historyAnimState = SidebarAnimState::Open;
+                    KillTimer(hwnd, kHistoryAnimTimerId);
+                }
+            } else if (state->historyAnimState == SidebarAnimState::Closing) {
+                state->historyAnimProgress =
+                    state->historyAnimStartProgress * (1.0f - easeT);
+                if (t >= 1.0f || state->historyAnimProgress <= 0.0001f) {
+                    state->historyAnimProgress = 0.0f;
+                    state->historyAnimState = SidebarAnimState::Closed;
+                    KillTimer(hwnd, kHistoryAnimTimerId);
+                }
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         // T78:内存泄漏排查探针的循环节拍——每次到点执行一次对应动作,
         // 复用与真实快捷键完全相同的代码路径(不是重新实现一遍语义)。
         if (wparam == kBenchLoopTimerId && state && state->benchLoopKind != 0) {
@@ -1609,7 +2308,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_SETCURSOR: {
         // T63b:侧栏调宽度抓手——正在拖拽时,或鼠标悬浮在抓手上时,都给
         // 左右缩放光标,优先级最高(拖动状态下不管光标当前在哪都要保持)。
-        if (state && state->outlinePanelResizing) {
+        if (state && (state->outlinePanelResizing || state->historyPanelResizing)) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
             return TRUE;
         }
@@ -1623,10 +2322,40 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return TRUE;
             }
         }
+        if (state && state->historyAnimState == SidebarAnimState::Open &&
+            LOWORD(lparam) == HTCLIENT) {
+            POINT pt{};
+            if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
+                float scale = DipScaleOf(hwnd);
+                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
+                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
+                SidebarHitArea hit = SidebarHitTest(
+                    SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                    state->historyPanelWidthDip, state->historyAnimProgress, dipX, dipY);
+                if (hit == SidebarHitArea::ResizeHandle) {
+                    SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
+                    return TRUE;
+                } else if (hit == SidebarHitArea::InsideDrawer) {
+                    u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                    i32 item = SidebarHitTestItem(
+                        SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                        state->historyPanelWidthDip, count,
+                        state->historyScrollY, dipX, dipY);
+                    if (item >= 0) {
+                        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+                        return TRUE;
+                    }
+                }
+            }
+        }
+        if (state && state->bottomBarHoverButton != BottomBarButton::None && LOWORD(lparam) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+            return TRUE;
+        }
         // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标;
         // T45 的代码块复制按钮同理(它就是个按钮,手型光标是最符合直觉的提示)。
         if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
-            LOWORD(lparam) == HTCLIENT) {
+            state->historyAnimState == SidebarAnimState::Closed && LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
                 if (ShouldUseHandCursor(HitTestAtClientPoint(hwnd, state, pt.x, pt.y))) {
@@ -1638,13 +2367,36 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
-    case WM_CHAR: {
-        // T37:查找条可见时,可打印字符进查询串、退格删末尾,增量输入即时重搜。
-        if (state && state->find && state->find->Visible()) {
-            wchar_t ch = static_cast<wchar_t>(wparam);
-            bool changed = (ch == 0x08) ? state->find->Backspace() : state->find->AppendChar(ch);
-            if (changed) RerunFind(hwnd, state);
+    case WM_COMMAND: {
+        // T37(2026-09-19 改版):查找条查询串改由原生 EDIT 子窗口的 EN_CHANGE
+        // 通知同步(取代旧版逐字符 WM_CHAR 拼接)。只清掉上一次查询串留下的
+        // 命中/高亮,不做全文扫描——真正的搜索挪到 Enter/F3 那一下。
+        if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == kFindEditControlId &&
+            state && state->find && state->findEditHwnd) {
+            wchar_t buf[kMaxFindQueryChars + 1];
+            int len = GetWindowTextW(state->findEditHwnd, buf, kMaxFindQueryChars + 1);
+            state->find->SetQuery(buf, len > 0 ? static_cast<u32>(len) : 0u);
+            state->find->ClearMatches();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    case WM_CTLCOLOREDIT: {
+        // 查找条 EDIT 子窗口背景/文字色跟随当前生效主题(render/theme.h 的
+        // findBarBackground/findBarText),与 renderer.cpp 画的"查找:"前缀/
+        // 状态文字用同一份色值,两处视觉才不会一亮一暗对不上。
+        HDC dc = reinterpret_cast<HDC>(wparam);
+        HWND ctrl = reinterpret_cast<HWND>(lparam);
+        if (ctrl == (state ? state->findEditHwnd : nullptr)) {
+            bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
+            const Palette& palette = isDark ? kDarkPalette : kLightPalette;
+            HBRUSH& brush = isDark ? g_findEditBgBrushDark : g_findEditBgBrushLight;
+            if (!brush) brush = CreateSolidBrush(ColorFToColorRef(palette.findBarBackground));
+            SetTextColor(dc, ColorFToColorRef(palette.findBarText));
+            SetBkColor(dc, ColorFToColorRef(palette.findBarBackground));
+            return reinterpret_cast<LRESULT>(brush);
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
@@ -1688,10 +2440,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // 大纲侧栏打开时,正文被半透明蒙层盖住,不接受滚轮——上面的分支已经
+        // 历史记录侧栏打开且鼠标落在其区域内时,滚轮滚动历史侧栏自身
+        if (state && state->historyAnimState == SidebarAnimState::Open) {
+            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (ScreenToClient(hwnd, &pt)) {
+                float scale = DipScaleOf(hwnd);
+                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
+                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
+                SidebarHitArea hit = SidebarHitTest(
+                    SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
+                    state->historyPanelWidthDip, state->historyAnimProgress, dipX, dipY);
+                if (hit == SidebarHitArea::InsideDrawer) {
+                    float panelHeight = ClientHeightDip(hwnd);
+                    u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+                    float contentHeight =
+                        kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                    float newY = ScrollByWheel(state->historyScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
+                                               contentHeight, panelHeight);
+                    state->historyScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        // 侧栏打开时,正文被半透明蒙层盖住,不接受滚轮——上面的分支已经
         // 处理了"滚在侧栏自身范围内"的情况,走到这里说明鼠标落在蒙层区域,
         // 直接忽略,不能穿透蒙层滚动看不见的正文。
-        if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed)) {
+        if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
+            state->historyAnimState == SidebarAnimState::Closed) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
                                        state->layout->TotalHeight(), UsableViewportHeightOf(hwnd));
             SetScrollY(hwnd, state, newY);
@@ -1718,9 +2495,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
         // T37:Esc 先关查找条(查找条没开时才是"关窗口")。
         if (wparam == VK_ESCAPE && state && state->find && state->find->Visible()) {
-            state->find->Close();
+            CloseFindUi(hwnd, state);
             state->statusMessage = nullptr;
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        // Esc:如果历史记录侧栏或大纲侧栏打开,则先关闭侧栏
+        if (wparam == VK_ESCAPE && state &&
+            (state->historyAnimState == SidebarAnimState::Open ||
+             state->historyAnimState == SidebarAnimState::Opening)) {
+            ToggleHistoryPanel(hwnd, state);
+            return 0;
+        }
+        if (wparam == VK_ESCAPE && state &&
+            (state->outlineAnimState == OutlineAnimState::Open ||
+             state->outlineAnimState == OutlineAnimState::Opening)) {
+            ToggleOutlinePanel(hwnd, state);
             return 0;
         }
         // Ctrl+W / Esc:关闭当前窗口(每个文件一个独立窗口,关掉即退出本进程)。
@@ -1734,20 +2524,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             CopySelectionToClipboard(hwnd, state);
             return 0;
         }
-        // T37:Ctrl+F 打开查找条。
+        // T37:Ctrl+F 打开查找条(与底部栏放大镜按钮同一路径,见 OpenFindUi)。
         if (ctrlDown && wparam == 'F' && state && state->find) {
-            state->find->Open();
-            state->statusMessage = nullptr;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            OpenFindUi(hwnd, state);
             return 0;
         }
-        // T38:Enter / Shift+Enter / F3 / Shift+F3 在命中之间前后跳转。
+        // T38(2026-09-19 改为"回车才搜"):查询串改过(Dirty)后第一次 Enter
+        // 触发一次全文重搜并跳到第一处命中;查询串没变的后续 Enter/Shift+Enter
+        // 才是纯粹的命中间前后跳转,与 F3/Shift+F3 同一逻辑。
         if (state && state->find && state->find->Visible() && wparam == VK_RETURN) {
-            StepFind(hwnd, state, !shiftDown);
+            if (state->find->Dirty()) {
+                RerunFind(hwnd, state);
+            } else {
+                StepFind(hwnd, state, !shiftDown);
+            }
             return 0;
         }
-        if (state && state->find && wparam == VK_F3) {
-            StepFind(hwnd, state, !shiftDown);
+        // F3/Shift+F3 只在查找条已打开时生效——补上与上面 VK_RETURN 分支一致的
+        // Visible() 判断,避免查找条已关闭(此时 matches_ 已被 Close() 清空)
+        // 时仍走一遍 RerunFind/StepFind,白白触发一次全窗口重绘。
+        //
+        // F3/Shift+F3 should only take effect while the find bar is open —
+        // match the Visible() guard the VK_RETURN branch above already has,
+        // so pressing F3 after the bar is closed (when matches_ has already
+        // been cleared by Close()) doesn't still run RerunFind/StepFind and
+        // trigger a wasted full-window repaint.
+        if (state && state->find && state->find->Visible() && wparam == VK_F3) {
+            if (state->find->Dirty()) {
+                RerunFind(hwnd, state);
+            } else {
+                StepFind(hwnd, state, !shiftDown);
+            }
             return 0;
         }
         // T29:Ctrl+=/Ctrl+-/Ctrl+0 字号缩放(放大/缩小一档/复位到 1.0)。
@@ -1799,9 +2606,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // T63:同理,收掉大纲高亮的去抖定时器与滑动动画定时器。
         KillTimer(hwnd, kOutlineHighlightTimerId);
         KillTimer(hwnd, kOutlineAnimTimerId);
+        KillTimer(hwnd, kHistoryAnimTimerId);
         // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
         // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
         KillTimer(hwnd, kWindowGeometryTimerId);
+        // 同理:历史记录写盘去抖也要在窗口销毁前兜底落一次盘,不能等 500ms。
+        //
+        // Same reasoning: flush the recent-files debounce immediately before
+        // the window is gone, instead of waiting for the 500ms timer.
+        KillTimer(hwnd, kRecentFilesSaveTimerId);
         // T78:同理收掉泄漏探针的循环定时器(正常路径下该定时器从未被 Set,
         // KillTimer 一个不存在的定时器是安全的空操作)。
         KillTimer(hwnd, kBenchLoopTimerId);
@@ -1809,6 +2622,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             UpdateWindowGeometryState(hwnd, state);
             if (state->onWindowGeometryChanged) {
                 state->onWindowGeometryChanged(state->callbackUserData);
+            }
+            if (state->recentFiles) {
+                SaveRecentFiles(*state->recentFiles);
             }
         }
         PostQuitMessage(0);
@@ -1820,6 +2636,54 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 }
 
 }  // namespace
+
+/**
+ * Request a debounced (500ms) write of the recent-files history to disk.
+ * Callers only mutate the in-memory RecentFiles list synchronously
+ * (mdvn::AddRecentFile is a cheap array shift, no I/O); the actual
+ * CreateFileW/WriteFile/FlushFileBuffers happens on the WM_TIMER tick, so
+ * clicking several in-document links back-to-back does not fsync once per
+ * click — same debounce pattern as window-geometry persistence.
+ *
+ * 请求一次去抖(500ms)的历史记录写盘。调用方只需同步更新内存里的
+ * RecentFiles 列表(mdvn::AddRecentFile 只是数组移位,不涉及 I/O);真正的
+ * CreateFileW/WriteFile/FlushFileBuffers 发生在 WM_TIMER 到点时,连续点击
+ * 好几个文档内链接不会每次点击都落一次盘——与窗口矩形持久化同一去抖手法。
+ *
+ * @param hwnd 主窗口句柄,用于挂载去抖定时器。
+ *
+ *   Main window handle, used to host the debounce timer.
+ *
+ * @param state 运行期状态,recentFiles 为空时静默返回。
+ *
+ *   Runtime state; silently returns if recentFiles is null.
+ *
+ * @example mdvn::RequestRecentFilesSave(hwnd, &windowState);
+ */
+void RequestRecentFilesSave(HWND hwnd, WindowState* state) {
+    if (!state || !state->recentFiles) return;
+    SetTimer(hwnd, kRecentFilesSaveTimerId, kRecentFilesSaveDebounceMs, nullptr);
+}
+
+void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item) {
+    // MB_DEFBUTTON2:把默认焦点放在"否"上——这是一个删除确认框,误按回车/
+    // 空格不应该触发删除这个有损操作,只有显式选"是"才删除。
+    //
+    // MB_DEFBUTTON2: default focus on "No" — this is a delete confirmation,
+    // so an accidental Enter/Space press must not trigger the destructive
+    // action; only an explicit "Yes" choice removes the entry.
+    int choice = MessageBoxW(hwnd, L"文件不存在，是否从历史记录中删除？", L"提示",
+                             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+    if (choice == IDYES) {
+        RemoveRecentFileAt(state->recentFiles, item);
+        // 走去抖写盘(与 AddRecentFile 一致),而不是每次删除都同步落盘。
+        //
+        // Route through the debounced save (consistent with AddRecentFile)
+        // instead of synchronously hitting disk on every delete.
+        RequestRecentFilesSave(hwnd, state);
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+}
 
 bool EnablePerMonitorV2DpiAwareness() {
     // 选择代码方式而非 manifest:不需要改动构建脚本,且能按系统能力优雅退化。
@@ -1868,6 +2732,14 @@ void ReleaseMainWindowClassResources() {
         DeleteObject(g_darkBackgroundBrush);
         g_darkBackgroundBrush = nullptr;
     }
+    if (g_findEditBgBrushLight) {
+        DeleteObject(g_findEditBgBrushLight);
+        g_findEditBgBrushLight = nullptr;
+    }
+    if (g_findEditBgBrushDark) {
+        DeleteObject(g_findEditBgBrushDark);
+        g_findEditBgBrushDark = nullptr;
+    }
 }
 
 HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state) {
@@ -1881,6 +2753,7 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // 底部栏悬浮提示(2026-09-18 新增):零值会被当成"悬浮在第 0 个按钮
     // (ZoomIn)上",必须显式置为 None,与上面两个 kInvalidIndex 同一条理由。
     state->bottomBarHoverButton = BottomBarButton::None;
+    state->bottomBarPathCopied = false;
     // 自绘滚动条(方案A):默认没有任何一个在被拖动,也没有悬浮。
     state->scrollbarDragTarget = ScrollbarDragTarget::None;
     state->mainScrollbarHover = false;
@@ -1895,6 +2768,19 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     state->outlineAnimProgress = 0.0f;
     state->outlineAnimStartTick = 0;
     state->outlineAnimStartProgress = 0.0f;
+
+    // 历史记录抽屉侧栏 (右侧) 初始状态
+    state->historyScrollY = 0.0f;
+    state->historyPanelWidthDip = kSidebarDefaultWidthDip;
+    state->historyPanelResizing = false;
+    state->historyPanelResizeStartMouseXDip = 0.0f;
+    state->historyPanelResizeStartWidthDip = 0.0f;
+    state->historyAnimState = SidebarAnimState::Closed;
+    state->historyAnimProgress = 0.0f;
+    state->historyAnimStartTick = 0;
+    state->historyAnimStartProgress = 0.0f;
+    state->historyScrollbarHover = false;
+    state->historyHoverIndex = kInvalidIndex;
 
     // T56:winW/winH <= 0 表示从未存过窗口矩形(首次启动),走原来的默认
     // 位置/尺寸;否则按上次记住的矩形恢复,先做多显示器越界钳制,再做
@@ -1943,11 +2829,46 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
     // 滚动条改为自绘(方案A,2026-09-18):不再声明 WS_VSCROLL,正文与大纲
     // 侧栏统一用 Renderer::DrawScrollbar 画同一套 8px 圆角滑块,见 scrollbar.h。
+    // WS_CLIPCHILDREN:查找条内嵌原生 EDIT 子窗口后必加——没这个标志,父窗口
+    // 每次 D2D 重绘(滚动/动画/idle)都会整块覆盖到子窗口区域上面,子 EDIT 只有
+    // 自己重绘时(比如获得焦点触发的光标闪烁)才会把内容画回来,表现为"查找
+    // 框失焦时文字/背景色不对,一聚焦又正常"。
     HWND hwnd = CreateWindowExW(
-        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW,
+        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         createX, createY, createW, createH,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
+
+    // 只给查找条的 EDIT 子窗口留 IME、主框架窗口本身按窗口摘掉 IME 上下文
+    // (IACE_IGNORENOCONTEXT):进程级 ImmDisableIME 已在 T37 被推翻(查找条要
+    // 支持中文输入),但主窗口本身从不接受文字输入,不该为它触发 TSF 激活
+    // ——回归排查(2026-09-19)证实全局启用会连带把第三方输入法模块(实测
+    // SogouPy.ime/SogouTSF.ime)一起载入主窗口所在线程,私有内存从~25MB
+    // 涨到~28MB、暖启动首屏中位数也从~63ms 涨到~95ms。按窗口摘掉后主窗口
+    // 不再触发该线程的 TSF 激活,findEditHwnd 保持默认关联,中文查找不受影响。
+    ImmAssociateContextEx(hwnd, nullptr, IACE_IGNORENOCONTEXT);
+
+    // T37(2026-09-19 改版):查找条的原生 EDIT 子窗口,创建时先隐藏
+    // (WS_VISIBLE 不设),Ctrl+F 打开查找条时才 ShowWindow;子类化后
+    // Enter/Esc/F3 转发给父窗口,其余按键走系统默认 EDIT 处理。
+    // find 为空表示这个窗口不支持查找功能(纯渲染场景/单测),不创建。
+    if (state->find) {
+        state->findEditHwnd = CreateWindowExW(
+            0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kFindEditControlId)),
+            instance, nullptr);
+        if (state->findEditHwnd) {
+            LONG_PTR origProc = SetWindowLongPtrW(
+                state->findEditHwnd, GWLP_WNDPROC,
+                reinterpret_cast<LONG_PTR>(FindEditSubclassProc));
+            SetWindowLongPtrW(state->findEditHwnd, GWLP_USERDATA, origProc);
+            // 关掉这个控件的视觉主题(Uxtheme):主题化的 EDIT 在深色背景下会
+            // 忽略 WM_CTLCOLOREDIT 里 SetTextColor 设的文字色,固定按主题引擎
+            // 自己的浅色方案画黑字,在深色查找条底色上完全看不见——这是已知
+            // 的 Win32 坑,禁用主题后才会真正采用经典消息路径的自定义颜色。
+            SetWindowTheme(state->findEditHwnd, L"", L"");
+        }
+    }
 
     // T48:标题栏深浅色紧跟着 HWND 一起定下来,与窗口类背景刷用的是同一份
     // 生效主题判断(themeSetting/systemIsDark 由调用方在创建窗口前填好)。

@@ -1,5 +1,7 @@
 // T9 覆盖测试:字体子系统里不依赖窗口/D2D 渲染目标的部分——
 // DirectWrite 工厂创建本身不需要 HWND，可以在无窗口环境下验证。
+#include <windows.h>
+
 #include <cwchar>
 
 #include "mdvn_test.h"
@@ -17,8 +19,13 @@ MDVN_TEST(FontSubsystem_InitCreatesBodyFormatEagerly) {
     MDVN_CHECK(fonts.GetTextFormat(FontRole::Body) != nullptr);
 }
 
-// 正文文本格式的主族名必须是裁决 #10 原文的 "Segoe UI"。
-MDVN_TEST(FontSubsystem_BodyFormatFamilyNameMatchesWhitelist) {
+// 2026-09-19 起正文主族名跟随系统消息字体(SPI_GETNONCLIENTMETRICS 查得),
+// 不再写死单一字面量("Segoe UI"精确匹配的老断言在不同系统字体设置下会
+// 误报失败)。代码评审(2026-09-19)指出仅断言"非空"太弱,连垃圾字符串都能
+// 通过——这里改成在测试里独立再查一次同一个系统 API,用查到的结果作为
+// 期望值比对,既不写死字面量又能验证 QuerySystemBodyFamily 确实按预期
+// 取了系统消息字体,而不是走进了随便什么回退分支。
+MDVN_TEST(FontSubsystem_BodyFormatFamilyNameMatchesSystemMessageFont) {
     FontSubsystem fonts;
     MDVN_CHECK(fonts.Init());
 
@@ -28,7 +35,18 @@ MDVN_TEST(FontSubsystem_BodyFormatFamilyNameMatchesWhitelist) {
         wchar_t name[64] = {};
         HRESULT hr = body->GetFontFamilyName(name, 64);
         MDVN_CHECK(SUCCEEDED(hr));
-        MDVN_CHECK(wcscmp(name, L"Segoe UI") == 0);
+        MDVN_CHECK(name[0] != 0);
+
+        NONCLIENTMETRICSW metrics = {};
+        metrics.cbSize = sizeof(metrics);
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0) &&
+            metrics.lfMessageFont.lfFaceName[0] != 0) {
+            MDVN_CHECK(wcscmp(name, metrics.lfMessageFont.lfFaceName) == 0);
+        } else {
+            // 查询系统 API 本身失败(理论上不该发生),退回文档里记录的
+            // 兜底字面量。
+            MDVN_CHECK(wcscmp(name, L"Segoe UI") == 0);
+        }
     }
 }
 

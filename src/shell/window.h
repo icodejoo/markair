@@ -27,23 +27,26 @@
 #include "hit_test.h"
 #include "navigate.h"
 #include "outline_panel.h"
+#include "sidebar.h"
 #include "scroll.h"
 #include "scrollbar.h"
 #include "selection.h"
 #include "theme_state.h"
 #include "window_state.h"
+#include "../util/recent_files.h"
 
 namespace mdvn {
 
 /**
  * 自绘滚动条(方案A)当前正在拖动哪一个实例;`None` 表示都没有。
- * 正文与大纲侧栏各自的滑块几何/内容高度不同,但共用同一套
+ * 正文、大纲侧栏与历史记录侧栏各自的滑块几何/内容高度不同,但共用同一套
  * shell/scrollbar.h 纯函数,这里只记"当前拖的是哪一个"。
  */
 enum class ScrollbarDragTarget {
     None,
     Main,     // 正文滚动条
     Outline,  // 大纲侧栏滚动条
+    History,  // 历史记录侧栏滚动条
 };
 
 /**
@@ -255,7 +258,144 @@ struct WindowState {
     // 渲染层据此在悬浮的按钮上方画一个纯 D2D 文字气泡当提示,不引入
     // Win32 TOOLTIPS_CLASS 控件(风险更小、改动更集中)。
     BottomBarButton bottomBarHoverButton;
+
+    // Pointer to recent files history records collection (owned by caller).
+    //
+    // 指向最近打开文件历史记录数据集合的指针（由调用方持有）。
+    RecentFiles* recentFiles;
+
+    // History sidebar drawer slide & mask fade animation state machine.
+    //
+    // 历史记录抽屉式侧栏滑动与蒙层淡入淡出动画状态机。
+    SidebarAnimState historyAnimState;
+
+    // Current normalized animation progress for history sidebar in [0.0f, 1.0f].
+    //
+    // 历史记录侧栏当前归一化动画进度，取值范围 [0.0f, 1.0f]。
+    float historyAnimProgress;
+
+    // Millisecond timestamp when the history sidebar animation phase started.
+    //
+    // 历史记录侧栏当前动画阶段开始时的毫秒时间戳。
+    ULONGLONG historyAnimStartTick;
+
+    // History sidebar animation progress value at transition start.
+    //
+    // 历史记录侧栏动画本次过渡开始时的初始进度值。
+    float historyAnimStartProgress;
+
+    // Current width of history sidebar in DIPs.
+    //
+    // 历史记录侧栏当前宽度（DIP）。
+    float historyPanelWidthDip;
+
+    // Vertical scroll offset of history sidebar in DIPs.
+    //
+    // 历史记录侧栏纵向滚动偏移（DIP）。
+    float historyScrollY;
+
+    // Whether history sidebar scrollbar is hovered by mouse.
+    //
+    // 历史记录侧栏滚动条是否处于鼠标悬浮态。
+    bool historyScrollbarHover;
+
+    // Whether history sidebar width is currently being resized by mouse drag.
+    //
+    // 历史记录侧栏宽度当前是否正在被鼠标拖拽调整。
+    bool historyPanelResizing;
+
+    // Mouse horizontal coordinate in DIPs when history resize drag started.
+    //
+    // 历史记录侧栏开始拖拽调宽时的鼠标横坐标（DIP）。
+    float historyPanelResizeStartMouseXDip;
+
+    // History sidebar width in DIPs when history resize drag started.
+    //
+    // 历史记录侧栏开始拖拽调宽时的初始宽度（DIP）。
+    float historyPanelResizeStartWidthDip;
+
+    // Currently hovered history list item index; kInvalidIndex indicates none.
+    //
+    // 当前鼠标悬浮的历史记录条目下标；kInvalidIndex 表示无。
+    u32 historyHoverIndex;
+
+    // Whether the bottom bar's "copy full path" button is currently showing
+    // its brief post-click success checkmark (auto-clears via
+    // kCopyFeedbackTimerId, same timer as the code-block copy button).
+    //
+    // 底部栏"复制全路径"按钮当前是否处于点击后短暂显示的成功勾选反馈态
+    // (通过 kCopyFeedbackTimerId 自动清除，与代码块复制按钮共用同一个定时器)。
+    bool bottomBarPathCopied;
+
+    // 查找条查询串编辑用的原生 Win32 EDIT 子窗口(2026-09-19 改版,取代自绘
+    // 假输入框)。由 CreateMainWindow 创建,与主窗口同生命周期,子窗口随父
+    // 窗口销毁自动回收,这里不需要显式 DestroyWindow。find 为空时不会创建
+    // (无查找条也就不需要这个控件);追加在结构体末尾,不打乱既有字段的
+    // 位置初始化顺序(main.cpp 用聚合初始化按位置填充前面的字段)。
+    HWND findEditHwnd;
+
+    // Last DPI scale factor the find-edit's HFONT was built for; 0 means no
+    // font has been created yet. RepositionFindEdit only calls
+    // CreateFontIndirectW when the scale actually changes, instead of
+    // reallocating a GDI font object on every WM_SIZE (which fires
+    // repeatedly during an interactive window resize).
+    //
+    // 查找条 EDIT 控件当前 HFONT 对应的 DPI 缩放系数；0 表示还没建过字体。
+    // RepositionFindEdit 只在缩放系数真正变化时才调用 CreateFontIndirectW，
+    // 而不是每次 WM_SIZE(交互式拖边框时会连续触发很多次)都重新分配一个
+    // GDI 字体对象。
+    float findEditFontScale;
 };
+
+/**
+ * Prompt the user (Yes/No) to remove a history entry whose target file no
+ * longer exists on disk. Shared by every code path that can hit a missing
+ * history-entry file (row click, folder-icon click, startup auto-open of
+ * the most recent entry) so they all fail the exact same way instead of
+ * each growing its own dialog.
+ *
+ * 弹窗(是/否)询问是否从历史记录中删除一条目标文件已不存在的历史条目。
+ * 所有可能撞上"文件已不存在"的路径(点击整行、点击文件夹图标、启动时
+ * 自动打开最近一条历史记录)共用这一个函数,失败处理方式完全一致,不各自
+ * 另造一份弹窗。
+ *
+ * @param hwnd Window handle, used as the message box owner.
+ *
+ *   窗口句柄,作为弹窗的父窗口。
+ *
+ * @param state Pointer to WindowState.
+ *
+ *   指向窗口运行期状态的指针。
+ *
+ * @param item History entry index whose file is missing.
+ *
+ *   目标文件已不存在的历史记录条目下标。
+ */
+void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item);
+
+/**
+ * Request a debounced (500ms) write of the recent-files history to disk.
+ * Callers only mutate the in-memory RecentFiles list synchronously
+ * (mdvn::AddRecentFile is a cheap array shift, no I/O); the actual disk
+ * write happens on a WM_TIMER tick owned by the main window, so clicking
+ * several in-document links back-to-back does not fsync once per click.
+ *
+ * 请求一次去抖(500ms)的历史记录写盘。调用方只需同步更新内存里的
+ * RecentFiles 列表(mdvn::AddRecentFile 只是数组移位,不涉及 I/O);真正的
+ * 磁盘写入发生在主窗口拥有的 WM_TIMER 到点时,连续点击好几个文档内链接
+ * 不会每次点击都落一次盘。
+ *
+ * @param hwnd Main window handle, used to host the debounce timer.
+ *
+ *   主窗口句柄,用于挂载去抖定时器。
+ *
+ * @param state Runtime state; silently returns if recentFiles is null.
+ *
+ *   运行期状态,recentFiles 为空时静默返回。
+ *
+ * @example mdvn::RequestRecentFilesSave(hwnd, &windowState);
+ */
+void RequestRecentFilesSave(HWND hwnd, WindowState* state);
 
 /**
  * 开启 Per-Monitor V2 DPI 感知,须在创建任何窗口之前调用。

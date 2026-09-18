@@ -23,6 +23,7 @@
 #include "../util/span.h"
 #include "../util/types.h"
 #include "scroll.h"
+#include "sidebar.h"
 
 namespace mdvn {
 
@@ -49,52 +50,22 @@ inline float ClampOutlinePanelWidth(float widthDip) {
     return widthDip;
 }
 
-/**
- * Animation state machine for outline drawer and mask overlay.
- *
- * 大纲抽屉式侧栏与蒙层叠加层的动画状态机。
- */
-enum class OutlineAnimState : u8 {
-    // Drawer is completely closed; outline pointer is nullptr and consumes zero resources.
-    //
-    // 侧栏完全关闭；大纲指针为 nullptr，零资源开销。
-    Closed = 0,
-
-    // Drawer is sliding into view from the left; mask is fading in.
-    //
-    // 侧栏正从左侧向右滑入展示；蒙层正在淡入。
-    Opening = 1,
-
-    // Drawer is fully expanded and interactive.
-    //
-    // 侧栏完全展开，支持完整交互。
-    Open = 2,
-
-    // Drawer is sliding out to the left; mask is fading out.
-    //
-    // 侧栏正向左侧滑出收起；蒙层正在淡出。
-    Closing = 3,
-};
-
-/**
- * Compute cubic ease-out curve: f(t) = 1 - (1 - t)^3.
- *
- * 计算三次缓出曲线: f(t) = 1 - (1 - t)^3。
- *
- * @param t Normalized linear progress in [0.0f, 1.0f].
- *
- *   归一化线性时间进度，范围 [0.0f, 1.0f]。
- *
- * @returns Transformed ease-out progress in [0.0f, 1.0f].
- *
- *   缓出变换后的进度值，范围 [0.0f, 1.0f]。
- */
-inline float EaseOutCubic(float t) {
-    if (t <= 0.0f) return 0.0f;
-    if (t >= 1.0f) return 1.0f;
-    float oneMinus = 1.0f - t;
-    return 1.0f - oneMinus * oneMinus * oneMinus;
-}
+// Animation state machine for outline drawer and mask overlay: reuses
+// sidebar.h's SidebarAnimState (Closed/Opening/Open/Closing) rather than
+// redeclaring the identical 4-state machine — the history drawer (sidebar.h,
+// new alongside this alias) and the outline drawer are two instances of the
+// exact same open/close animation shape. sidebar.h sits below this header
+// (already #included above) so it, not this file, is the single source of
+// truth; this alias keeps every existing `OutlineAnimState::Closed` etc.
+// call site unchanged.
+//
+// 大纲抽屉与蒙层叠加层的动画状态机:复用 sidebar.h 的 SidebarAnimState
+// (Closed/Opening/Open/Closing),不再重复声明同一套 4 态状态机——历史记录
+// 侧栏(sidebar.h,与本别名同时引入)和大纲侧栏是同一套展开/收起动画形状的
+// 两个实例。sidebar.h 在本文件的依赖链更底层(上方已 #include),因此单一
+// 定义应放在那边而不是这里;这个别名让现有所有 `OutlineAnimState::Closed`
+// 之类的调用点保持不变,不需要改一处调用。
+using OutlineAnimState = SidebarAnimState;
 
 /**
  * Compute horizontal drawing X offset (DIP) for the animated sliding outline panel.

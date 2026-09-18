@@ -11,6 +11,7 @@
 #include "../doc/search.h"
 #include "../layout/layout.h"
 #include "../util/arena.h"
+#include "../util/recent_files.h"
 #include "theme.h"
 
 namespace mdvn {
@@ -20,7 +21,7 @@ class Renderer;
 // 底部栏按钮总数,数值必须与 shell/bottom_bar.h 的 kBottomBarButtonCount
 // 保持一致(render 不反向 include shell 头文件,同一条既有约束)。这里单独
 // 起名是因为 renderer.cpp 内部也有一份同名的文件作用域常量,避免撞名。
-constexpr u32 kBottomBarButtonCountRender = 5;
+constexpr u32 kBottomBarButtonCountRender = 8;
 
 /**
  * 外壳层叠加层视图(T36/T37/T38):查找命中高亮 + 顶部查找条 + 窗口内提示文字。
@@ -81,6 +82,43 @@ struct ShellOverlay {
     // 大纲侧栏滑动与蒙层淡入淡出动画进度，取值范围 [0.0f, 1.0f]。
     // 0.0f 表示完全收起，1.0f 表示完全展开并可交互。
     float outlineAnimProgress;
+
+    // History sidebar fields:
+    // Recent files entries array (ordered from newest to oldest).
+    //
+    // 历史记录侧栏字段：
+    // 最近文件条目数组（按从新到旧从前向后排序）。
+    const RecentFileEntry* historyEntries;
+
+    // Total number of recent files in history.
+    //
+    // 历史记录条目总数。
+    u32 historyItemCount;
+
+    // Currently hovered history item index; kInvalidIndex indicates none.
+    //
+    // 当前鼠标悬浮的历史记录条目下标；kInvalidIndex 表示无。
+    u32 historyHoverItem;
+
+    // Vertical scroll offset of history sidebar drawer in DIPs.
+    //
+    // 历史记录侧栏自身的纵向滚动偏移（DIP）。
+    float historyScrollY;
+
+    // Whether history sidebar scrollbar is in hover/drag active state.
+    //
+    // 历史记录侧栏滚动条是否处于悬浮/拖动激活态。
+    bool historyScrollbarActive;
+
+    // Current width of history sidebar drawer in DIPs.
+    //
+    // 历史记录侧栏当前宽度（DIP）。
+    float historyPanelWidthDip;
+
+    // History drawer slide & mask fade animation progress in [0.0f, 1.0f].
+    //
+    // 历史记录侧栏滑动与蒙层淡入淡出动画进度，取值范围 [0.0f, 1.0f]。
+    float historyAnimProgress;
 };
 
 /**
@@ -290,13 +328,16 @@ public:
      * @param documentSizeBytes 当前文档字节数,随 documentPath 一起画进状态区。
      * @param bottomBarHoverButtonIndex 鼠标当前悬浮的底部栏按钮下标(0~4);
      *              >= kBottomBarButtonCountRender 表示未悬浮任何按钮。
+     * @param bottomBarPathCopied 复制路径按钮当前是否处于点击后的短暂
+     *              "已复制"成功态;documentPath 为空时忽略。
      * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay, true);
      */
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
                       float leftPaddingDip, const ShellOverlay* overlay = nullptr,
                       bool mainScrollbarActive = false, const wchar_t* documentPath = nullptr,
                       u64 documentSizeBytes = 0,
-                      u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender);
+                      u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender,
+                      bool bottomBarPathCopied = false);
 
     /**
      * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
@@ -340,6 +381,24 @@ private:
                     ID2D1SolidColorBrush* copyPaperBrush,
                     ID2D1SolidColorBrush* copyDoneBrush,
                     ID2D1SolidColorBrush* const* hlBrushes);
+
+    // The "copy" glyph itself (two overlapping rounded sheets, T45): pure
+    // D2D geometry, no icon font, no bitmap. Shared by the code-block copy
+    // button and the bottom-bar "copy path" button so both icons look
+    // identical; only draws the sheets, not the button background/hover/
+    // copied-state — those are each caller's own shell logic.
+    //
+    // "复制"图标本体(两张叠压的圆角纸,T45):纯 D2D 几何,零图标字体零位图。
+    // 代码块复制按钮与底部栏"复制路径"按钮共用这一份画法,保证两处图标
+    // 长得一模一样;只画纸张,不画按钮底色/悬浮态/已复制态,那些是各调用方
+    // 自己的外壳逻辑。
+    // @param left/top 图标外接正方形左上角(DIP)。
+    // @param size 图标外接正方形边长(DIP),各线条/纸张比例相对它换算。
+    // @param strokeBrush 纸张描边刷子。
+    // @param paperBrush 前纸"纸面"填充色,可为 nullptr(不填充,只描边)。
+    void DrawCopySheetsGlyph(float left, float top, float size,
+                              ID2D1SolidColorBrush* strokeBrush,
+                              ID2D1SolidColorBrush* paperBrush);
 
     // 画代码块右上角的"复制"按钮(T45):纯 D2D 几何,零图标字体零位图。
     // 三态视觉区分——默认态只画灰色双层纸张轮廓;悬浮态先铺一层浅灰圆角底、
@@ -424,10 +483,33 @@ private:
                                   ID2D1SolidColorBrush* fillBrush);
 
     // 画顶部浮出的查找条(T37)与窗口内提示(T36 的"路径不存在"),
+    // Both share the same "rounded top bar + small text" style; no new
+    // menu/toolbar is introduced (§9).
+    //
     // 两者共用同一套"顶部圆角条 + 小号文字"的画法,不新增菜单栏/工具栏(§9)。
     void DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLen,
                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                          float topOffset);
+
+    // Draw the find bar (T37, 2026-09-19 revision): a fixed-width rounded
+    // bar that no longer resizes with query content — the query text itself
+    // is shown (with a cursor) by the native Edit child window window.cpp
+    // creates. This only draws the background + "Find: " prefix + the
+    // right-side status text ("press Enter" / "3/12" / "no matches"),
+    // leaving an empty rectangle in the middle for the Edit control. Geometry
+    // constants must stay numerically consistent with the same-named
+    // constants in shell/find_bar.h — render must not include shell headers
+    // (existing constraint), so a few plain numbers are duplicated here
+    // (same convention as the other "floating bar" widgets).
+    //
+    // 画查找条(T37,2026-09-19 改版):固定宽度圆角条,不再随查询串内容
+    // 自适应——查询串本身由 window.cpp 创建的原生 Edit 子窗口显示(带光标),
+    // 这里只画背景 + "查找: " 前缀 + 右侧状态文字("回车搜索"/"3/12"/
+    // "无匹配"),中间给 Edit 控件让出一块空矩形,不画任何内容。几何常量
+    // 与 shell/find_bar.h 的同名常量保持一致——render 不反向 include shell
+    // 头文件,这里只重复几个纯数字(与其余"浮出条"类控件同一条既有约束)。
+    void DrawFindBar(float targetWidth, const wchar_t* statusText, u32 statusTextLen,
+                      ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush);
 
     // 画大纲侧栏打开时盖在侧栏外正文区域的半透明蒙层:只盖侧栏矩形之外的
     // 区域(侧栏本身随后单独画,不会被这层蒙层盖住),与 DrawOutlinePanel
@@ -446,6 +528,74 @@ private:
                           ID2D1SolidColorBrush* scrollbarTrackBrush,
                           ID2D1SolidColorBrush* scrollbarThumbBrush);
 
+    /**
+     * Draw translucent mask overlay when history sidebar is opening or open.
+     *
+     * 历史记录侧栏展开或正在展开时，绘制覆盖在侧栏外部正文区域的半透明蒙层。
+     *
+     * @param targetWidth Client render target width in DIPs.
+     *
+     *   以 DIP 为单位的客户区渲染目标宽度。
+     *
+     * @param targetHeight Client render target height in DIPs.
+     *
+     *   以 DIP 为单位的客户区渲染目标高度。
+     *
+     * @param maskBrush Brush for drawing translucent mask overlay.
+     *
+     *   绘制半透明蒙层的画刷。
+     */
+    void DrawHistoryOverlayMask(float targetWidth, float targetHeight,
+                                ID2D1SolidColorBrush* maskBrush);
+
+    /**
+     * Draw history drawer sidebar panel on the right side of the window.
+     *
+     * 在窗口右侧绘制抽屉式历史记录侧边栏面板。
+     *
+     * @param targetWidth Client render target width in DIPs.
+     *
+     *   以 DIP 为单位的客户区渲染目标宽度。
+     *
+     * @param targetHeight Client render target height in DIPs.
+     *
+     *   以 DIP 为单位的客户区渲染目标高度。
+     *
+     * @param bgBrush Sidebar background brush.
+     *
+     *   侧边栏背景画刷。
+     *
+     * @param textBrush Normal item text brush.
+     *
+     *   常规条目文本画刷。
+     *
+     * @param highlightBgBrush Hovered item background highlight brush.
+     *
+     *   悬浮条目背景高亮画刷。
+     *
+     * @param buttonBgBrush Opaque background brush for the hovered row's
+     *        folder/close buttons — deliberately a different (opaque) brush
+     *        from highlightBgBrush, which is semi-transparent and would let
+     *        the row's own text show through underneath the buttons.
+     *
+     *   悬浮行"文件夹/关闭"按钮的不透明底色画刷——刻意与半透明的
+     *   highlightBgBrush 区分开,后者会让按钮下方的文案透出来。
+     *
+     * @param scrollbarTrackBrush Scrollbar track background brush.
+     *
+     *   滚动条轨道背景画刷。
+     *
+     * @param scrollbarThumbBrush Scrollbar thumb brush.
+     *
+     *   滚动条滑块画刷。
+     */
+    void DrawHistoryPanel(float targetWidth, float targetHeight,
+                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                          ID2D1SolidColorBrush* highlightBgBrush,
+                          ID2D1SolidColorBrush* buttonBgBrush,
+                          ID2D1SolidColorBrush* scrollbarTrackBrush,
+                          ID2D1SolidColorBrush* scrollbarThumbBrush);
+
     // 画底部操作栏(2026-09-18 改版):左侧 5 个固定宽度图标按钮(纯 D2D 几何
     // 线条,不带常驻文字标签),按钮间用竖分隔线区分;右侧状态区画当前文档
     // 路径 + 大小(documentPath 为空/空串时不画任何文字)。不参与任何布局
@@ -457,11 +607,14 @@ private:
     //        (含 shell 侧 BottomBarButton::None 的数值)表示未悬浮任何按钮,
     //        不画提示气泡——render 层不认识 BottomBarButton 这个 shell 概念,
     //        只接收一个下标数字,保持单向依赖。
+    // @param pathCopied 复制路径按钮当前是否处于点击后的短暂"已复制"成功态
+    //        (勾选图标),documentPath 为空时忽略(该按钮本就不存在)。
     void DrawBottomBar(float targetWidth, float targetHeight,
                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                         ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                         const wchar_t* documentPath = nullptr, u64 documentSizeBytes = 0,
-                        u32 hoverButtonIndex = kBottomBarButtonCountRender);
+                        u32 hoverButtonIndex = kBottomBarButtonCountRender,
+                        bool pathCopied = false);
 
     // 自绘滚动条(方案A):轨道(常驻,标示可滚动范围)+ 滑块,圆角矩形,
     // 正文与大纲侧栏共用本函数,区别只是调用方传入的
@@ -471,6 +624,25 @@ private:
     // 位置会整体偏移。
     void DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight, float scrollY,
                         ID2D1SolidColorBrush* trackBrush, ID2D1SolidColorBrush* thumbBrush);
+
+    // 底部栏"放大/缩小"图标几何(2026-09-19,按给定 SVG viewBox 0 0 24 24 的
+    // 直线路径精确复刻:字母 "A" + 右下角 "+"/"-"),设备无关资源,首次用到才
+    // 建、跟工厂同生命周期,不必每帧重建。
+    ID2D1PathGeometry* zoomInIconGeometry_;
+    ID2D1PathGeometry* zoomOutIconGeometry_;
+
+    // Build the fill geometry for the "zoom in" or "zoom out" icon from its
+    // SVG path data (nonzero winding rule, matching SVG's default
+    // fill-rule); called once and cached the first time that icon is drawn.
+    // @param zoomIn true builds zoom-in ("A+"), false builds zoom-out ("A-").
+    // @return The newly built path geometry; nullptr if factory_ isn't ready
+    //         or creation fails.
+    //
+    // 按给定 SVG 路径数据构建"放大"或"缩小"图标的填充几何(nonzero 缠绕规则,
+    // 与 SVG 默认 fill-rule 一致),只在首次绘制该图标时调用一次并缓存。
+    // @param zoomIn true 建放大("A+"),false 建缩小("A-")。
+    // @return 新建的路径几何;factory_ 未就绪或创建失败返回 nullptr。
+    ID2D1PathGeometry* BuildZoomFontIconGeometry(bool zoomIn);
 
     ID2D1Factory* factory_;              // 不拥有,生命周期由调用方保证
     FontSubsystem* fonts_;                // 不拥有,可为空;供 T28 脚注标签与 T33 占位文案使用

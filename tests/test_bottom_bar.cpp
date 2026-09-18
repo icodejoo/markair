@@ -13,18 +13,31 @@ using mdvn::HitTestBottomBar;
 using mdvn::IsPointInBottomBar;
 using mdvn::kBottomBarButtonCount;
 using mdvn::kBottomBarButtonWidthDip;
+using mdvn::kBottomBarLeftButtonCount;
 using mdvn::kBottomBarHeightDip;
 
-// 5 个按钮从左侧起紧密排列,固定宽度 = 栏高度,纵向铺满栏高度。
-MDVN_TEST(BottomBar_ButtonRectsPackedFromLeftWithFixedWidth) {
+// 5 个左侧按钮从左侧起紧密排列，History(下标 6)贴最右侧，CopyPath(下标 5)
+// 紧贴其左边——CopyPath 的矩形本身不受"是否有文档打开"影响，可见性由调用方
+// (HitTestBottomBar 的 hasDocument 参数/渲染层的 hasDocument 判断)另行控制。
+MDVN_TEST(BottomBar_ButtonRectsPackedFromLeftAndRight) {
     float clientH = 600.0f;
-    for (mdvn::u32 i = 0; i < kBottomBarButtonCount; ++i) {
-        auto r = BottomBarButtonRectDip(i, clientH);
+    float clientW = 800.0f;
+    for (mdvn::u32 i = 0; i < 5; ++i) {
+        auto r = BottomBarButtonRectDip(i, clientW, clientH);
         MDVN_CHECK(r.left == kBottomBarButtonWidthDip * static_cast<float>(i));
         MDVN_CHECK(r.right == kBottomBarButtonWidthDip * static_cast<float>(i + 1));
         MDVN_CHECK(r.top == clientH - kBottomBarHeightDip);
         MDVN_CHECK(r.bottom == clientH);
     }
+    auto rHistory = BottomBarButtonRectDip(static_cast<mdvn::u32>(BottomBarButton::History), clientW, clientH);
+    MDVN_CHECK(rHistory.left == clientW - kBottomBarButtonWidthDip);
+    MDVN_CHECK(rHistory.right == clientW);
+    MDVN_CHECK(rHistory.top == clientH - kBottomBarHeightDip);
+    MDVN_CHECK(rHistory.bottom == clientH);
+
+    auto rCopyPath = BottomBarButtonRectDip(static_cast<mdvn::u32>(BottomBarButton::CopyPath), clientW, clientH);
+    MDVN_CHECK(rCopyPath.right == rHistory.left);
+    MDVN_CHECK(rCopyPath.left == rHistory.left - kBottomBarButtonWidthDip);
 }
 
 // 点落在底部栏高度带内才算命中(按钮区/状态区都算在这条带里)。
@@ -35,21 +48,38 @@ MDVN_TEST(BottomBar_IsPointInBottomBarChecksBandOnly) {
     MDVN_CHECK(IsPointInBottomBar(clientH, clientH - 1.0f));
 }
 
-// 按横坐标分段命中对应按钮,从左到右依次是 Outline/OpenDoc/Theme/ZoomOut/ZoomIn,
-// 每段固定宽度 kBottomBarButtonWidthDip。
+// 按横坐标分段命中对应按钮,从左到右依次是 Outline/OpenDoc/Theme/ZoomOut/ZoomIn,最右侧是 History。
+// hasDocument=false:CopyPath 不存在,不占用任何区域。
 MDVN_TEST(BottomBar_HitTestReturnsCorrectButtonByColumn) {
-    float clientW = 800.0f;  // 远大于 5 * kBottomBarButtonWidthDip,右侧是状态区
+    float clientW = 800.0f;  // 远大于 7 * kBottomBarButtonWidthDip,中间是状态区
     float w = kBottomBarButtonWidthDip;
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, 5.0f, false)),
                   static_cast<int>(BottomBarButton::Outline));
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w + 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w + 5.0f, false)),
                   static_cast<int>(BottomBarButton::OpenDoc));
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f + 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f + 5.0f, false)),
                   static_cast<int>(BottomBarButton::Theme));
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 3.0f + 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 3.0f + 5.0f, false)),
                   static_cast<int>(BottomBarButton::ZoomOut));
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 4.0f + 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 4.0f + 5.0f, false)),
                   static_cast<int>(BottomBarButton::ZoomIn));
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - 5.0f, false)),
+                  static_cast<int>(BottomBarButton::History));
+}
+
+// hasDocument=true:CopyPath 出现在 History 左侧一个按钮宽度处;原本落在
+// 那个区域的点(hasDocument=false 时是状态区/None)现在命中 CopyPath。
+MDVN_TEST(BottomBar_HitTestCopyPathOnlyWhenDocumentOpen) {
+    float clientW = 800.0f;
+    float w = kBottomBarButtonWidthDip;
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - w - 5.0f, true)),
+                  static_cast<int>(BottomBarButton::CopyPath));
+    // 同一个点,没有打开文档时该区域是状态区,不是按钮。
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - w - 5.0f, false)),
+                  static_cast<int>(BottomBarButton::None));
+    // History 不受影响,始终贴最右。
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - 5.0f, true)),
+                  static_cast<int>(BottomBarButton::History));
 }
 
 // 边界:恰好落在两段交界处(第 2/3 段边界)算作右边那一段(下标用
@@ -57,24 +87,24 @@ MDVN_TEST(BottomBar_HitTestReturnsCorrectButtonByColumn) {
 MDVN_TEST(BottomBar_HitTestBoundaryBelongsToRightSegment) {
     float clientW = 800.0f;
     float w = kBottomBarButtonWidthDip;
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f, false)),
                   static_cast<int>(BottomBarButton::Theme));
 }
 
 // 极窄/零宽度窗口不崩溃,返回 None。
 MDVN_TEST(BottomBar_HitTestZeroWidthReturnsNone) {
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(0.0f, 5.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(0.0f, 5.0f, false)),
                   static_cast<int>(BottomBarButton::None));
 }
 
-// 落在按钮区右侧(状态区)不再钳制成最后一个按钮,必须返回 None——状态区
-// 不是按钮,点击它不该触发任何按钮动作。
-MDVN_TEST(BottomBar_HitTestBeyondButtonsReturnsNoneForStatusArea) {
+// 落在左侧按钮区和右侧历史按钮之间的中间状态区必须返回 None——状态区
+// 不是按钮,点击它不该触发任何按钮动作。(hasDocument=false,CopyPath 不存在)
+MDVN_TEST(BottomBar_HitTestBetweenButtonsReturnsNoneForStatusArea) {
     float clientW = 800.0f;
-    float buttonsWidth = kBottomBarButtonWidthDip * static_cast<float>(kBottomBarButtonCount);
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, buttonsWidth)),
+    float leftButtonsWidth = kBottomBarButtonWidthDip * static_cast<float>(kBottomBarLeftButtonCount);
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, leftButtonsWidth, false)),
                   static_cast<int>(BottomBarButton::None));
-    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - 1.0f)),
+    MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - kBottomBarButtonWidthDip - 1.0f, false)),
                   static_cast<int>(BottomBarButton::None));
 }
 

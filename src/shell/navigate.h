@@ -125,6 +125,18 @@ bool OpenExternalTarget(StrSlice href);
  */
 bool MarkdownFileExists(const wchar_t* path);
 
+/**
+ * 在系统文件管理器(explorer.exe)里打开某个文件所在的文件夹,并选中该文件
+ * (历史记录侧栏"打开所在文件夹"按钮 / 底部栏路径区用)。调用方须先自行确认
+ * 文件存在(见 `MarkdownFileExists`)——本函数不做存在性检查,不存在的路径
+ * 交给 explorer.exe 处理,行为不保证(可能打开空文件夹)。
+ *
+ * @param path 完整文件路径(以 '\0' 结尾),非空。
+ * @return `ShellExecuteW` 调用成功返回 true;路径为空或调用失败返回 false。
+ * @example mdvn::OpenContainingFolderAndSelect(L"C:\\docs\\readme.md");
+ */
+bool OpenContainingFolderAndSelect(const wchar_t* path);
+
 /** 点击一张图片时应当采取的打开方式(纯判定,不含任何 Win32 调用)。 */
 enum class ImageOpenAction : u8 {
     OpenLocalPath,    // 本地相对/绝对路径:直接 ShellExecuteW 打开原文件

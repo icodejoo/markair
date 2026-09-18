@@ -27,6 +27,7 @@ add_executable(mdvn_tests
     test_navigate.cpp
     test_hit_test.cpp
     test_search.cpp
+    test_find_bar.cpp
     test_ini.cpp
     test_window_state.cpp
     test_theme.cpp
@@ -46,11 +47,13 @@ add_executable(mdvn_tests
     test_selection.cpp
     test_bottom_bar.cpp
     test_open_dialog.cpp
+    test_recent_files.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp
     ../src/util/str.cpp
     ../src/util/ini.cpp
+    ../src/util/recent_files.cpp
     ../src/doc/file_map.cpp
     ../src/doc/encoding.cpp
     ../src/doc/parser.cpp

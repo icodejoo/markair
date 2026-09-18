@@ -316,6 +316,22 @@ bool MarkdownFileExists(const wchar_t* path) {
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+bool OpenContainingFolderAndSelect(const wchar_t* path) {
+    if (!path || path[0] == 0) return false;
+
+    // explorer.exe /select,"<path>":单个参数串,逗号紧跟在 /select 之后,
+    // 路径本身用引号包住防止空格拆散参数(与 open_dialog.cpp 的命令行拼接
+    // 同一条"引号包路径"约定)。
+    wchar_t args[MAX_PATH + 16] = L"/select,\"";
+    u32 pos = static_cast<u32>(WideLength(args));
+    for (u32 i = 0; path[i] != L'\0' && pos + 2 < MAX_PATH + 16; ++i) args[pos++] = path[i];
+    args[pos++] = L'"';
+    args[pos] = L'\0';
+
+    HINSTANCE rc = ShellExecuteW(nullptr, L"open", L"explorer.exe", args, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(rc) > 32;  // Win32 的历史约定:> 32 表示成功
+}
+
 ImageOpenAction DecideImageOpenAction(LinkTargetKind kind, bool hasRawBytes) {
     switch (kind) {
     case LinkTargetKind::RelativePath:

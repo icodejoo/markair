@@ -30,9 +30,17 @@ set(MDVN_COMMON_COMPILE_OPTIONS
     /GR-      # 禁用 RTTI
 )
 
-# Release 专属的体积/速度优化选项：整程序优化、函数级链接、消除重复只读数据。
+# Release 专属的体积/速度优化选项：内存占用优先于运行速度（用户裁决），
+# /O1 是 MSVC 现行"体积最小化"预设(等价旧版 /Os，MSVC 文档已建议用 /O1 替代
+# 单独的 /Os)，与 /O2(速度优先)互斥，二选一；/GL /Gy /Gw 三项本身就是
+# 体积相关优化(整程序优化/函数级链接/消除重复只读数据)，继续保留。
+#
+# Release compile options: memory footprint takes priority over raw speed
+# (per user decision). /O1 is MSVC's current "minimize size" preset
+# (the documented replacement for standalone /Os, mutually exclusive with
+# /O2). /GL /Gy /Gw stay unchanged — they already are size-related.
 set(MDVN_RELEASE_COMPILE_OPTIONS
-    /O2 /GL /Gy /Gw
+    /O1 /GL /Gy /Gw
 )
 
 # Release 链接期优化：剔除未引用符号、合并等价函数、跨模块优化。

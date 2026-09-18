@@ -1,12 +1,18 @@
-// mdvn 字体子系统实现:见 font.h。所有字体族名均来自
-// 01-requirements.md §8 裁决 #10 的原文,不得凭记忆改动顺序或名字。
+// mdvn 字体子系统实现:见 font.h。字体族名基础来自
+// 01-requirements.md §8 裁决 #10,2026-09-19 追加修订:正文主族改为跟随
+// 系统默认消息字体(见 QuerySystemBodyFamily),不再写死 "Segoe UI" 字面量;
+// 查询走 SystemParametersInfoW(SPI_GETNONCLIENTMETRICS),不触发
+// GetSystemFontCollection 全量枚举,与裁决 #10 "禁止枚举"的精神不冲突。
 #include "font.h"
+
+#include <windows.h>
 
 namespace mdvn {
 
 namespace {
 
-// 正文西文主族(裁决 #10)。
+// 正文西文主族的兜底默认值:SystemParametersInfoW 查询失败时使用
+// (裁决 #10 原文的静态白名单值)。
 const wchar_t kBodyPrimaryFamily[] = L"Segoe UI";
 
 // 中文回退族名(裁决 #10),正文链与等宽链共用这一份字面量,避免重复。
@@ -52,10 +58,39 @@ constexpr u32 kMonoFallbackCount =
 const DWRITE_UNICODE_RANGE kFullUnicodeRange = {0x0, 0x10FFFF};
 
 // 正文文本格式的字号(DIP),对齐架构 §4 第 4 条"最多 3 种字号"的最小实现。
-constexpr float kBodyFontSize = 16.0f;
+// 2026-09-19:16 → 14。
+constexpr float kBodyFontSize = 14.0f;
 
-// 等宽文本格式的字号(DIP)。
-constexpr float kMonoFontSize = 16.0f;
+// 等宽文本格式的字号(DIP)。2026-09-19:16 → 12 → 14(与正文同号)。
+constexpr float kMonoFontSize = 14.0f;
+
+// 存放 QuerySystemBodyFamily 查到的族名;进程生命周期内只查一次(查询本身
+// 走 SystemParametersInfoW,开销远小于 DirectWrite 调用,没必要缓存到实例里)。
+wchar_t g_systemBodyFamily[LF_FACESIZE] = {};
+bool g_systemBodyFamilyQueried = false;
+
+// 查询 Windows 当前配置的系统消息字体族名(即"系统默认字体"),
+// 用 SystemParametersInfoW(SPI_GETNONCLIENTMETRICS) 读取 lfMessageFont,
+// 不调用任何字体枚举 API。查询失败或返回空族名时回退到 kBodyPrimaryFamily。
+const wchar_t* QuerySystemBodyFamily() {
+    if (g_systemBodyFamilyQueried) {
+        return g_systemBodyFamily[0] != 0 ? g_systemBodyFamily : kBodyPrimaryFamily;
+    }
+    g_systemBodyFamilyQueried = true;
+
+    NONCLIENTMETRICSW metrics = {};
+    metrics.cbSize = sizeof(metrics);
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0) &&
+        metrics.lfMessageFont.lfFaceName[0] != 0) {
+        u32 i = 0;
+        while (metrics.lfMessageFont.lfFaceName[i] != 0 && i + 1 < LF_FACESIZE) {
+            g_systemBodyFamily[i] = metrics.lfMessageFont.lfFaceName[i];
+            ++i;
+        }
+        g_systemBodyFamily[i] = 0;
+    }
+    return g_systemBodyFamily[0] != 0 ? g_systemBodyFamily : kBodyPrimaryFamily;
+}
 
 // 正文文本格式使用的 locale,西文场景下用 en-us 即可,中文字符靠回退链解决。
 const wchar_t kBodyLocale[] = L"en-us";
@@ -200,7 +235,7 @@ bool FontSubsystem::CreateBodyFormat() {
     if (!factory_) return false;
 
     HRESULT hr = factory_->CreateTextFormat(
-        PickFamily(bodyPrimaryOverride_, kBodyPrimaryFamily), nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        PickFamily(bodyPrimaryOverride_, QuerySystemBodyFamily()), nullptr, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, kBodyFontSize * Scale(),
         kBodyLocale, &bodyFormat_);
     if (FAILED(hr) || !bodyFormat_) return false;

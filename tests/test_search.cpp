@@ -259,3 +259,39 @@ MDVN_TEST(Find_RerunAndStepWrapsAround) {
     MDVN_CHECK(!find.GoNext());
     MDVN_CHECK(!find.GoPrev());
 }
+
+// 用例(2026-09-19 "回车才搜"):Dirty() 只在查询串改动后为 true,Rerun 后
+// 清零;ClearMatches() 只清命中集合,不做扫描、不碰查询串/Dirty 状态。
+MDVN_TEST(Find_DirtyFlagTracksQueryEdits) {
+    MDVN_MAKE_SEARCH_ARENAS();
+    const char src[] = "todo one\n\ntodo two\n\ntodo three\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+
+    FindSession find(&results, &scratch);
+    find.Open();
+    MDVN_CHECK(!find.Dirty());  // 刚打开,空查询串,没改动过
+
+    find.AppendChar(L't');
+    MDVN_CHECK(find.Dirty());
+    find.AppendChar(L'o');
+    find.AppendChar(L'd');
+    find.AppendChar(L'o');
+
+    // 输入过程中只清高亮,不扫描——命中集合仍是空的,Dirty 保持 true。
+    find.ClearMatches();
+    MDVN_CHECK_EQ(find.MatchCount(), 0u);
+    MDVN_CHECK(find.Dirty());
+    MDVN_CHECK(wcscmp(find.Query(), L"todo") == 0);  // 查询串不受影响
+
+    // 回车触发的 Rerun:真正扫描一次,Dirty 清零。
+    MDVN_CHECK_EQ(find.Rerun(doc), 3u);
+    MDVN_CHECK(!find.Dirty());
+
+    // 查询串没再变,后续 Enter/F3 应直接跳转(Dirty 仍是 false)。
+    MDVN_CHECK(find.GoNext());
+    MDVN_CHECK(!find.Dirty());
+
+    // 再次编辑查询串,Dirty 重新变 true。
+    find.Backspace();
+    MDVN_CHECK(find.Dirty());
+}

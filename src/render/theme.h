@@ -59,11 +59,21 @@ struct Palette {
     D2D1_COLOR_F findHighlight;               // 查找命中高亮底色
     D2D1_COLOR_F findCurrentHighlight;        // 查找当前命中高亮底色
     D2D1_COLOR_F selectionHighlight;          // T80:鼠标拖选文本的高亮底色
-    D2D1_COLOR_F overlayBarBackground;        // 浮出条(查找条/大纲侧栏共用)底色
+    D2D1_COLOR_F overlayBarBackground;        // 浮出条(窗口内提示,如"文件不存在")底色
     D2D1_COLOR_F overlayBarText;              // 浮出条文字色
+    // 查找条(2026-09-19 改版:原生 EDIT 子窗口)专用底色/文字色,与
+    // overlayBarBackground/overlayBarText 分开是因为查找条要跟随亮/暗主题
+    // 变化(浅色主题用浅底深字,深色主题用深底浅字),而窗口内提示浮出条
+    // 两套主题下都固定深色,不应被这次改动牵连。
+    D2D1_COLOR_F findBarBackground;
+    D2D1_COLOR_F findBarText;
     D2D1_COLOR_F outlineHighlightBackground;  // T63:大纲侧栏当前阅读位置条目底色
     D2D1_COLOR_F outlineHighlightText;        // T63:大纲侧栏当前阅读位置条目前景色
     D2D1_COLOR_F outlineOverlayMaskBackground;  // 大纲侧栏打开时,盖在侧栏外正文区域的半透明蒙层色
+    // 历史记录侧栏行内"打开所在文件夹/关闭"按钮的底色——不透明,与
+    // outlineHighlightBackground(半透明)刻意区分:半透明底色叠在文案上
+    // 会让文字透出来,而这块底色的用途正是盖住文案,必须不透明。
+    D2D1_COLOR_F historyRowButtonBackground;
     // T53 代码语法着色:与 hl/lexer.h 的 TokenType 七类逐一对应,只在
     // 语言被识别(languageId != kLanguageNone)时才会用到。
     D2D1_COLOR_F hlKeyword;                   // 关键字
@@ -121,10 +131,13 @@ inline constexpr Palette kLightPalette{
     /* selectionHighlight         */ MakeColor(0x0366D6u, 0.28f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* findBarBackground          */ MakeColor(0xF6F8FAu, 0.98f),
+    /* findBarText                */ MakeColor(0x24292Fu),
     /* outlineHighlightBackground */ MakeColor(0x0366D6u, 0.16f),
     /* outlineHighlightText       */ MakeColor(0x0366D6u),
     // 浅色主题背景接近白色,蒙层取背景的反色(黑)压暗正文,半透明。
     /* outlineOverlayMaskBackground */ MakeColor(0x000000u, 0.35f),
+    /* historyRowButtonBackground */ MakeColor(0xCFE4FFu),
     /* hlKeyword                  */ MakeColor(0xD73A49u),
     /* hlString                   */ MakeColor(0x032F62u),
     /* hlNumber                   */ MakeColor(0x005CC5u),
@@ -180,12 +193,15 @@ inline constexpr Palette kDarkPalette{
     /* selectionHighlight         */ MakeColor(0x58A6FFu, 0.32f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* findBarBackground          */ MakeColor(0x161B22u, 0.98f),
+    /* findBarText                */ MakeColor(0xC9D1D9u),
     /* outlineHighlightBackground */ MakeColor(0x58A6FFu, 0.18f),
     /* outlineHighlightText       */ MakeColor(0x58A6FFu),
     // 深色主题背景本身接近黑色,蒙层取背景的反色(近白)才能压暗/柔化正文,
     // 与浅色主题用黑色蒙层同一设计意图("往主题背景的反方向遮"),不是随手
     // 换个数值。
     /* outlineOverlayMaskBackground */ MakeColor(0xFFFFFFu, 0.28f),
+    /* historyRowButtonBackground */ MakeColor(0x1F3A57u),
     /* hlKeyword                  */ MakeColor(0xFF7B72u),
     /* hlString                   */ MakeColor(0xA5D6FFu),
     /* hlNumber                   */ MakeColor(0x79C0FFu),

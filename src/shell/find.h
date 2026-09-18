@@ -5,8 +5,11 @@
 // (`Ctrl+F` / `Enter` / `Shift+Enter` / `F3` / `Esc`)与绘制留在 window.cpp /
 // renderer.cpp,因此本文件可以直接单测。
 //
-// 交互口径(§9 "内容区保持极简" + 裁决 #7):顶部浮出一条轻量查找条,增量输入
-// 即时重搜,**没有**全字匹配/大小写开关这类附加 UI 状态。
+// 交互口径(§9 "内容区保持极简"):顶部浮出一条轻量查找条,**没有**全字匹配/
+// 大小写开关这类附加 UI 状态。2026-09-19 起改为"回车才搜"——增量输入只更新
+// 查询串,不重搜;按 `Enter`/`F3` 时,若查询串自上次搜索后有变化(`Dirty()`
+// 为 true)才重新全文扫描并跳到第一处命中,否则直接跳到下一处已有命中,
+// 这样连续按 `Enter` 仍是"逐处跳转"而不是每次都重新扫一遍全文。
 #pragma once
 
 #include "../doc/search.h"
@@ -71,8 +74,26 @@ public:
      */
     bool Backspace();
 
+    /**
+     * 整体替换查询串(原生 Win32 Edit 控件 EN_CHANGE 通知同步文本用,取代逐字符
+     * AppendChar/Backspace 调用)。超出 `kMaxFindQueryChars` 的部分截断。
+     * 总是标记 `Dirty()`(哪怕新文本和旧的一样,调用方只在真的改过时才调这个,
+     * 不必在这里做多余的相等性判断)。
+     * @param text 新查询串(UTF-16),可为 nullptr(等价于清空)。
+     * @param len text 的长度(UTF-16 code unit);超过缓冲上限的部分丢弃。
+     * @example find.SetQuery(editText, editTextLen);
+     */
+    void SetQuery(const wchar_t* text, u32 len);
+
     /** 当前查询串(以 '\0' 结尾,便于直接交给 DirectWrite 排版)。 */
     const wchar_t* Query() const { return query_; }
+
+    /**
+     * 查询串自上次 `Rerun` 以来是否发生过变化(`AppendChar`/`Backspace`
+     * 改动过查询串,`Rerun` 会清掉这个标记)。调用方(window.cpp 的回车按键
+     * 处理)据此判断本次回车是该发起一次新搜索,还是直接跳到下一处已有命中。
+     */
+    bool Dirty() const { return dirty_; }
 
     /** 当前查询串长度(UTF-16 code unit,不含结尾 '\0')。 */
     u32 QueryLength() const { return queryLen_; }
@@ -86,6 +107,14 @@ public:
      * @example u32 n = find.Rerun(doc);
      */
     u32 Rerun(const Document& doc);
+
+    /**
+     * 只清空当前命中集合与高亮,不做任何文档扫描(不再"增量输入即时重搜"后,
+     * 每次 `AppendChar`/`Backspace` 改完查询串都调这个,避免继续显示上一次
+     * 查询串留下的过期高亮)。查询串本身不受影响。
+     * @example if (find.AppendChar(ch)) find.ClearMatches();
+     */
+    void ClearMatches();
 
     /** 当前命中总数。 */
     u32 MatchCount() const { return matches_.Size(); }
@@ -121,6 +150,7 @@ private:
     u32 queryLen_;                // 查询串长度
     u32 current_;                 // 当前命中下标,kInvalidIndex 表示无
     bool visible_;                // 查找条是否可见
+    bool dirty_;                  // 查询串自上次 Rerun 后是否变过,见 Dirty() 的注释
 };
 
 }  // namespace mdvn
