@@ -12,6 +12,7 @@ add_executable(mdvn WIN32
     doc/attr.cpp
     doc/front_matter.cpp
     doc/search.cpp
+    doc/outline.cpp
     assets/image.cpp
     assets/data_uri.cpp
     assets/cache.cpp

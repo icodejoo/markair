@@ -36,6 +36,7 @@ add_executable(mdvn_tests
     test_assoc.cpp
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
+    test_outline.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp
@@ -47,6 +48,7 @@ add_executable(mdvn_tests
     ../src/doc/attr.cpp
     ../src/doc/front_matter.cpp
     ../src/doc/search.cpp
+    ../src/doc/outline.cpp
     ../src/text/font.cpp
     ../src/layout/layout.cpp
     ../src/layout/table.cpp
@@ -81,6 +83,11 @@ target_compile_definitions(mdvn_tests PRIVATE
 # MDVN_CORPUS_DIR 一致(ctest 默认工作目录不是仓库根目录)。
 target_compile_definitions(mdvn_tests PRIVATE
     MDVN_FUZZ_DIR="${CMAKE_SOURCE_DIR}/bench/fuzz")
+
+# T62:test_outline.cpp 的性能验收用例需要加载 bench/BENCH-A.md,同样的
+# "ctest 工作目录不是仓库根目录"问题,烘焙一份绝对路径。
+target_compile_definitions(mdvn_tests PRIVATE
+    MDVN_BENCH_DIR="${CMAKE_SOURCE_DIR}/bench")
 
 # test_model.cpp 通过 parser.cpp 间接依赖 md4c 的 md_parse；
 # test_font.cpp 通过 font.cpp 依赖 DirectWrite。
