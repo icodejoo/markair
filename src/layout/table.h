@@ -30,12 +30,26 @@ constexpr float kTableColumnGapDip = 1.0f;
 // 估算成需要换行——两处口径必须一致,内边距只在一个地方定义、两处共用。
 constexpr float kTableCellPaddingDip = 6.0f;
 
+// 表格单元格内文本上下各留的内边距(DIP)。此前行高借用了普通段落的通用
+// 块间距 kLeafVerticalPaddingDip(4dip),偏矮;参照 GitHub GFM 渲染惯例
+// (单元格 padding: 6px 13px)单独给表格定义,与横向内边距对称。
+constexpr float kTableCellVerticalPaddingDip = 6.0f;
+
 // 估算单元格内容理想宽度用的平均字符宽度(DIP),与 layout.cpp 的
 // kAvgCharWidthDip 取相同口径,保持两处估算风格一致。这里的"字符"指
 // Utf8VisualWidth 输出的视觉宽度单位(ASCII 记 1、CJK 等宽字符记 2),
 // 不是字节数,否则中英文混排时中文按 3 字节算会把列宽估得偏宽,
 // 挤压同一行里纯英文列的宽度。
 constexpr float kTableAvgCharWidthDip = 8.0f;
+
+// 估算宽度相对真实字形宽度的安全系数。kTableAvgCharWidthDip 只是"平均值",
+// 真机实测(Segoe UI 16dip)阿拉伯数字约 1.08 倍、大写字母更宽,而 CJK 恰好
+// 1.00 倍、一点富余都没有:列宽按平均值算出来后,真实排版一超就换行——
+// 表现就是"窗口明明够宽,单元格内容还在折行"。乘上这道系数让理想宽度覆盖
+// 常见的偏宽字形。行数估算(layout.cpp 的单元格高度)必须用同一个系数,
+// 否则宽度按 1.2 给、行数按 1.0 算,定义该列宽度的那个单元格会被估成两行,
+// 行高凭空拔高一倍。
+constexpr float kTableGlyphWidthSafetyFactor = 1.2f;
 
 /**
  * 计算一个表格各列的宽度(DIP)。
@@ -44,7 +58,8 @@ constexpr float kTableAvgCharWidthDip = 8.0f;
  * "拖动窗口时表格明明离右边界还有大片空白却仍触发换行重排"的问题后调整
  * 为"只在真正需要压缩时才生效"的两段式):
  *   1. 每列理想宽度 = 该列所有单元格"视觉宽度估算"(见 Utf8VisualWidth)的
- *      最大值 × 平均字符宽度 + 两侧内边距(kTableCellPaddingDip * 2),
+ *      最大值 × 平均字符宽度(kTableAvgCharWidthDip × fontScale ×
+ *      kTableGlyphWidthSafetyFactor)+ 两侧内边距(kTableCellPaddingDip * 2),
  *      只钳制下限 kMinColumnWidthDip,**不**在这一步钳制上限——上限
  *      (kMaxColumnWidthRatio)是"压缩时怎么分摊"的规则,不是"要不要压缩"
  *      的判断依据,提前钳到视口比例会导致表格整体明明还有富余空间,仅因为
@@ -54,8 +69,10 @@ constexpr float kTableAvgCharWidthDip = 8.0f;
  *      理想宽度,不做任何进一步处理(哪怕某一列因此占了视口的绝大部分)——
  *      表格不需要收缩,就不该有任何视觉变化。
  *   3. 若超过视口宽度(表格才真正"贴到"可用宽度的边界):先把每列理想宽度
- *      钳到上限 [kMinColumnWidthDip, 视口宽度 * kMaxColumnWidthRatio],
- *      再按钳制后的比例整体等比压缩,压缩下限为 kMinColumnWidthDip。
+ *      钳到上限 [kMinColumnWidthDip, 视口宽度 * kMaxColumnWidthRatio],再多轮
+ *      等比压缩——每轮把已经压到下限 kMinColumnWidthDip 的列固定住,剩余预算
+ *      只在还有压缩余地的列之间分摊,保证"可用宽度够放下 colCount 个下限列"
+ *      时总宽一定不超视口。
  *   4. 压到下限后仍超宽,不再进一步压缩(由调用方对单元格文本换行,
  *      裁决 #2:表格变高但不丢信息)。
  *
@@ -66,12 +83,16 @@ constexpr float kTableAvgCharWidthDip = 8.0f;
  * @param rowCount 行数(含表头),用于遍历 cellCharCounts。
  * @param viewportWidth 当前视口宽度(DIP)。
  * @param arena 输出数组所在的 Arena,按裁决 §6"列数 × 4 字节"存放。
+ * @param fontScale 当前字号缩放档位(FontSubsystem::Scale(),默认 1.0)。理想
+ *                  宽度按内容估算,字号放大后真实字形同比变宽,这里不跟着放大
+ *                  就会把列宽估窄到只够 1/fontScale 的内容,表现为"放大字号后
+ *                  表格不变宽、单元格全部折行"。
  * @return colCount 个元素的列宽数组;Arena 分配失败时返回空 Span(data=nullptr,len=0)。
  * @example
  *   u32 chars[] = {3, 10,   2, 20}; // 2 列 2 行:第 0 列最大视觉宽度 3,第 1 列 20
  *   mdvn::Span<float> widths = mdvn::ComputeTableColumnWidths(chars, 2, 2, 600.0f, &arena);
  */
 Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u32 rowCount,
-                                      float viewportWidth, Arena* arena);
+                                      float viewportWidth, Arena* arena, float fontScale = 1.0f);
 
 }  // namespace mdvn

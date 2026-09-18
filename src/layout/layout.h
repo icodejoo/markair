@@ -284,7 +284,11 @@ private:
                         bool orderedItem, u32 itemOrdinal, char itemDelim);
 
     // 叶子内容块(标题/段落/代码块/分割线)的高度估算,纯数字计算,不涉及 DirectWrite。
-    float EstimateLeafHeight(const Block& b, float availableWidth) const;
+    // lineEstimateSafetyFactor:字符数估算折行数时,对平均字符宽度额外乘的安全系数
+    // (>1 时估算行数宁多勿少)。默认 1.0 保持原有口径;表格单元格更容易因为列宽
+    // 被压得很窄而在真实字形宽度上出现较大波动,调用方按需传大于 1 的值兜底。
+    float EstimateLeafHeight(const Block& b, float availableWidth,
+                              float lineEstimateSafetyFactor = 1.0f) const;
 
     // 为指定块创建真实 IDWriteTextLayout:拼接其直属 inline 文本 -> UTF-16 -> 调用字体子系统,
     // 并按 run 应用粗体/斜体/删除线/行内代码字体/链接下划线等样式(T23),记录链接 run(T24)。

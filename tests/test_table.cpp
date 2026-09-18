@@ -23,6 +23,9 @@ using mdvn::StrSlice;
 using mdvn::Utf8VisualWidth;
 using mdvn::kMinColumnWidthDip;
 using mdvn::kMaxColumnWidthRatio;
+using mdvn::kTableAvgCharWidthDip;
+using mdvn::kTableCellPaddingDip;
+using mdvn::kTableGlyphWidthSafetyFactor;
 using mdvn::u32;
 
 namespace {
@@ -120,13 +123,15 @@ MDVN_TEST(Table_NoCompressionWhenFitsViewport) {
 // 空白却仍然触发重排"的问题,见 table.h 文件头注释)。
 MDVN_TEST(Table_LongColumnNotClampedWhenTableFitsViewport) {
     MDVN_MAKE_TEST_ARENA();
-    // 1 列内容视觉宽度 180,理想宽度 = 180*8+12=1452,超过 viewport*0.6=1200
+    // 1 列内容视觉宽度 150,理想宽度 = 150*8*1.2+12=1452,超过 viewport*0.6=1200
     // (若按旧逻辑无条件钳到这个比例就会被强制换行),但总宽(1452)本身小于
     // 视口(2000),不应该压缩。
-    u32 chars[] = {180};
+    u32 chars[] = {150};
     Span<float> widths = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena);
     MDVN_CHECK_EQ(widths.len, 1u);
-    MDVN_CHECK_EQ(widths[0], 180.0f * 8.0f + 12.0f);
+    MDVN_CHECK_EQ(widths[0],
+                  150.0f * kTableAvgCharWidthDip * kTableGlyphWidthSafetyFactor +
+                      kTableCellPaddingDip * 2.0f);
     MDVN_CHECK(widths[0] > 2000.0f * kMaxColumnWidthRatio);
 }
 
@@ -245,4 +250,139 @@ MDVN_TEST(Table_SingleLineCjkCellDoesNotOverestimateRowHeight) {
     MDVN_CHECK(bodyHeight > 0.0f);
     float diff = headHeight > bodyHeight ? headHeight - bodyHeight : bodyHeight - headHeight;
     MDVN_CHECK(diff < 0.5f);
+}
+
+
+// ---- 回归:理想宽度必须覆盖真实字形宽度(2026-09-18 用户真机反馈) ----
+
+// 用例 13:理想宽度要在"平均字符宽度"之上乘 kTableGlyphWidthSafetyFactor。
+// 真机实测 Segoe UI 16dip 下阿拉伯数字约为平均值的 1.08 倍,按平均值分配的
+// 列宽连自己最长的那个单元格都放不下,表现为"窗口明明够宽,单元格还在折行"。
+MDVN_TEST(Table_IdealWidthReservesGlyphSafetyMargin) {
+    MDVN_MAKE_TEST_ARENA();
+    u32 chars[] = {10};  // "1234567890":视觉宽度 10,真实排版约 86.2dip
+    Span<float> widths = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena);
+    MDVN_CHECK_EQ(widths.len, 1u);
+    float textWidth = widths[0] - kTableCellPaddingDip * 2.0f;
+    MDVN_CHECK(textWidth > 10.0f * kTableAvgCharWidthDip);
+    MDVN_CHECK(textWidth >= 90.0f);  // 覆盖真实的 86.2dip,留有余量
+}
+
+// 用例 14(核心回归):字号缩放必须参与理想宽度计算。此前列宽恒按 1.0 档的
+// 8dip/单位算,放大字号后真实字形同比变宽而列宽纹丝不动,于是无论把窗口拉多宽
+// 表格都不变宽、单元格全部折行。
+MDVN_TEST(Table_IdealWidthScalesWithFontScale) {
+    MDVN_MAKE_TEST_ARENA();
+    u32 chars[] = {30, 10};  // 2 列 1 行,理想宽度都远小于视口
+    Span<float> base = ComputeTableColumnWidths(chars, 2, 1, 4000.0f, &arena, 1.0f);
+    Span<float> zoomed = ComputeTableColumnWidths(chars, 2, 1, 4000.0f, &arena, 1.5f);
+    MDVN_CHECK_EQ(base.len, 2u);
+    MDVN_CHECK_EQ(zoomed.len, 2u);
+    // 内容部分(扣掉不随字号缩放的内边距)必须正好放大 1.5 倍。
+    float baseText = base[0] - kTableCellPaddingDip * 2.0f;
+    float zoomedText = zoomed[0] - kTableCellPaddingDip * 2.0f;
+    float diff = zoomedText - baseText * 1.5f;
+    if (diff < 0.0f) diff = -diff;
+    MDVN_CHECK(diff < 0.01f);
+    MDVN_CHECK(zoomed[1] > base[1]);
+}
+
+// 用例 15:fontScale 非法值(0 或负数)退化成 1.0,不产生 0 宽/负宽列。
+MDVN_TEST(Table_NonPositiveFontScaleFallsBackToOne) {
+    MDVN_MAKE_TEST_ARENA();
+    u32 chars[] = {20};
+    Span<float> normal = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena, 1.0f);
+    Span<float> zero = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena, 0.0f);
+    Span<float> negative = ComputeTableColumnWidths(chars, 1, 1, 2000.0f, &arena, -2.0f);
+    MDVN_CHECK_EQ(zero[0], normal[0]);
+    MDVN_CHECK_EQ(negative[0], normal[0]);
+}
+
+// 用例 16(端到端回归):table_check.md 那张 7 列宽表,在足够宽的视口下
+// 每一列的排版宽度都要放得下本列最长单元格的内容,且整表不被压缩——
+// 这正是"窗口拉宽后表格应该一行展示更多内容"的验收点。
+MDVN_TEST(Table_WideViewportFitsEveryCellOnOneLine) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "| 列一 | 列二 | 列三 | 列四 | 列五 | 列六 | 列七 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 这是一段比较长的中文内容测试超宽 | short | data | 1234567890 | more content here | x | y |\n"
+        "| a | b | c | d | e | f | g |\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 1600.0f));
+
+    u32 tableIdx = FindBlockOfType(doc, BlockType::Table, 0);
+    MDVN_CHECK(tableIdx != mdvn::kInvalidIndex);
+    const BlockGeometry& tg = layout.Geometry(tableIdx);
+    MDVN_CHECK_EQ(tg.tableColWidths.len, 7u);
+
+    // 每个单元格的排版宽度都要 >= 本单元格内容的估算宽度(含安全系数),
+    // 即真实渲染时不需要折行。
+    for (u32 i = 0; i < doc.blocks.Size(); ++i) {
+        BlockType t = doc.blocks[i].type;
+        if (t != BlockType::TableCell && t != BlockType::TableHeadCell) continue;
+        u32 visual = 0;
+        for (u32 k = 0; k < doc.blocks[i].inlineCount; ++k) {
+            const mdvn::Inline& in = doc.inlines[doc.blocks[i].firstInlineIdx + k];
+            visual += Utf8VisualWidth(StrSlice{mdvn::InlineTextBytes(in, doc), in.textLen});
+        }
+        float need = static_cast<float>(visual) * kTableAvgCharWidthDip * kTableGlyphWidthSafetyFactor;
+        MDVN_CHECK(layout.Geometry(i).cellWidth + 0.01f >= need);
+    }
+
+    // 所有表格行等高:没有任何一格被估算成两行(与上面的"都放得下"互为印证)。
+    float firstRowHeight = -1.0f;
+    for (u32 i = 0; i < doc.blocks.Size(); ++i) {
+        if (doc.blocks[i].type != BlockType::TableRow) continue;
+        float h = layout.Geometry(i).bottom - layout.Geometry(i).top;
+        if (firstRowHeight < 0.0f) firstRowHeight = h;
+        float diff = h > firstRowHeight ? h - firstRowHeight : firstRowHeight - h;
+        MDVN_CHECK(diff < 0.5f);
+    }
+    MDVN_CHECK(firstRowHeight > 0.0f);
+}
+
+// 用例 17:同一张表,视口越宽表格越宽——直到不再需要压缩为止;之后继续拉宽
+// 不再变化(内容本身不多就不强行拉宽,见 table.h 算法注释第 2 步)。
+MDVN_TEST(Table_WidensWithViewportUntilNoCompressionNeeded) {
+    MDVN_MAKE_TEST_ARENA();
+    u32 chars[] = {40, 30, 20};  // 3 列 1 行
+    float narrow = 0.0f, mid = 0.0f, wide = 0.0f, wider = 0.0f;
+    float viewports[] = {400.0f, 700.0f, 1200.0f, 3000.0f};
+    float* outs[] = {&narrow, &mid, &wide, &wider};
+    for (u32 i = 0; i < 4; ++i) {
+        Span<float> w = ComputeTableColumnWidths(chars, 3, 1, viewports[i], &arena);
+        float total = 0.0f;
+        for (u32 c = 0; c < 3; ++c) total += w[c];
+        *outs[i] = total;
+    }
+    MDVN_CHECK(narrow < mid);
+    MDVN_CHECK(mid < wide);
+    // 1200 已经足够放下全部理想宽度((40+30+20)*8*1.2+3*12=900),继续拉宽不再变化。
+    MDVN_CHECK_EQ(wide, wider);
+}
+
+// 用例 18(回归):压缩时"被下限抬回来"的宽度必须由还有余地的列买单。
+// 此前是一刀切等比缩放后再把结果钳回下限,被钳回来的那几个 DIP 没人买单,
+// 总宽依然超视口——窄窗口下表现为表格右边几列被切到窗口外面。
+MDVN_TEST(Table_CompressionRespectsViewportWhenSomeColumnsHitFloor) {
+    MDVN_MAKE_TEST_ARENA();
+    // 1 列内容很长 + 6 列内容极短:短列会立刻触底,长列必须替它们让出宽度。
+    u32 chars[] = {32, 5, 4, 10, 17, 1, 1};
+    const float kViewport = 700.0f;
+    Span<float> widths = ComputeTableColumnWidths(chars, 7, 1, kViewport, &arena);
+    MDVN_CHECK_EQ(widths.len, 7u);
+
+    float total = 0.0f;
+    for (u32 c = 0; c < 7u; ++c) {
+        MDVN_CHECK(widths[c] >= kMinColumnWidthDip - 0.01f);
+        total += widths[c];
+    }
+    // 7 个下限列(420)远小于视口,属于"压得下"的情形,总宽必须落在视口内。
+    MDVN_CHECK(total <= kViewport + 0.01f);
+    // 且不能压过头:还有余地的那一列应当把剩下的空间吃满。
+    MDVN_CHECK(total > kViewport - kMinColumnWidthDip);
 }

@@ -45,6 +45,12 @@ constexpr float kBlockVerticalGapDip = 8.0f;
 // 叶子内容块估算高度时额外附加的上下留白。
 constexpr float kLeafVerticalPaddingDip = 4.0f;
 
+// 表格单元格行数估算的安全系数:直接复用列宽算法的同一个常量,两处口径必须
+// 一致——列宽按它放宽、行数不按它折算的话,恰好定义该列宽度的那个单元格会被
+// 估成两行,行高凭空翻倍;反过来行数估得比真实少 1 行,单元格就会和下一行
+// 表格内容重叠(表格行与行之间紧贴,没有 kBlockVerticalGapDip 兜底)。
+constexpr float kTableLineEstimateSafetyFactor = kTableGlyphWidthSafetyFactor;
+
 // 正文行高与平均字符宽度估算值(占位用,真实值等真实 IDWriteTextLayout 生成后才知道)。
 // kAvgCharWidthDip 这里的"字符"指 Utf8VisualWidth 的视觉宽度单位(ASCII 记 1、
 // CJK 等宽字符记 2),不是字节数——用视觉宽度而非字节数才能让 CJK/西文混排
@@ -468,15 +474,26 @@ static u32 CountLeafLines(const Document& doc, const Block& b, u32 charsPerLine)
     return totalLines > 0 ? totalLines : 1;
 }
 
-float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth) const {
+// 可用宽度能放下几个"视觉宽度单位"。加一道极小容差再取整:表格列宽正好是
+// "单元格视觉宽度 × 单位宽度 + 两侧内边距",调用方减回内边距求 textWidth 时
+// 浮点会掉最后一两个 ulp,不补容差就会把 32.0 个单位算成 31 个,让恰好定义
+// 该列宽度的那个单元格凭空多估一行。
+static u32 CharsPerLine(float availableWidth, float unitWidth) {
+    constexpr float kRoundingTolerance = 0.001f;
+    if (unitWidth <= 0.0f) return 1;
+    u32 n = static_cast<u32>(availableWidth / unitWidth + kRoundingTolerance);
+    return n > 0 ? n : 1;
+}
+
+float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth,
+                                             float lineEstimateSafetyFactor) const {
     if (b.type == BlockType::ThematicBreak) return kThematicBreakHeightDip * fontScale_;
 
     if (b.type == BlockType::CodeBlock) {
         float lineHeight = kMonoLineHeightDip * fontScale_;
         float avgCharWidth = kMonoAvgCharWidthDip * fontScale_;
         float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
-        u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
-        if (charsPerLine == 0) charsPerLine = 1;
+        u32 charsPerLine = CharsPerLine(safeWidth, avgCharWidth * lineEstimateSafetyFactor);
         u32 lines = CountLeafLines(*doc_, b, charsPerLine);
         return static_cast<float>(lines) * lineHeight + kLeafVerticalPaddingDip * fontScale_;
     }
@@ -511,8 +528,7 @@ float BlockLayoutEngine::EstimateLeafHeight(const Block& b, float availableWidth
     }
 
     float safeWidth = availableWidth > avgCharWidth ? availableWidth : avgCharWidth;
-    u32 charsPerLine = static_cast<u32>(safeWidth / avgCharWidth);
-    if (charsPerLine == 0) charsPerLine = 1;
+    u32 charsPerLine = CharsPerLine(safeWidth, avgCharWidth * lineEstimateSafetyFactor);
     // 与代码块共用同一个行数口径:块内的强制换行(段落的软/硬换行、按纯文本
     // 退化的 HTML 块内部换行)都会各自另起一行。块内没有任何强制换行时,
     // 这个函数退化成原来的 ceil(总字符数 / 每行字符数),行为不变。
@@ -697,7 +713,8 @@ float BlockLayoutEngine::LayoutTableSubtree(u32 tableBlockIndex, float x, float 
 
     float availableWidth = viewportWidth_ - x;
     Span<float> colWidths =
-        ComputeTableColumnWidths(charCounts, colCount, totalRows, availableWidth, &geometryArena_);
+        ComputeTableColumnWidths(charCounts, colCount, totalRows, availableWidth, &geometryArena_,
+                                 fontScale_);
     tg.tableColWidths = colWidths;
     tg.tableHeadRowCount = td.headRowCount;
     if (colWidths.data == nullptr) {
@@ -717,14 +734,20 @@ float BlockLayoutEngine::LayoutTableSubtree(u32 tableBlockIndex, float x, float 
         rowTops[r] = rowY;
         u32 rIdx = rowBlockIdx[r];
 
-        // 该行高度取行内各单元格按其列宽换行后估算高度的最大值。
-        float rowHeight = kBaseLineHeightDip * fontScale_ + kLeafVerticalPaddingDip * fontScale_;
+        // 该行高度取行内各单元格按其列宽换行后估算高度的最大值。EstimateLeafHeight
+        // 内置的是普通段落用的通用块间距 kLeafVerticalPaddingDip,这里替换成表格
+        // 专用的 kTableCellVerticalPaddingDip(与横向 kTableCellPaddingDip 对称),
+        // 不改动 EstimateLeafHeight 本身(它是段落/代码块共用的通用估算函数)。
+        constexpr float kVerticalPaddingDelta =
+            kTableCellVerticalPaddingDip - kLeafVerticalPaddingDip;
+        float rowHeight = kBaseLineHeightDip * fontScale_ + kTableCellVerticalPaddingDip * fontScale_;
         for (u32 c = 0; c < colCount; ++c) {
             u32 cIdx = cellBlockIdx[r * colCount + c];
             if (cIdx == kInvalidIndex) continue;
             float textWidth = colWidths[c] - kTableCellPaddingDip * 2.0f;
             if (textWidth < 1.0f) textWidth = 1.0f;
-            float h = EstimateLeafHeight(doc_->blocks[cIdx], textWidth);
+            float h = EstimateLeafHeight(doc_->blocks[cIdx], textWidth, kTableLineEstimateSafetyFactor) +
+                      kVerticalPaddingDelta * fontScale_;
             if (h > rowHeight) rowHeight = h;
         }
 
