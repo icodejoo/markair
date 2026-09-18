@@ -101,3 +101,21 @@ MDVN_TEST(Scroll_LineCommandsMoveOneLine) {
     MDVN_CHECK(mdvn::ApplyScrollCommand(kMaxScroll, mdvn::ScrollCommand::LineDown,
                                         kTotalHeight, kViewportHeight) == kMaxScroll);
 }
+
+// T70:F5 重载后按块下标近似恢复位置——纯函数钳制,三种边界情况。
+// 下标本来就在新块数范围内:原样返回。
+MDVN_TEST(Scroll_ClampReloadTopBlockIndexWithinRangeKeepsValue) {
+    MDVN_CHECK_EQ(mdvn::ClampReloadTopBlockIndex(2u, 10u), 2u);
+}
+
+// 下标 >= 新块数(文档被编辑变短了):钳到最后一块。
+MDVN_TEST(Scroll_ClampReloadTopBlockIndexOutOfRangeClampsToLast) {
+    MDVN_CHECK_EQ(mdvn::ClampReloadTopBlockIndex(9u, 5u), 4u);
+    MDVN_CHECK_EQ(mdvn::ClampReloadTopBlockIndex(5u, 5u), 4u);
+}
+
+// 新文档 0 个块:返回 0(调用方据此滚到顶部)。
+MDVN_TEST(Scroll_ClampReloadTopBlockIndexEmptyDocumentReturnsZero) {
+    MDVN_CHECK_EQ(mdvn::ClampReloadTopBlockIndex(3u, 0u), 0u);
+    MDVN_CHECK_EQ(mdvn::ClampReloadTopBlockIndex(0u, 0u), 0u);
+}

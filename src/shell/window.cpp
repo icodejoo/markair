@@ -737,6 +737,60 @@ void NavigateHistoryForward(HWND hwnd, WindowState* state) {
     NavigateHistoryDirection(hwnd, state, /*isBack=*/false);
 }
 
+// T70:F5 手动重载当前文档——重新走一遍 T36 的 openDocumentInPlace,不新写
+// 一条加载路径,也不引入任何 IO 线程/目录监听(阶段 Q 的取舍原文)。
+// 与 Alt+←/→ 的关键区别:①不摸 state->history 的任何 Push* 接口(F5 重新
+// 加载的是同一份文档,不是一次导航,history.h 顶部注释已经写死这条约束);
+// ②滚动位置按"重载前视口顶部对应的块下标"近似恢复,而不是按 scrollY 像素
+// 值——文档被外部编辑器改过之后块下标当然可能对不上,但"大致回到刚才那
+// 一段"已经够用,故意不做 diff/最长公共子序列匹配(那需要新旧文档同时驻留
+// 内存,与本项目"零常驻开销"的取舍相反,不要为此"优化")。
+void ReloadCurrentDocument(HWND hwnd, WindowState* state) {
+    if (!state || !state->openDocumentInPlace) return;
+    if (state->currentDocumentPath[0] == L'\0') return;
+
+    // 重载前先记下视口顶部的块下标(局部变量,不新增任何成员状态)。
+    u32 topBlockIdx = 0;
+    if (state->layout) topBlockIdx = FindTopBlockIndex(*state->layout, state->scrollY);
+
+    wchar_t path[kHistoryPathCapacity];
+    CopyTruncatedPath(path, kHistoryPathCapacity, state->currentDocumentPath);
+
+    // 先检查文件是否还在——与 OnLinkClicked/NavigateHistoryDirection 同一
+    // 口径:不存在就不调用 openDocumentInPlace,从而避开它内部"打开失败就把
+    // doc 换成空文档再 Relayout"的分支(那个分支是给"路径本来就不合法"用
+    // 的,F5 这里必须保证失败路径下旧内容原样保留,不能先释放旧文档)。
+    if (!MarkdownFileExists(path)) {
+        state->statusMessage = L"文件已不存在或无法访问,内容保持不变";
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    bool ok = state->openDocumentInPlace(state->callbackUserData, path);
+    if (!ok) {
+        state->statusMessage = L"打开文档失败,内容保持不变";
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    state->statusMessage = nullptr;
+    // 查找结果与复制按钮悬浮/已复制态都是按旧文档的块下标记的,重载后
+    // 那个下标在新文档里可能指向别的块,必须一并作废(与换文档同一口径)。
+    if (state->find) state->find->Close();
+    state->copyButtonHover = kInvalidIndex;
+    state->copyButtonCopied = kInvalidIndex;
+    KillTimer(hwnd, kCopyFeedbackTimerId);
+
+    // 按块下标钳制到新文档范围内近似恢复位置;新文档 0 个块时滚到顶部。
+    float newScrollY = 0.0f;
+    u32 blockCount = state->layout ? state->layout->BlockCount() : 0;
+    if (blockCount > 0) {
+        u32 clamped = ClampReloadTopBlockIndex(topBlockIdx, blockCount);
+        newScrollY = state->layout->Geometry(clamped).top;
+    }
+    SetScrollY(hwnd, state, newScrollY, /*forceRefresh=*/true);
+}
+
 // T37/T38:按当前查询串重搜并跳到第一处命中。
 void RerunFind(HWND hwnd, WindowState* state) {
     if (!state || !state->find || !state->doc) return;
@@ -1220,6 +1274,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // T63:Ctrl+\ 切换大纲侧栏,默认关闭。
         if (ctrlDown && wparam == VK_OEM_5 && state) {
             ToggleOutlinePanel(hwnd, state);
+            return 0;
+        }
+        // T70:F5(不带任何修饰键)重新加载当前文档。带 Ctrl/Shift 的组合一律
+        // 忽略,不做"强制刷新"之类的第二档语义;Alt+F5 走 WM_SYSKEYDOWN,不会
+        // 到这里,天然被排除。
+        if (!ctrlDown && !shiftDown && wparam == VK_F5 && state) {
+            ReloadCurrentDocument(hwnd, state);
             return 0;
         }
         // T47:Ctrl+Shift+T 在 System/Light/Dark 三态间循环,立即按新态重算

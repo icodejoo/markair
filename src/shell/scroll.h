@@ -10,6 +10,8 @@
 // "可用视口高度"直接喂给下面这些 Clamp/Apply 函数当 viewportHeight 用。
 #pragma once
 
+#include "../util/types.h"
+
 namespace mdvn {
 
 // 一次标准滚轮刻度的增量(等同 Win32 的 WHEEL_DELTA;这里自定义常量以免本头文件依赖 windows.h)。
@@ -193,6 +195,21 @@ inline bool ScrollCommandFromScrollBarCode(int code, ScrollCommand* out) {
     case kSbBottom:   *out = ScrollCommand::End;      return true;
     default:          return false;
     }
+}
+
+/**
+ * T70:F5 重载后按块下标近似恢复滚动位置——把"重载前视口顶部对应的块
+ * 下标"钳制到新文档的块数范围内。故意不做 diff/内容指纹匹配(文档被编辑
+ * 后下标当然可能偏,但"大致回到刚才那一段"已经够用,多一份新旧文档同时
+ * 驻留内存不值得),纯数字计算,不依赖 Win32/布局对象,可脱离图形环境单测。
+ * @param topBlockIdx 重载前视口顶部对应的块下标。
+ * @param newBlockCount 重载后新文档的块总数。
+ * @return `newBlockCount == 0` 时返回 0;否则 `min(topBlockIdx, newBlockCount - 1)`。
+ * @example mdvn::ClampReloadTopBlockIndex(5, 3); // 新文档只剩 3 块,得 2
+ */
+inline u32 ClampReloadTopBlockIndex(u32 topBlockIdx, u32 newBlockCount) {
+    if (newBlockCount == 0) return 0;
+    return (topBlockIdx < newBlockCount) ? topBlockIdx : (newBlockCount - 1);
 }
 
 }  // namespace mdvn
