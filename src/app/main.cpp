@@ -269,6 +269,10 @@ struct DocumentHost {
     // 一个只装两个指针的小结构体。
     mdvn::WindowState* windowState;
     mdvn::AppSettings* settings;
+
+    // T71(bench 确定性修复):--bench 模式下为 true,窗口矩形变更回调据此
+    // 跳过写盘——bench 本就不该污染开发者本机真实的 state.ini。
+    bool benchMode;
 };
 
 // T36 ②的实际执行体。返回 false 表示新文档打不开(此时窗口里是一份空文档,
@@ -328,6 +332,9 @@ void OnFirstPresentBenchHook(void*) {
 void OnWindowGeometryChangedHook(void* userData) {
     DocumentHost* host = static_cast<DocumentHost*>(userData);
     if (!host || !host->windowState || !host->settings) return;
+    // T71:bench 模式下不写盘,避免测量工具本身污染开发者本机的 state.ini
+    // (窗口矩形/缩放这次会话都是钉死的默认值,写回去也没有意义)。
+    if (host->benchMode) return;
     host->settings->winX = host->windowState->winX;
     host->settings->winY = host->windowState->winY;
     host->settings->winW = host->windowState->winW;
@@ -457,6 +464,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 文件不存在就按默认值走,不创建目录、不写盘。
     mdvn::AppSettings settings;
     mdvn::LoadAppSettings(&settings);
+
+    // T71(bench 确定性修复):--bench 模式下强制忽略 state.ini 里持久化的
+    // 窗口矩形/最大化态——这是一个跨会话漂移的隐藏测量输入(见
+    // bench/M2-MEMORY-REGRESSION.md §6.3:同一份语料仅因窗口矩形不同,
+    // BENCH-A 的 private_bytes 中位数可以从 15.5MB 变成 44.7MB),与本次
+    // 排查要测量的产品代码属性无关。清零后 CreateMainWindow 会按
+    // hasSavedRect==false 的路径走文档默认尺寸(kInitialWidthDip/HeightDip,
+    // 800x600),与本文档口径一致。主题(theme)/缩放(zoom)等其余键不受影响,
+    // 仍按正常逻辑读取——本次只处理窗口矩形这一项。
+    if (benchArgs.benchEnabled) {
+        settings.winX = 0;
+        settings.winY = 0;
+        settings.winW = 0;
+        settings.winH = 0;
+        settings.winMaximized = false;
+    }
 
     // 字体子系统本体放在栈上(非全局对象),不违反"禁止有副作用的全局
     // 构造函数"约束。族名覆盖必须在 Init 之前生效。
@@ -623,7 +646,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     DocumentHost documentHost{hwnd,        &fileMap,     &docArena,   &doc,
                               &layout,     &fonts,       &imageCache, &imageArena,
                               documentDirectory,
-                              &windowState, &settings};
+                              &windowState, &settings, benchArgs.benchEnabled};
     windowState.callbackUserData = &documentHost;
     windowState.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
 
@@ -647,7 +670,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // T57:兜底同理——万一本次会话缩放变了但从未触发过 onWindowGeometryChanged
     // (例如只按了 Ctrl+= 就直接关窗口,没移动/缩放过窗口),这里补上最终值。
     settings.zoom = fonts.Scale();
-    mdvn::SaveAppSettings(settings);
+    // T71:bench 模式不写盘——理由同 OnWindowGeometryChangedHook。
+    if (!benchArgs.benchEnabled) mdvn::SaveAppSettings(settings);
 
     // T36b:正常退出前统一删除本次会话创建过的全部临时文件(裁决:不追踪外部
     // 查看器进程是否退出,异常终止的残留交给 %TEMP% 的系统级清理兜底)。
