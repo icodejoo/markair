@@ -22,6 +22,7 @@ add_executable(mdvn WIN32
     render/renderer.cpp
     render/theme.cpp
     hl/languages.cpp
+    hl/lexer.cpp
     shell/window.cpp
     shell/theme_state.cpp
     shell/clipboard.cpp

@@ -30,6 +30,7 @@ add_executable(mdvn_tests
     test_theme.cpp
     test_theme_state.cpp
     test_languages.cpp
+    test_lexer.cpp
     test_cmdline.cpp
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
@@ -52,6 +53,7 @@ add_executable(mdvn_tests
     ../src/render/renderer.cpp
     ../src/render/theme.cpp
     ../src/hl/languages.cpp
+    ../src/hl/lexer.cpp
     ../src/shell/theme_state.cpp
     ../src/assets/image.cpp
     ../src/assets/data_uri.cpp
