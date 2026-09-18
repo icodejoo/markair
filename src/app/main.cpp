@@ -556,6 +556,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 按 `Ctrl+\` 打开侧栏时,由 window.cpp 的 ToggleOutlinePanel 现场调用。
     mdvn::Arena outlineArena;
 
+    // T65:历史前进/后退栈,纯数据结构,直接放栈上,不需要 Arena。
+    mdvn::History history;
+
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
     mdvn::WindowState windowState{
         &fonts, &layout, &doc, &renderer, 0.0f,
@@ -582,6 +585,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // (它需要 documentHost,而 documentHost 需要 hwnd 才能填完)。
         settings.winX, settings.winY, settings.winW, settings.winH, settings.winMaximized,
         nullptr};
+
+    // T65:接上历史栈;currentDocumentPath 初始化为首次打开的文档路径
+    // (未打开任何文件时保持聚合初始化留下的空字符串,Alt+←/→ 此时天然
+    // 无历史可用,不需要特殊处理)。
+    windowState.history = &history;
+    if (fileOpened) {
+        size_t i = 0;
+        for (; normalizedPath[i] != 0 && i + 1 < mdvn::kHistoryPathCapacity; ++i) {
+            windowState.currentDocumentPath[i] = normalizedPath[i];
+        }
+        windowState.currentDocumentPath[i] = 0;
+    }
 
     // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
     // settings.theme 解出生效主题(上面第 425~428 行已经算过一次结果给

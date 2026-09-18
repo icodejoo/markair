@@ -22,6 +22,7 @@
 #include "../text/font.h"
 #include "clipboard.h"
 #include "find.h"
+#include "history.h"
 #include "hit_test.h"
 #include "navigate.h"
 #include "outline_panel.h"
@@ -141,6 +142,19 @@ struct WindowState {
      * @param userData 即 `callbackUserData`。
      */
     void (*onWindowGeometryChanged)(void* userData);
+
+    // T65:历史前进/后退栈(`Alt+←`/`Alt+→`)。为空表示不支持历史导航
+    // (纯渲染场景/单测),此时两个快捷键静默无效。由调用方(main.cpp)持有
+    // 并传入指针,生命周期须覆盖整个消息循环。
+    History* history;
+
+    // T65:当前文档的完整路径,供 `history->PushNavigation` 在"替换文档"或
+    // "锚点跳转"之前记一笔"跳转前的路径"。由调用方在启动期初始化为首次
+    // 打开的文档路径;此后每次窗口内换文档成功后由 window.cpp 自己更新,
+    // main.cpp 不需要、也不应该改写这个字段(避免两处各写一份产生分歧)。
+    // 未显式初始化的字段(不在 CreateMainWindow 之前的聚合初始化列表里)
+    // 按聚合初始化规则清零,等价于空字符串。
+    wchar_t currentDocumentPath[kHistoryPathCapacity];
 };
 
 /**

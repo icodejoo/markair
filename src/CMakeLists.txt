@@ -32,6 +32,7 @@ add_executable(mdvn WIN32
     shell/find.cpp
     shell/assoc.cpp
     shell/outline_panel.cpp
+    shell/history.cpp
 )
 
 # ole32:WIC 工厂通过 CoCreateInstance 惰性激活(T30),不直接链接 windowscodecs.lib

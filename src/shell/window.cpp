@@ -591,6 +591,17 @@ void OnImageClicked(HWND hwnd, WindowState* state, const ImageBox& box) {
     (void)hwnd;
 }
 
+// T65:把 src 拷进 dst(容量 cap,含结尾 '\0'),超长截断,不用 CRT 的
+// wcsncpy_s——与本文件其余手写拷贝循环(如 ExtractDirectory)风格一致。
+void CopyTruncatedPath(wchar_t* dst, u32 cap, const wchar_t* src) {
+    if (cap == 0) return;
+    dst[0] = L'\0';
+    if (!src) return;
+    u32 i = 0;
+    for (; src[i] != L'\0' && i + 1 < cap; ++i) dst[i] = src[i];
+    dst[i] = L'\0';
+}
+
 // T36:点击一个链接 -> 按 DecideLinkAction 的判定分流到三类行为。
 // 安全边界(非 http/https/mailto/file 的 scheme)已经在判定里挡掉,这里不会
 // 出现任何"先执行再检查"的路径。
@@ -614,6 +625,10 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
             return;
         }
         state->statusMessage = nullptr;
+        // T65:锚点跳转改变了滚动位置,算一次导航——记"跳转前"的
+        // (当前路径, 当前 scrollY),与随后同路径下不同的 scrollY 构成
+        // "同路径两条记录"。跳转本身不换文档,currentDocumentPath 不变。
+        if (state->history) state->history->PushNavigation(state->currentDocumentPath, state->scrollY);
         ScrollToBlock(hwnd, state, blockIndex);
         return;
     }
@@ -630,9 +645,20 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
         }
         if (!state->openDocumentInPlace) return;
 
+        // T65:先记下"跳转前"的路径/scrollY——一旦 openDocumentInPlace 成功,
+        // state->currentDocumentPath 就会被下面覆盖,必须提前存一份副本。
+        wchar_t oldPath[kHistoryPathCapacity];
+        CopyTruncatedPath(oldPath, kHistoryPathCapacity, state->currentDocumentPath);
+        float oldScrollY = state->scrollY;
+
         bool ok = state->openDocumentInPlace(state->callbackUserData, fullPath);
         state->statusMessage = ok ? nullptr : L"打开文档失败";
         if (ok) {
+            // 只有真正切换成功才记这一笔导航,并清空前进栈(裁决:F5 之类的
+            // "重新打开同一文档但不算导航"不会走到这里,因为那条路径完全
+            // 不调用 PushNavigation,见 history.h 顶部注释)。
+            if (state->history) state->history->PushNavigation(oldPath, oldScrollY);
+            CopyTruncatedPath(state->currentDocumentPath, kHistoryPathCapacity, fullPath);
             // 新文档从头开始看;旧文档的查找结果指向的是旧的块下标,必须一并作废。
             if (state->find) state->find->Close();
             // T45:复制按钮的悬浮/已复制态同样是按旧文档的块下标记的,换文档后
@@ -654,6 +680,61 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
         // javascript: 之类的目标:什么都不做,连提示都不给(不给可疑链接任何反馈)。
         return;
     }
+}
+
+// T65:后退/前进导航共用的核心步骤,由 WM_SYSKEYDOWN 的 Alt+←/→ 分支调用。
+// direction 为 true 时是"后退"(操作后退栈,成功后把跳转前状态压进前进栈),
+// 为 false 时是"前进"(反过来)。两者除了栈的角色互换外完全对称,合成一份
+// 实现避免复制粘贴出两套走样的逻辑。
+void NavigateHistoryDirection(HWND hwnd, WindowState* state, bool isBack) {
+    if (!state || !state->history) return;
+
+    HistoryEntry entry;
+    bool popped = isBack ? state->history->PopBack(&entry) : state->history->PopForward(&entry);
+    if (!popped) return;  // 栈为空,无动作
+
+    if (!MarkdownFileExists(entry.path)) {
+        // T65 ④:目标文件已不存在——窗口内提示,记录已经在 Pop 里被摘掉了,
+        // 不弹 MessageBox,也不做任何"放回栈里"的补救。
+        state->statusMessage = L"该历史记录指向的文件已不存在";
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+    if (!state->openDocumentInPlace) return;
+
+    wchar_t oldPath[kHistoryPathCapacity];
+    CopyTruncatedPath(oldPath, kHistoryPathCapacity, state->currentDocumentPath);
+    float oldScrollY = state->scrollY;
+
+    bool ok = state->openDocumentInPlace(state->callbackUserData, entry.path);
+    if (!ok) {
+        state->statusMessage = L"打开文档失败";
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    // 打开成功后才把"跳转前"的状态压回对侧栈——不清空另一侧,这不是一次
+    // 新导航,只是把刚离开的那份状态存起来供反方向的快捷键用。
+    if (isBack) state->history->PushForwardRaw(oldPath, oldScrollY);
+    else state->history->PushBackRaw(oldPath, oldScrollY);
+
+    CopyTruncatedPath(state->currentDocumentPath, kHistoryPathCapacity, entry.path);
+    state->statusMessage = nullptr;
+    if (state->find) state->find->Close();
+    state->copyButtonHover = kInvalidIndex;
+    state->copyButtonCopied = kInvalidIndex;
+    KillTimer(hwnd, kCopyFeedbackTimerId);
+    SetScrollY(hwnd, state, entry.scrollY, /*forceRefresh=*/true);
+}
+
+// `Alt+←`:回到后退栈栈顶记录的那个位置。
+void NavigateHistoryBack(HWND hwnd, WindowState* state) {
+    NavigateHistoryDirection(hwnd, state, /*isBack=*/true);
+}
+
+// `Alt+→`:回到前进栈栈顶记录的那个位置。
+void NavigateHistoryForward(HWND hwnd, WindowState* state) {
+    NavigateHistoryDirection(hwnd, state, /*isBack=*/false);
 }
 
 // T37/T38:按当前查询串重搜并跳到第一处命中。
@@ -1080,6 +1161,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
         return 0;
+    }
+
+    case WM_SYSKEYDOWN: {
+        // T65:Alt+←/→ 走历史后退/前进。Alt 被按住时系统发的是 WM_SYSKEYDOWN
+        // 而不是 WM_KEYDOWN,这里只拦 VK_LEFT/VK_RIGHT 这两个键,其余(尤其
+        // Alt+F4/Alt+空格这类系统本身要处理的组合)一律交回 DefWindowProcW,
+        // 不改变默认行为。
+        if (state && state->history && (wparam == VK_LEFT || wparam == VK_RIGHT)) {
+            if (wparam == VK_LEFT) NavigateHistoryBack(hwnd, state);
+            else NavigateHistoryForward(hwnd, state);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     case WM_KEYDOWN: {
