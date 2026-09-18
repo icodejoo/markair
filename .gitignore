@@ -37,3 +37,6 @@ Thumbs.db
 /bench_test_err.txt
 /bench_test_out.txt
 /bench/results_*.csv
+
+# 人工回归测试产生的截图（不进版本控制）
+/bench/screenshots/
