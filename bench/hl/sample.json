@@ -1,0 +1,11 @@
+{
+  "_comment": "JSON 样例:转义与 Unicode 码点的词法陷阱(T67 语料)",
+  "name": "你好世界",
+  "escaped": "换行\n制表符\t引号\"反斜杠\\",
+  "unicode_escape": "你好",
+  "mixed": "中文和 AB 混合",
+  "count": 3,
+  "enabled": true,
+  "empty": null,
+  "list": ["苹果", "香蕉", "橙子"]
+}
