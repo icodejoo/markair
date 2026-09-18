@@ -127,6 +127,22 @@ u32 TruncateOutlineTitle(const wchar_t* text, u32 len, float maxWidthDip,
 u32 FindCurrentOutlineItem(const float* itemTops, u32 count, float viewportTop);
 
 /**
+ * 点击大纲侧栏时,把"侧栏自身坐标系里的点击 y"换算成命中的条目下标(T64)。
+ *
+ * 与渲染层 `rowTop = i * kOutlineItemHeightDip - scrollY` 用同一套换算
+ * (见 `renderer.cpp` 的 `DrawOutlinePanel`),因此点击命中的条目与视觉上看到
+ * 的条目永远一致。
+ *
+ * @param itemCount 大纲条目总数;为 0 时直接返回 `kInvalidIndex`。
+ * @param panelLocalY 点击位置在侧栏坐标系里的 y(DIP,未减去侧栏自身滚动偏移)。
+ * @param scrollY 侧栏自身滚动偏移(DIP),即 `OutlinePanel::ScrollY()`。
+ * @return 命中的条目下标;点落在侧栏内容之外(顶部之前/末条之后)返回
+ *         `kInvalidIndex`。
+ * @example u32 idx = mdvn::FindOutlineItemAtY(panel.ItemCount(), localY, panel.ScrollY());
+ */
+u32 FindOutlineItemAtY(u32 itemCount, float panelLocalY, float scrollY);
+
+/**
  * 大纲侧栏运行期状态(T63)。
  *
  * "关闭时开销为 0"的实现手法:本类不做任何隐藏的常驻实例——

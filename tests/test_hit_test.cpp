@@ -18,6 +18,7 @@ using mdvn::HitKind;
 using mdvn::HitResult;
 using mdvn::ImageBox;
 using mdvn::IsContentBlockType;
+using mdvn::IsPointInOutlinePanel;
 using mdvn::kInvalidIndex;
 using mdvn::LayoutRect;
 using mdvn::LinkBox;
@@ -167,6 +168,56 @@ MDVN_TEST(HitTest_LinkRunIsHalfOpenRange) {
     MDVN_CHECK_EQ(LinkTargetAtTextPosition(boxes, 2, 22u), 22u);
     MDVN_CHECK_EQ(LinkTargetAtTextPosition(boxes, 2, 23u), kInvalidIndex);
     MDVN_CHECK_EQ(LinkTargetAtTextPosition(nullptr, 0, 0u), kInvalidIndex);
+}
+
+// 用例(T64):大纲侧栏区域判定 —— 只按横坐标,DPI 缩放要参与换算。
+MDVN_TEST(HitTest_OutlinePanelRegionByXOnly) {
+    // 未缩放:侧栏宽度 220 DIP 内命中,边界(等于宽度)不命中(半开区间)。
+    MDVN_CHECK(IsPointInOutlinePanel(0, 1.0f, 220.0f));
+    MDVN_CHECK(IsPointInOutlinePanel(219, 1.0f, 220.0f));
+    MDVN_CHECK(!IsPointInOutlinePanel(220, 1.0f, 220.0f));
+    MDVN_CHECK(!IsPointInOutlinePanel(500, 1.0f, 220.0f));
+
+    // 2x DPI 缩放下,侧栏在物理像素上占 440px,越过这条线就不算侧栏。
+    MDVN_CHECK(IsPointInOutlinePanel(439, 2.0f, 220.0f));
+    MDVN_CHECK(!IsPointInOutlinePanel(440, 2.0f, 220.0f));
+
+    // 非法 DPI 缩放退化为 1.0。
+    MDVN_CHECK(IsPointInOutlinePanel(100, 0.0f, 220.0f));
+    MDVN_CHECK(!IsPointInOutlinePanel(300, 0.0f, 220.0f));
+
+    // 负坐标不算侧栏内(理论上不会发生,防御性验证)。
+    MDVN_CHECK(!IsPointInOutlinePanel(-1, 1.0f, 220.0f));
+}
+
+// 用例(T64,验收项):鼠标落在侧栏区域内的坐标不应命中正文任何元素——
+// 即便正文在该 x 范围内恰好摆了一个链接/图片,侧栏区域的判定本身也必须
+// 在命中测试正文之前短路返回,不依赖"正文碰巧没东西"这种巧合。
+// 这里直接验证短路判据本身:侧栏区域内的坐标满足 IsPointInOutlinePanel,
+// 调用方(window.cpp)据此在调用 HitTestDocument 之前就 return,因此正文的
+// 链接/图片/复制按钮命中测试根本不会跑到这个坐标上。
+MDVN_TEST(HitTest_SidebarRegionShortCircuitsBeforeBodyHitTest) {
+    // 正文里恰好有一个横跨侧栏宽度的段落(模拟"侧栏悬浮盖住的正文内容"),
+    // 以及一个同样落在这个 x 范围内的图片。
+    BlockGeometry geoms[2] = {
+        MakeGeometry(BlockType::Document, 0.0f, 200.0f),
+        MakeGeometry(BlockType::Paragraph, 0.0f, 200.0f),
+    };
+    ImageBox boxes[1]{};
+    boxes[0].rect = LayoutRect{0.0f, 0.0f, 220.0f, 200.0f};  // 覆盖整个侧栏宽度
+
+    constexpr float kPanelWidthDip = 220.0f;
+    int clientX = 100;  // 落在侧栏区域内
+    float scale = 1.5f;
+
+    MDVN_CHECK(IsPointInOutlinePanel(clientX, scale, kPanelWidthDip));
+
+    // 即便正文在同一坐标上确实摆了内容块和图片,命中测试本身仍然会命中——
+    // 真正的"不干扰"由调用方在命中前的短路保证,这条用例证明短路判据本身
+    // 覆盖了正文有内容的这种情况,不是靠"正文那块恰好是空的"这种巧合成立。
+    float docX = static_cast<float>(clientX) / scale;
+    MDVN_CHECK_EQ(FindContentBlockAt(geoms, 2, docX, 50.0f), 1u);
+    MDVN_CHECK_EQ(FindImageBoxAt(boxes, 1, docX, 50.0f), 0u);
 }
 
 // 用例:光标形状判定 —— 链接与图片给手型,其余给默认箭头。

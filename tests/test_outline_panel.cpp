@@ -11,6 +11,7 @@
 using mdvn::Arena;
 using mdvn::Document;
 using mdvn::FindCurrentOutlineItem;
+using mdvn::FindOutlineItemAtY;
 using mdvn::kInvalidIndex;
 using mdvn::kOutlineIndentStepDip;
 using mdvn::kOutlineItemHeightDip;
@@ -239,4 +240,39 @@ MDVN_TEST(OutlineHighlight_BinarySearchMatchesLinearScanOn300Items) {
 MDVN_TEST(OutlinePanel_StaysSmallNoHiddenArrays) {
     size_t sz = sizeof(OutlinePanel);
     MDVN_CHECK(sz <= 64);
+}
+
+// T64:侧栏没有自身滚动时,点击 y 直接按行高整除得到条目下标。
+MDVN_TEST(OutlineClick_NoScrollMapsRowByRowHeight) {
+    MDVN_CHECK_EQ(FindOutlineItemAtY(5, 0.0f, 0.0f), 0u);
+    MDVN_CHECK_EQ(FindOutlineItemAtY(5, kOutlineItemHeightDip - 1.0f, 0.0f), 0u);
+    MDVN_CHECK_EQ(FindOutlineItemAtY(5, kOutlineItemHeightDip, 0.0f), 1u);
+    MDVN_CHECK_EQ(FindOutlineItemAtY(5, 2.5f * kOutlineItemHeightDip, 0.0f), 2u);
+}
+
+// T64:侧栏自身已滚动时,点击换算要把 scrollY 加回去,与渲染层
+// `rowTop = i * 行高 - scrollY` 的换算互为逆运算。
+MDVN_TEST(OutlineClick_AccountsForPanelSelfScroll) {
+    float scrollY = 3.0f * kOutlineItemHeightDip + 5.0f;
+    // 侧栏顶部(panelLocalY = 0)对应第 3 条(整数部分)。
+    MDVN_CHECK_EQ(FindOutlineItemAtY(10, 0.0f, scrollY), 3u);
+    // 往下一整行,命中第 4 条。
+    MDVN_CHECK_EQ(FindOutlineItemAtY(10, kOutlineItemHeightDip, scrollY), 4u);
+}
+
+// 边界:点击落在最后一条之后(超出条目总数)-> 没命中。
+MDVN_TEST(OutlineClick_PastLastItemMissesEverything) {
+    MDVN_CHECK_EQ(FindOutlineItemAtY(3, 3.0f * kOutlineItemHeightDip, 0.0f), kInvalidIndex);
+    MDVN_CHECK_EQ(FindOutlineItemAtY(3, 999999.0f, 0.0f), kInvalidIndex);
+}
+
+// 边界:条目数为 0 -> 永远没命中,不崩溃。
+MDVN_TEST(OutlineClick_EmptyPanelMissesEverything) {
+    MDVN_CHECK_EQ(FindOutlineItemAtY(0, 0.0f, 0.0f), kInvalidIndex);
+}
+
+// 边界:换算后的 y 为负(理论上不该发生,但要防御)-> 没命中,不产生
+// 环绕/负下标之类的未定义行为。
+MDVN_TEST(OutlineClick_NegativeEffectiveYMissesEverything) {
+    MDVN_CHECK_EQ(FindOutlineItemAtY(5, -10.0f, 0.0f), kInvalidIndex);
 }

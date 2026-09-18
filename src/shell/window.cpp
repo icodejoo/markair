@@ -533,6 +533,24 @@ void ScrollToBlock(HWND hwnd, WindowState* state, u32 blockIndex) {
     SetScrollY(hwnd, state, state->layout->Geometry(blockIndex).top);
 }
 
+// T64:点击大纲侧栏某一条 -> 滚动到对应标题块顶部。先把点击的客户区物理像素
+// 换算成侧栏坐标系里的 y(与渲染层同一套换算,见 FindOutlineItemAtY 的文档),
+// 查到条目对应的块下标后,直接复用 T36③ 锚点跳转、T38 查找跳转共用的
+// ScrollToBlock —— 不另写一套滚动逻辑,也就自动继承了"先滚动再等虚拟化
+// 补齐 layout"这条约束。
+void OnOutlineItemClicked(HWND hwnd, WindowState* state, int clientY) {
+    if (!state || !state->outline || !state->layout) return;
+
+    float scale = DipScaleOf(hwnd);
+    float localY = static_cast<float>(clientY) / (scale > 0.0f ? scale : 1.0f);
+
+    OutlinePanel* panel = state->outline;
+    u32 item = FindOutlineItemAtY(panel->ItemCount(), localY, panel->ScrollY());
+    if (item == kInvalidIndex) return;
+
+    ScrollToBlock(hwnd, state, panel->Item(item).blockIdx);
+}
+
 // T36b:点击一张图片 -> 打开它的原始数据。
 // 本地路径图直接打开原文件;data: URI / 已下载的网络图把原始字节写临时文件后打开。
 // 网络图片尚未下载时,这一次点击的含义是 T34 的"点击加载",不走打开原图分支。
@@ -901,6 +919,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
 
     case WM_LBUTTONDOWN: {
+        // T64:大纲侧栏区域与正文互不干扰 —— 侧栏打开且点击落在侧栏区域内时,
+        // 短路掉正文的命中测试,不让下面的链接/图片/复制按钮命中再跑一遍,
+        // 否则会出现"点侧栏结果打开了底下的链接"。
+        if (state && state->outline &&
+            IsPointInOutlinePanel(GET_X_LPARAM(lparam), DipScaleOf(hwnd), kOutlinePanelWidthDip)) {
+            OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
+            return 0;
+        }
+
         // T35/T36/T36b:统一走命中测试 —— 链接走链接行为,图片走"打开原图"
         // (网络图未下载时是 T34 的"点击加载",见 OnImageClicked)。
         if (state && state->layout) {

@@ -140,6 +140,12 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
     return HitResult{HitKind::Link, blockIndex, targetIdx, kInvalidIndex};
 }
 
+bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip) {
+    float scale = dipScale > 0.0f ? dipScale : 1.0f;
+    float x = static_cast<float>(clientX) / scale;
+    return x >= 0.0f && x < panelWidthDip;
+}
+
 bool ShouldUseHandCursor(const HitResult& hit) {
     return hit.kind == HitKind::Link || hit.kind == HitKind::Image ||
            hit.kind == HitKind::CodeCopyButton;

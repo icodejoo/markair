@@ -130,6 +130,20 @@ u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition);
 HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float docY);
 
 /**
+ * 判断一次鼠标点击是否落在大纲侧栏区域内(T64)。侧栏是悬浮覆盖,纵向铺满
+ * 整个客户区,因此只按横坐标判定;仅用于命中测试的"短路"入口 —— 侧栏打开
+ * 且点在其区域内时,正文的链接/图片/复制按钮命中一律不应该再发生,否则会
+ * 出现"点侧栏结果打开了底下的链接"。
+ *
+ * @param clientX 客户区横坐标(物理像素)。
+ * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
+ * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
+ * @return 点落在侧栏区域内返回 true。
+ * @example bool inPanel = mdvn::IsPointInOutlinePanel(50, 1.5f, 220.0f); // true
+ */
+bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip);
+
+/**
  * 命中结果是否应当显示手型光标(链接、可点击的图片/占位块、代码块复制按钮)。
  * @param hit 命中结果。
  * @return 需要手型光标返回 true。

@@ -69,4 +69,12 @@ u32 FindCurrentOutlineItem(const float* itemTops, u32 count, float viewportTop) 
     return lo;
 }
 
+u32 FindOutlineItemAtY(u32 itemCount, float panelLocalY, float scrollY) {
+    if (itemCount == 0) return kInvalidIndex;
+    float y = panelLocalY + scrollY;
+    if (y < 0.0f) return kInvalidIndex;
+    u32 index = static_cast<u32>(y / kOutlineItemHeightDip);
+    return index < itemCount ? index : kInvalidIndex;
+}
+
 }  // namespace mdvn
