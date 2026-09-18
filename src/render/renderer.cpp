@@ -1,6 +1,7 @@
 #include "renderer.h"
 
 #include "../assets/data_uri.h"
+#include "../hl/lexer.h"
 
 namespace mdvn {
 
@@ -435,6 +436,39 @@ void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1Soli
     }
 }
 
+void Renderer::DrawCodeHighlights(const BlockGeometry& g, float scrollY,
+                                    ID2D1SolidColorBrush* const* hlBrushes) {
+    if (!g.textLayout || g.codeHighlights.len == 0 || !hlBrushes) return;
+
+    constexpr UINT32 kMaxHitTestMetrics = 8;  // 单个 token 通常不跨行,8 条足够兜底
+    float drawLeft = TextDrawLeft(g);
+    float drawTop = TextDrawTop(g) - scrollY;
+    for (u32 i = 0; i < g.codeHighlights.len; ++i) {
+        const CodeHighlightRun& run = g.codeHighlights[i];
+        ID2D1SolidColorBrush* brush = hlBrushes[run.tokenType];
+        if (!brush) continue;
+
+        DWRITE_HIT_TEST_METRICS metrics[kMaxHitTestMetrics];
+        UINT32 actualCount = 0;
+        HRESULT hr = g.textLayout->HitTestTextRange(
+            run.textPosition, run.textLength, drawLeft, drawTop,
+            metrics, kMaxHitTestMetrics, &actualCount);
+        if (FAILED(hr)) continue;
+
+        UINT32 count = actualCount < kMaxHitTestMetrics ? actualCount : kMaxHitTestMetrics;
+        for (UINT32 m = 0; m < count; ++m) {
+            D2D1_RECT_F clipRect = D2D1::RectF(
+                metrics[m].left, metrics[m].top,
+                metrics[m].left + metrics[m].width, metrics[m].top + metrics[m].height);
+            // 裁剪到该 token range 的矩形后整体重画一次 layout——与 DrawLinkOverlays
+            // 同一手法,不引入 SetDrawingEffect 与自定义 TextRenderer(T24/T53 同一约束)。
+            target_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, brush);
+            target_->PopAxisAlignedClip();
+        }
+    }
+}
+
 void Renderer::DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
                                    ID2D1SolidColorBrush* fillBrush,
                                    ID2D1SolidColorBrush* currentFillBrush) {
@@ -845,7 +879,8 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* copyIconBrush,
                           ID2D1SolidColorBrush* copyHoverBgBrush,
                           ID2D1SolidColorBrush* copyPaperBrush,
-                          ID2D1SolidColorBrush* copyDoneBrush) {
+                          ID2D1SolidColorBrush* copyDoneBrush,
+                          ID2D1SolidColorBrush* const* hlBrushes) {
     // 围栏代码块背景:先画背景,再画文本,避免文本被背景矩形盖住。
     // 4 DIP 圆角,与常见 Markdown 渲染器的代码块风格保持一致。
     if (g.type == BlockType::CodeBlock && codeBgBrush) {
@@ -910,6 +945,9 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                                   g.textLayout, textBrush);
         // 链接着色(T24):在正文之上叠加一次裁剪重绘,见 DrawLinkOverlays 注释。
         DrawLinkOverlays(g, scrollY, linkBrush);
+        // 代码语法着色(T53):同一手法,只在该块有 codeHighlights 时才生效
+        // (未识别语言/非代码块恒为空,函数内部也会再判一次)。
+        DrawCodeHighlights(g, scrollY, hlBrushes);
     }
 
     // 图片/占位块(T33):画在本块文本之后,矩形位置由布局阶段算好。
@@ -954,6 +992,9 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
     ID2D1SolidColorBrush* copyPaperBrush = nullptr;
     ID2D1SolidColorBrush* copyDoneBrush = nullptr;
+    // T53:代码语法着色的 7 支画笔,下标与 hl/lexer.h::TokenType 取值一一对应。
+    ID2D1SolidColorBrush* hlBrushes[7] = {nullptr, nullptr, nullptr, nullptr,
+                                            nullptr, nullptr, nullptr};
     target_->CreateSolidColorBrush(palette_->text, &textBrush);
     target_->CreateSolidColorBrush(palette_->quoteBar, &quoteBrush);
     target_->CreateSolidColorBrush(palette_->codeBackground, &codeBgBrush);
@@ -975,6 +1016,13 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->codeCopyHoverBackground, &copyHoverBgBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyPaper, &copyPaperBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyDone, &copyDoneBrush);
+    target_->CreateSolidColorBrush(palette_->hlKeyword, &hlBrushes[kTokenKeyword]);
+    target_->CreateSolidColorBrush(palette_->hlString, &hlBrushes[kTokenString]);
+    target_->CreateSolidColorBrush(palette_->hlNumber, &hlBrushes[kTokenNumber]);
+    target_->CreateSolidColorBrush(palette_->hlComment, &hlBrushes[kTokenComment]);
+    target_->CreateSolidColorBrush(palette_->hlPunct, &hlBrushes[kTokenPunct]);
+    target_->CreateSolidColorBrush(palette_->hlBuiltin, &hlBrushes[kTokenBuiltin]);
+    target_->CreateSolidColorBrush(palette_->hlOther, &hlBrushes[kTokenOther]);
 
     D2D1_SIZE_F targetSize = target_->GetSize();
     // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
@@ -998,7 +1046,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                   tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
                   placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
                   findHighlightBrush, findCurrentBrush,
-                  copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush);
+                  copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush,
+                  hlBrushes);
     }
 
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
@@ -1041,6 +1090,9 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (copyHoverBgBrush) copyHoverBgBrush->Release();
     if (copyPaperBrush) copyPaperBrush->Release();
     if (copyDoneBrush) copyDoneBrush->Release();
+    for (u32 i = 0; i < 7; ++i) {
+        if (hlBrushes[i]) hlBrushes[i]->Release();
+    }
 
     overlay_ = nullptr;  // 本帧结束,不再持有外壳层传进来的视图
 

@@ -253,3 +253,30 @@ MDVN_TEST(Layout_TableCellContentHeightRecordedForCentering) {
     MDVN_CHECK(shortCell.contentHeight > 0.0f);
     MDVN_CHECK(shortCell.bottom - shortCell.top > shortCell.contentHeight);
 }
+
+// 用例 4(T53):未识别语言(kLanguageNone,含无围栏语言标记的代码块)不应该
+// 产出任何语法着色 run——不识别的语言一行高亮代码都不跑,直接走原有纯色
+// 渲染路径。用一个没有围栏语言标记的缩进代码块验证。
+MDVN_TEST(Layout_CodeBlockUnknownLanguageProducesNoHighlightRuns) {
+    MDVN_MAKE_TEST_ARENA();
+    const char src[] =
+        "```unknown-lang-xyz\n"
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MDVN_CHECK(!doc.truncated);
+
+    u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
+    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+
+    BlockLayoutEngine layout;
+    FontSubsystem fonts;
+    MDVN_CHECK(fonts.Init());
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+    layout.UpdateVisibleRange(0.0f, layout.TotalHeight() + 1000.0f, fonts);
+
+    const BlockGeometry& codeGeom = layout.Geometry(codeIdx);
+    MDVN_CHECK(codeGeom.textLayout != nullptr);
+    MDVN_CHECK(codeGeom.codeHighlights.len == 0);
+}

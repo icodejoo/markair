@@ -42,6 +42,19 @@ struct LinkBox {
 };
 
 /**
+ * 围栏代码块内一个语法着色 run 在其 IDWriteTextLayout 里占据的区间(T53)。
+ * 与 LinkBox 同一思路:渲染时用它对着色 range 单独处理(不引入
+ * SetDrawingEffect/自定义渲染器),命中测试无需求(代码高亮不可点击)。
+ * 只在 CodeBlockDetail::languageId != kLanguageNone 时才会产出,否则该块
+ * 的 BlockGeometry::codeHighlights 恒为空(未识别语言不跑词法器)。
+ */
+struct CodeHighlightRun {
+    u32 textPosition;  // 该块 IDWriteTextLayout 里的 UTF-16 起始偏移
+    u32 textLength;    // UTF-16 长度
+    u8 tokenType;      // TokenType 取值(hl/lexer.h)
+};
+
+/**
  * 一张图片在布局里占据的矩形与渲染所需的全部信息(T33)。
  *
  * 设计上刻意做成"渲染层只看这个结构体就能画",不需要反查 Document:
@@ -82,6 +95,10 @@ struct BlockGeometry {
     LayoutRect codeBackground;   // 围栏代码块背景矩形;非代码块恒为全 0
     IDWriteTextLayout* textLayout; // 视口 ± 1 屏内才非空,其余淘汰为 nullptr,见虚拟化策略说明
     Span<LinkBox> linkBoxes;      // 该块内的链接/自动链接 run(T24),仅创建 layout 时才非空
+    // 围栏代码块的语法着色 run(T53):仅 CodeBlock 且语言被识别(languageId !=
+    // kLanguageNone)时才非空,与 textLayout 同生共死——随 textLayout 一起创建,
+    // 块滚出可见 ± 1 屏、textLayout 被淘汰时一并清空,不单独管理生命周期。
+    Span<CodeHighlightRun> codeHighlights;
     Span<ImageBox> imageBoxes;    // 该块内的图片/占位块(T33),Relayout 阶段即确定,不随虚拟化失效
     Span<float> tableColWidths;   // 表格各列宽度(T25/T26),仅 Table 块非空
     Span<float> tableRowTops;     // 表格每行顶部 y(相对文档,DIP),长度 = 行数 + 1(末尾是表格底边)

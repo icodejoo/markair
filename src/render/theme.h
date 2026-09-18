@@ -60,6 +60,15 @@ struct Palette {
     D2D1_COLOR_F findCurrentHighlight;        // 查找当前命中高亮底色
     D2D1_COLOR_F overlayBarBackground;        // 浮出条(查找条/大纲侧栏共用)底色
     D2D1_COLOR_F overlayBarText;              // 浮出条文字色
+    // T53 代码语法着色:与 hl/lexer.h 的 TokenType 七类逐一对应,只在
+    // 语言被识别(languageId != kLanguageNone)时才会用到。
+    D2D1_COLOR_F hlKeyword;                   // 关键字
+    D2D1_COLOR_F hlString;                    // 字符串
+    D2D1_COLOR_F hlNumber;                    // 数字字面量
+    D2D1_COLOR_F hlComment;                   // 注释
+    D2D1_COLOR_F hlPunct;                     // 标点/操作符
+    D2D1_COLOR_F hlBuiltin;                   // 内置类型名/内置标识符/结构化字面量
+    D2D1_COLOR_F hlOther;                     // 其他(默认,含普通标识符)
 };
 
 /**
@@ -90,6 +99,13 @@ inline constexpr Palette kLightPalette{
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* hlKeyword                  */ MakeColor(0xD73A49u),
+    /* hlString                   */ MakeColor(0x032F62u),
+    /* hlNumber                   */ MakeColor(0x005CC5u),
+    /* hlComment                  */ MakeColor(0x6A737Du),
+    /* hlPunct                    */ MakeColor(0x24292Eu),
+    /* hlBuiltin                  */ MakeColor(0x6F42C1u),
+    /* hlOther                    */ MakeColor(0x000000u),
 };
 
 /**
@@ -129,6 +145,13 @@ inline constexpr Palette kDarkPalette{
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* hlKeyword                  */ MakeColor(0xFF7B72u),
+    /* hlString                   */ MakeColor(0xA5D6FFu),
+    /* hlNumber                   */ MakeColor(0x79C0FFu),
+    /* hlComment                  */ MakeColor(0x8B949Eu),
+    /* hlPunct                    */ MakeColor(0xC9D1D9u),
+    /* hlBuiltin                  */ MakeColor(0xD2A8FFu),
+    /* hlOther                    */ MakeColor(0xC9D1D9u),
 };
 
 /**

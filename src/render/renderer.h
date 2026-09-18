@@ -285,7 +285,8 @@ private:
                     ID2D1SolidColorBrush* copyIconBrush,
                     ID2D1SolidColorBrush* copyHoverBgBrush,
                     ID2D1SolidColorBrush* copyPaperBrush,
-                    ID2D1SolidColorBrush* copyDoneBrush);
+                    ID2D1SolidColorBrush* copyDoneBrush,
+                    ID2D1SolidColorBrush* const* hlBrushes);
 
     // 画代码块右上角的"复制"按钮(T45):纯 D2D 几何,零图标字体零位图。
     // 三态视觉区分——默认态只画灰色双层纸张轮廓;悬浮态先铺一层浅灰圆角底、
@@ -332,6 +333,13 @@ private:
     // link range 的 HitTestTextRange 矩形做 PushAxisAlignedClip 后重画一次
     // 整个 layout(裁剪区之外的部分不可见),不引入自定义渲染器。
     void DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* linkBrush);
+
+    // 给围栏代码块的语法着色 run 单独换色(T53):与 DrawLinkOverlays 同一手法——
+    // 不用 SetDrawingEffect/自定义渲染器,对每个 token range 的 HitTestTextRange
+    // 矩形做 PushAxisAlignedClip 后重画一次整个 layout。hlBrushes 是按
+    // hl/lexer.h::TokenType 取值下标的 7 支画笔数组,调用方保证非空且长度为 7。
+    void DrawCodeHighlights(const BlockGeometry& g, float scrollY,
+                              ID2D1SolidColorBrush* const* hlBrushes);
 
     // 画任务列表勾选框(T27):圆角矩形 + 已勾选时叠加两段折线对勾,零字体零位图。
     void DrawTaskCheckbox(const BlockGeometry& g, float scrollY,

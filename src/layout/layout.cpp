@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "../hl/lexer.h"
+
 namespace mdvn {
 
 namespace {
@@ -117,6 +119,32 @@ u32 FormatDecimalW(u32 value, wchar_t* buf, u32 cap) {
     return len;
 }
 
+// T53:围栏代码块语法着色——一个 inline 段在"拼接后的代码文本"里的字节区间,
+// 与它在最终 UTF-16 buf 里对应的起始偏移(长度可由下一段的 byteStart 或
+// 总字节数推出,这里不单独存,用不上)。用于把词法器产出的字节偏移换算成
+// IDWriteTextLayout 认识的 UTF-16 偏移。
+struct CodeSeg {
+    u32 byteStart;
+    u32 byteLen;
+    u32 utf16Offset;
+};
+
+// 把"拼接后的代码文本"里的字节偏移换算成 UTF-16 偏移:线性定位偏移落在哪个
+// inline 段,再对段内前缀调用 Utf16LengthOfUtf8 得到段内的 UTF-16 增量。
+// segCount 通常很小(代码块的 inline 段数,一般等于源码行数量级),线性扫描
+// 足够快,不需要二分。
+u32 CodeByteOffsetToUtf16(const CodeSeg* segs, u32 segCount, const char* codeBuf,
+                            u32 byteOffset, u32 fallbackUtf16) {
+    for (u32 s = 0; s < segCount; ++s) {
+        const CodeSeg& seg = segs[s];
+        if (byteOffset >= seg.byteStart && byteOffset <= seg.byteStart + seg.byteLen) {
+            u32 intra = byteOffset - seg.byteStart;
+            return seg.utf16Offset + Utf16LengthOfUtf8(StrSlice{codeBuf + seg.byteStart, intra});
+        }
+    }
+    return fallbackUtf16;  // 落在末尾之后(极端情况),钳到缓冲区末尾
+}
+
 }  // namespace
 
 // 构造一个空引擎,Arena 延迟到首次 Relayout 才真正预留地址空间。
@@ -215,6 +243,7 @@ float BlockLayoutEngine::LayoutSubtree(u32 blockIndex, float x, float y, bool in
     g.codeBackground = LayoutRect{0, 0, 0, 0};
     g.codeCopyButton = LayoutRect{0, 0, 0, 0};
     g.linkBoxes = Span<LinkBox>{nullptr, 0};
+    g.codeHighlights = Span<CodeHighlightRun>{nullptr, 0};
     g.imageBoxes = Span<ImageBox>{nullptr, 0};
     g.tableColWidths = Span<float>{nullptr, 0};
     g.tableRowTops = Span<float>{nullptr, 0};
@@ -845,6 +874,8 @@ void BlockLayoutEngine::UpdateVisibleRange(float topY, float bottomY, FontSubsys
             g.textLayout->Release();
             g.textLayout = nullptr;
             g.linkBoxes = Span<LinkBox>{nullptr, 0};  // 随 layout 一起失效,避免渲染器读到悬空 range
+            // T53:代码高亮 run 与 textLayout 同生共死,一并清空(见 layout.h 字段注释)。
+            g.codeHighlights = Span<CodeHighlightRun>{nullptr, 0};
         }
     }
 }
@@ -934,6 +965,73 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
 
     IDWriteTextLayout* layout = fonts.CreateTextLayout(buf, cursor, role, maxWidth, kMaxTextLayoutHeightDip);
     if (!layout) return nullptr;
+
+    // T53:围栏代码块语法着色——只有语言被识别(languageId != kLanguageNone)才跑
+    // 词法器;未识别语言(含缩进代码块,detailIdx 可能为 kInvalidIndex)一行都不
+    // 执行,codeHighlights 保持初始的空 Span,渲染层走原有纯色路径。
+    if (b.type == BlockType::CodeBlock && b.detailIdx != kInvalidIndex) {
+        const CodeBlockDetail& cbd = doc_->codeBlockDetails[b.detailIdx];
+        LanguageId langId = static_cast<LanguageId>(cbd.languageId);
+        if (langId != kLanguageNone) {
+            // 按 ranges 的顺序把各 inline 的原始 UTF-8 字节拼成一份连续的代码
+            // 文本喂给词法器,同时记下每段在这份代码文本里的字节区间与它在
+            // buf 里对应的 UTF-16 起始偏移(ranges 已经算好),供词法器产出的
+            // 字节偏移换算回 UTF-16 偏移。footnote 引用/图片 run 不会出现在
+            // 代码块里,这里仍按同样条件过滤以防御性对齐 RunSlot 的构造逻辑。
+            Vec<CodeSeg> segs(&scratchArena_);
+            u32 totalCodeBytes = 0;
+            for (u32 i = 0; i < ranges.Size(); ++i) {
+                const RunRange& rr = ranges[i];
+                if (rr.footnoteRef || rr.len == 0) continue;
+                const Inline& in = doc_->inlines[b.firstInlineIdx + rr.inlineIndex];
+                if (in.flags & kInlineFlagImage) continue;
+                totalCodeBytes += in.textLen;
+            }
+
+            if (totalCodeBytes > 0) {
+                char* codeBuf =
+                    static_cast<char*>(scratchArena_.Alloc(totalCodeBytes, alignof(char)));
+                if (codeBuf) {
+                    u32 byteCursor = 0;
+                    for (u32 i = 0; i < ranges.Size(); ++i) {
+                        const RunRange& rr = ranges[i];
+                        if (rr.footnoteRef || rr.len == 0) continue;
+                        const Inline& in = doc_->inlines[b.firstInlineIdx + rr.inlineIndex];
+                        if (in.flags & kInlineFlagImage) continue;
+                        memcpy(codeBuf + byteCursor, InlineTextBytes(in, *doc_), in.textLen);
+                        segs.Push(CodeSeg{byteCursor, in.textLen, rr.offset});
+                        byteCursor += in.textLen;
+                    }
+
+                    const LanguageRule& rule = GetLanguageRule(langId);
+                    LexResult lex =
+                        LexCodeBlock(StrSlice{codeBuf, byteCursor}, rule, &scratchArena_);
+
+                    Vec<CodeHighlightRun> tempHighlights(&scratchArena_);
+                    for (u32 t = 0; t < lex.tokens.len; ++t) {
+                        const Token& tok = lex.tokens[t];
+                        u32 u16Start = CodeByteOffsetToUtf16(segs.Data(), segs.Size(), codeBuf,
+                                                              tok.offset, cursor);
+                        u32 u16End = CodeByteOffsetToUtf16(segs.Data(), segs.Size(), codeBuf,
+                                                            tok.offset + tok.len, cursor);
+                        if (u16End > u16Start) {
+                            tempHighlights.Push(CodeHighlightRun{u16Start, u16End - u16Start, tok.type});
+                        }
+                    }
+
+                    if (tempHighlights.Size() > 0) {
+                        CodeHighlightRun* stored = static_cast<CodeHighlightRun*>(
+                            geometryArena_.Alloc(sizeof(CodeHighlightRun) * tempHighlights.Size(),
+                                                  alignof(CodeHighlightRun)));
+                        if (stored) {
+                            for (u32 i = 0; i < tempHighlights.Size(); ++i) stored[i] = tempHighlights[i];
+                            g.codeHighlights = Span<CodeHighlightRun>{stored, tempHighlights.Size()};
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Bug 2 修复:表格单元格的行高是"该行所有单元格里最高的那个"(见
     // LayoutTableSubtree),单个单元格的文字真实高度往往比它小,记下真实
