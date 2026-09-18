@@ -49,6 +49,99 @@ inline float ClampOutlinePanelWidth(float widthDip) {
     return widthDip;
 }
 
+/**
+ * Animation state machine for outline drawer and mask overlay.
+ *
+ * 大纲抽屉式侧栏与蒙层叠加层的动画状态机。
+ */
+enum class OutlineAnimState : u8 {
+    // Drawer is completely closed; outline pointer is nullptr and consumes zero resources.
+    //
+    // 侧栏完全关闭；大纲指针为 nullptr，零资源开销。
+    Closed = 0,
+
+    // Drawer is sliding into view from the left; mask is fading in.
+    //
+    // 侧栏正从左侧向右滑入展示；蒙层正在淡入。
+    Opening = 1,
+
+    // Drawer is fully expanded and interactive.
+    //
+    // 侧栏完全展开，支持完整交互。
+    Open = 2,
+
+    // Drawer is sliding out to the left; mask is fading out.
+    //
+    // 侧栏正向左侧滑出收起；蒙层正在淡出。
+    Closing = 3,
+};
+
+/**
+ * Compute cubic ease-out curve: f(t) = 1 - (1 - t)^3.
+ *
+ * 计算三次缓出曲线: f(t) = 1 - (1 - t)^3。
+ *
+ * @param t Normalized linear progress in [0.0f, 1.0f].
+ *
+ *   归一化线性时间进度，范围 [0.0f, 1.0f]。
+ *
+ * @returns Transformed ease-out progress in [0.0f, 1.0f].
+ *
+ *   缓出变换后的进度值，范围 [0.0f, 1.0f]。
+ */
+inline float EaseOutCubic(float t) {
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    float oneMinus = 1.0f - t;
+    return 1.0f - oneMinus * oneMinus * oneMinus;
+}
+
+/**
+ * Compute horizontal drawing X offset (DIP) for the animated sliding outline panel.
+ *
+ * 计算大纲侧栏滑动动画的水平绘制 X 偏移量 (DIP)。
+ *
+ * @param progress Animation progress in [0.0f, 1.0f] (0.0f = fully closed, 1.0f = fully open).
+ *
+ *   动画进度，范围 [0.0f, 1.0f] (0.0f 表示完全收起，1.0f 表示完全展开)。
+ *
+ * @param panelWidth Outline panel width (DIP).
+ *
+ *   侧栏宽度 (DIP)。
+ *
+ * @returns Translation X offset (DIP): (progress - 1.0f) * panelWidth.
+ *
+ *   水平平移 X 偏移 (DIP)：(progress - 1.0f) * panelWidth。
+ */
+inline float OutlinePanelSlideOffsetDip(float progress, float panelWidth) {
+    if (progress <= 0.0f) return -panelWidth;
+    if (progress >= 1.0f) return 0.0f;
+    return (progress - 1.0f) * panelWidth;
+}
+
+/**
+ * Compute visible width on screen (DIP) for the sliding outline panel.
+ *
+ * 计算滑动中的大纲侧栏在屏幕上的可见宽度 (DIP)。
+ *
+ * @param progress Animation progress in [0.0f, 1.0f] (0.0f = fully closed, 1.0f = fully open).
+ *
+ *   动画进度，范围 [0.0f, 1.0f] (0.0f 表示完全收起，1.0f 表示完全展开)。
+ *
+ * @param panelWidth Outline panel width (DIP).
+ *
+ *   侧栏宽度 (DIP)。
+ *
+ * @returns Visible width on screen (DIP): progress * panelWidth.
+ *
+ *   在屏幕上的可见宽度 (DIP)：progress * panelWidth。
+ */
+inline float OutlinePanelVisibleWidthDip(float progress, float panelWidth) {
+    if (progress <= 0.0f) return 0.0f;
+    if (progress >= 1.0f) return panelWidth;
+    return progress * panelWidth;
+}
+
 // 每条大纲条目的行高(DIP),条目 y 坐标 = 下标 * 本常量。
 constexpr float kOutlineItemHeightDip = 28.0f;
 

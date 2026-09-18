@@ -34,15 +34,18 @@ constexpr u64 kBottomBarBytesPerMb = 1024ull * 1024ull;
 constexpr float kBottomBarBytesPerKb = 1024.0f;
 
 /**
+ * Semantic indices of the 5 bottom bar buttons, matching kBottomBarButtonCount and left-to-right order.
+ * None indicates no button hit (e.g. within the right status area).
+ *
  * 底部栏 5 个按钮的语义下标,与 `kBottomBarButtonCount` 长度、从左到右的
  * 排列顺序一一对应。`None` 表示"未命中任何按钮"(含落在右侧状态区的情况)。
  */
 enum class BottomBarButton : u32 {
-    ZoomIn = 0,   // 字体放大
-    ZoomOut = 1,  // 字体缩小
+    Outline = 0,  // 打开/关闭大纲
+    OpenDoc = 1,  // 打开文档
     Theme = 2,    // 主题切换
-    OpenDoc = 3,  // 打开文档
-    Outline = 4,  // 打开/关闭大纲
+    ZoomOut = 3,  // 字体缩小
+    ZoomIn = 4,   // 字体放大
     None = kBottomBarButtonCount,
 };
 
@@ -50,7 +53,7 @@ enum class BottomBarButton : u32 {
 // 常驻标签取消后,这份文案仍在用——渲染层已不画标签文字,鼠标悬浮提示
 // (window.cpp)与本文件的单测共用同一份,避免重复定义两份一样的字符串数组。
 constexpr const wchar_t* kBottomBarLabels[kBottomBarButtonCount] = {
-    L"放大", L"缩小", L"主题", L"打开", L"大纲",
+    L"大纲", L"打开", L"主题", L"缩小", L"放大",
 };
 
 // 一个按钮在客户区坐标系里的矩形(DIP)。

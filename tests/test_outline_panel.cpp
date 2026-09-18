@@ -1,6 +1,7 @@
 // T63 大纲侧栏覆盖测试:条目几何(y 坐标/缩进)、超长标题省略号截断、
 // 侧栏自身滚动裁剪、以及高亮定位二分查找的纯函数用例(含 300 条标题的
 // 二分/线性对拍)。全部走纯函数/纯类,不依赖真实 HWND/D2D。
+#include <cmath>
 #include "mdvn_test.h"
 #include "../src/shell/hit_test.h"
 #include "../src/shell/outline_panel.h"
@@ -389,4 +390,79 @@ MDVN_TEST(OutlinePanel_ResizeHandleStraddlesBoundary) {
     MDVN_CHECK(IsPointInOutlinePanelResizeHandle(223, 1.0f, panelWidth));  // 边界外侧
     MDVN_CHECK(!IsPointInOutlinePanelResizeHandle(100, 1.0f, panelWidth));  // 远离边界
     MDVN_CHECK(!IsPointInOutlinePanelResizeHandle(300, 1.0f, panelWidth));  // 远离边界
+}
+
+// Ease-out cubic curve properties: boundary clamping, characteristic values, monotonicity.
+//
+// 三次缓出曲线特性测试: 边界夹取、特征值计算、单调递增性。
+MDVN_TEST(OutlinePanel_EaseOutCubicCurve) {
+    using mdvn::EaseOutCubic;
+
+    // Boundary conditions and clamping.
+    //
+    // 边界条件与夹取。
+    MDVN_CHECK_EQ(EaseOutCubic(0.0f), 0.0f);
+    MDVN_CHECK_EQ(EaseOutCubic(1.0f), 1.0f);
+    MDVN_CHECK_EQ(EaseOutCubic(-0.5f), 0.0f);
+    MDVN_CHECK_EQ(EaseOutCubic(1.5f), 1.0f);
+
+    // Midpoint: f(0.5) = 1 - (1 - 0.5)^3 = 1 - 0.125 = 0.875 (fast start, gentle end).
+    //
+    // 中点值: f(0.5) = 1 - (1 - 0.5)^3 = 0.875 (起步迅捷、收尾缓和)。
+    float mid = EaseOutCubic(0.5f);
+    MDVN_CHECK(mid > 0.87f && mid < 0.88f);
+
+    // Monotonically increasing.
+    //
+    // 单调递增性。
+    MDVN_CHECK(EaseOutCubic(0.2f) < EaseOutCubic(0.4f));
+    MDVN_CHECK(EaseOutCubic(0.4f) < EaseOutCubic(0.6f));
+    MDVN_CHECK(EaseOutCubic(0.6f) < EaseOutCubic(0.8f));
+    MDVN_CHECK(EaseOutCubic(0.8f) < EaseOutCubic(1.0f));
+}
+
+// Outline drawer slide offset and visible width: seamless alignment with mask overlay.
+//
+// 大纲抽屉滑动偏移与可见宽度计算测试: 保证与蒙层起始边缘零缝隙衔接。
+MDVN_TEST(OutlinePanel_SlideOffsetAndVisibleWidth) {
+    using mdvn::OutlinePanelSlideOffsetDip;
+    using mdvn::OutlinePanelVisibleWidthDip;
+
+    float panelWidth = 220.0f;
+
+    // Closed state (progress = 0.0f): fully shifted left, 0 visible width.
+    //
+    // 完全收起状态 (progress = 0.0f): 完全左移移出屏幕，可见宽度为 0。
+    MDVN_CHECK_EQ(OutlinePanelSlideOffsetDip(0.0f, panelWidth), -220.0f);
+    MDVN_CHECK_EQ(OutlinePanelVisibleWidthDip(0.0f, panelWidth), 0.0f);
+
+    // Open state (progress = 1.0f): zero offset, full visible width.
+    //
+    // 完全展开状态 (progress = 1.0f): 偏移量为 0，可见宽度等于面板宽度。
+    MDVN_CHECK_EQ(OutlinePanelSlideOffsetDip(1.0f, panelWidth), 0.0f);
+    MDVN_CHECK_EQ(OutlinePanelVisibleWidthDip(1.0f, panelWidth), 220.0f);
+
+    // Mid-animation (progress = 0.5f).
+    //
+    // 动画中间状态 (progress = 0.5f)。
+    MDVN_CHECK_EQ(OutlinePanelSlideOffsetDip(0.5f, panelWidth), -110.0f);
+    MDVN_CHECK_EQ(OutlinePanelVisibleWidthDip(0.5f, panelWidth), 110.0f);
+
+    // Clamp out-of-range progress.
+    //
+    // 越界进度值夹取。
+    MDVN_CHECK_EQ(OutlinePanelSlideOffsetDip(-0.5f, panelWidth), -220.0f);
+    MDVN_CHECK_EQ(OutlinePanelSlideOffsetDip(1.5f, panelWidth), 0.0f);
+    MDVN_CHECK_EQ(OutlinePanelVisibleWidthDip(-0.5f, panelWidth), 0.0f);
+    MDVN_CHECK_EQ(OutlinePanelVisibleWidthDip(1.5f, panelWidth), 220.0f);
+
+    // Invariant: slideOffset + panelWidth == visibleWidth (guarantees zero gap with mask).
+    //
+    // 不变量检验: slideOffset + panelWidth == visibleWidth (保证抽屉右缘与蒙层左缘无缝贴合)。
+    for (int i = 0; i <= 10; ++i) {
+        float progress = static_cast<float>(i) * 0.1f;
+        float offset = OutlinePanelSlideOffsetDip(progress, panelWidth);
+        float visible = OutlinePanelVisibleWidthDip(progress, panelWidth);
+        MDVN_CHECK(std::fabs(offset + panelWidth - visible) < 0.001f);
+    }
 }

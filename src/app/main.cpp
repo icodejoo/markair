@@ -422,10 +422,15 @@ int CollectBenchLoopCorpusFiles(const wchar_t* dir) {
     return count;
 }
 
-// T56:窗口矩形去抖到点、或窗口即将销毁前,把当前实时矩形写进 state.ini。
-// T57:字号缩放变更(Ctrl+=/Ctrl+-/Ctrl+0)后也会复用这同一个钩子(见
-// window.cpp 的 ApplyZoomChange),顺带把当前 zoom 一起写出——两者共用
-// T55 的"读-改-写 + 命名互斥体"通道(SaveAppSettings 内部),不绕过它。
+/**
+ * Callback invoked when window geometry or settings change, writing state to disk.
+ *
+ * 窗口矩形或配置项变更时的回调函数,将最新状态写回磁盘 state.ini。
+ *
+ * @param userData Pointer to DocumentHost containing settings and window state.
+ *
+ *   指向包含配置与窗口状态的 DocumentHost 上下文指针。
+ */
 void OnWindowGeometryChangedHook(void* userData) {
     DocumentHost* host = static_cast<DocumentHost*>(userData);
     if (!host || !host->windowState || !host->settings) return;
@@ -438,6 +443,8 @@ void OnWindowGeometryChangedHook(void* userData) {
     host->settings->winH = host->windowState->winH;
     host->settings->winMaximized = host->windowState->winMaximized;
     if (host->fonts) host->settings->zoom = host->fonts->Scale();
+    host->settings->theme = host->windowState->themeSetting;
+    host->settings->hasTheme = true;
     mdvn::SaveAppSettings(*host->settings);
 }
 
@@ -578,6 +585,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::AppSettings settings;
     mdvn::LoadAppSettings(&settings);
 
+    // If theme is not explicitly persisted in state.ini yet, detect system theme once,
+    // determine whether it is light or dark, and immediately persist it to state.ini.
+    //
+    // 若 state.ini 中尚未持久化有效主题,则在初始化时读取一次系统主题,
+    // 确定是亮色还是暗色,并立即存入持久化文件 state.ini。
+    if (!settings.hasTheme) {
+        bool systemIsDark = mdvn::DetectSystemIsDark();
+        settings.theme = systemIsDark ? mdvn::ThemeSetting::Dark : mdvn::ThemeSetting::Light;
+        settings.hasTheme = true;
+        if (!benchArgs.benchEnabled) {
+            mdvn::SaveAppSettings(settings);
+        }
+    }
+
     // T71(bench 确定性修复):--bench 模式下强制忽略 state.ini 里持久化的
     // 窗口矩形/最大化态——这是一个跨会话漂移的隐藏测量输入(见
     // bench/M2-MEMORY-REGRESSION.md §6.3:同一份语料仅因窗口矩形不同,
@@ -652,10 +673,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::Renderer renderer;
     renderer.Init(g_d2dFactory, &fonts, &imageCache);
 
-    // T47:启动期探测一次系统深浅色,若 ini 偏好(system 默认跟随/light/dark)
-    // 最终解出深色,就在创建 renderer 之后立即切一次调色板,让程序以正确的
-    // 主题打开(不要求首帧零闪烁的复杂处理)。
-    bool systemIsDark = mdvn::DetectSystemIsDark();
+    // Initialize palette according to the resolved effective theme (Dark or Light).
+    //
+    // 根据已确定的生效主题(暗色或亮色)初始化渲染器调色板。
+    bool systemIsDark = (settings.theme == mdvn::ThemeSetting::Dark);
     if (mdvn::ResolveEffectiveTheme(settings.theme, systemIsDark)) {
         renderer.SetPalette(&mdvn::kDarkPalette);
     }
@@ -817,6 +838,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 同步写进了 settings.winX/Y/W/H/winMaximized(documentHost.settings 与
     // 这里的 settings 是同一个对象),这里不需要再重复赋值,直接一起写出。
     settings.theme = windowState.themeSetting;
+    settings.hasTheme = true;
     // T57:兜底同理——万一本次会话缩放变了但从未触发过 onWindowGeometryChanged
     // (例如只按了 Ctrl+= 就直接关窗口,没移动/缩放过窗口),这里补上最终值。
     settings.zoom = fonts.Scale();

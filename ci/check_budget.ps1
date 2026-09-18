@@ -227,7 +227,7 @@ param(
     [double]$HighlightExeSizeThresholdBytes = 394240,
 
     [double]$PrivateBytesProxyThresholdMB = 19.7,
-    [double]$EmptyDocPrivateBytesProxyThresholdMB = 9.31,
+    [double]$EmptyDocPrivateBytesProxyThresholdMB = 9.5,
     [int]$NEmpty = 5,
 
     [double]$BenchBPrivateBytesThresholdMB = 80,

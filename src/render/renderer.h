@@ -74,6 +74,13 @@ struct ShellOverlay {
     // 不会被读取——DrawOutlinePanel/DrawOutlineOverlayMask 只在
     // `outlineItems` 非空时才会被调用。
     float outlinePanelWidthDip;
+
+    // Outline drawer slide & mask fade animation progress in [0.0f, 1.0f].
+    // 0.0f = completely closed, 1.0f = fully open and interactive.
+    //
+    // 大纲侧栏滑动与蒙层淡入淡出动画进度，取值范围 [0.0f, 1.0f]。
+    // 0.0f 表示完全收起，1.0f 表示完全展开并可交互。
+    float outlineAnimProgress;
 };
 
 /**

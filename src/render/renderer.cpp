@@ -154,7 +154,7 @@ constexpr float kBottomBarTooltipGapDip = 4.0f;        // 气泡底边与底部�
 // BottomBarButton 枚举顺序一一对应。数值/文案必须与那边的 kBottomBarLabels
 // 保持一致——同一条"render 不反向 include shell"的约束。
 constexpr const wchar_t* kBottomBarTooltipLabels[kBottomBarButtonCount] = {
-    L"放大", L"缩小", L"主题", L"打开", L"大纲",
+    L"大纲", L"打开", L"主题", L"缩小", L"放大",
 };
 
 // 标题级别 -> 缩进量,口径与 mdvn::OutlineItemIndentDip 一致。
@@ -640,17 +640,25 @@ void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
     if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
     if (!maskBrush || !target_) return;
 
-    // 只盖侧栏矩形之外的正文区域,侧栏本身随后单独画(DrawOutlinePanel),
-    // 不会被这层蒙层盖住。T63b:侧栏宽度可拖拽调整,用外壳层传来的实际
-    // 当前宽度,不再用固定常量。
+    float animProgress = overlay_->outlineAnimProgress;
+    if (animProgress <= 0.0001f) return;
+
+    // 只盖侧栏当前可见矩形之外的正文区域,侧栏本身随后单独画(DrawOutlinePanel),
+    // 不会被这层蒙层盖住。滑动动画期间,蒙层从侧栏当前可见右边缘开始向右铺满。
+    //
+    // Only cover the text area outside the visible sliding outline panel.
+    float visibleWidth = overlay_->outlinePanelWidthDip * animProgress;
+    if (visibleWidth < 0.0f) visibleWidth = 0.0f;
+    if (visibleWidth > overlay_->outlinePanelWidthDip) visibleWidth = overlay_->outlinePanelWidthDip;
+
     D2D1_RECT_F maskRect =
-        D2D1::RectF(overlay_->outlinePanelWidthDip, 0.0f, targetWidth, targetHeight);
+        D2D1::RectF(visibleWidth, 0.0f, targetWidth, targetHeight);
     target_->FillRectangle(maskRect, maskBrush);
 }
 
 // 自绘滚动条滑块(方案A,见类头文件注释):按视口/内容尺寸算出滑块矩形,
 // 内容不超过一屏时不画。几何公式与 shell/scrollbar.h::CalcScrollbarMetrics
-// 保持一致(纯数字,那边可单测;这里只负责按结果画一个圆角矩形)。
+// 保持一致(纯数字,那边可单测;这里只负责按结果画一个直角轨道与圆角滑块)。
 void Renderer::DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight,
                               float scrollY, ID2D1SolidColorBrush* trackBrush,
                               ID2D1SolidColorBrush* thumbBrush) {
@@ -660,13 +668,12 @@ void Renderer::DrawScrollbar(float viewportWidth, float viewportHeight, float to
     float right = viewportWidth - kScrollbarMarginDip;
     float left = right - kScrollbarWidthDip;
 
-    // 轨道:常驻显示,标示"这一整条都是可滚动范围",与滑块共用一套圆角
-    // 几何,只是铺满整个视口高度。
+    // 轨道:常驻显示,标示"这一整条都是可滚动范围",直角矩形铺满整个视口高度(背景无圆角)。
+    //
+    // Track: permanently visible straight rectangle without rounded corners.
     if (trackBrush) {
-        D2D1_ROUNDED_RECT track = D2D1::RoundedRect(
-            D2D1::RectF(left, 0.0f, right, viewportHeight),
-            kScrollbarCornerRadiusDip, kScrollbarCornerRadiusDip);
-        target_->FillRoundedRectangle(track, trackBrush);
+        D2D1_RECT_F trackRect = D2D1::RectF(left, 0.0f, right, viewportHeight);
+        target_->FillRectangle(trackRect, trackBrush);
     }
 
     float thumbHeight = viewportHeight * (viewportHeight / totalHeight);
@@ -695,10 +702,23 @@ void Renderer::DrawOutlinePanel(float targetHeight,
     if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
     if (!fonts_ || !overlay_->doc || !bgBrush || !textBrush || !target_) return;
 
+    float animProgress = overlay_->outlineAnimProgress;
+    if (animProgress <= 0.0001f) return;
+
     // 悬浮覆盖:侧栏浮在正文左侧上方,不改变正文视口宽度,几何与主内容布局
     // 完全无关(不读取任何 BlockGeometry 几何字段),开关侧栏因此是纯重绘。
     // T63b:宽度可拖拽调整,用外壳层传来的实际当前宽度。
     float panelWidth = overlay_->outlinePanelWidthDip;
+
+    // Apply horizontal translation for slide drawer animation.
+    //
+    // 为抽屉式侧栏滑动动画施加水平平移变换。
+    float slideOffset = 0.0f;
+    if (animProgress < 1.0f) {
+        slideOffset = (animProgress - 1.0f) * panelWidth;
+        target_->SetTransform(D2D1::Matrix3x2F::Translation(slideOffset, 0.0f));
+    }
+
     D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, panelWidth, targetHeight);
     target_->FillRectangle(panelRect, bgBrush);
 
@@ -811,6 +831,10 @@ void Renderer::DrawOutlinePanel(float targetHeight,
     float contentHeight = kOutlineItemHeightDip * static_cast<float>(overlay_->outlineItemCount);
     DrawScrollbar(panelWidth, targetHeight, contentHeight, overlay_->outlineScrollY,
                   scrollbarTrackBrush, scrollbarThumbBrush);
+
+    if (slideOffset != 0.0f) {
+        target_->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
 }
 
 // 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
@@ -848,24 +872,26 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
 
         if (iconBrush) {
             switch (static_cast<int>(i)) {
-            case 0:  // 放大:放大镜 + "+"
-            case 1: {  // 缩小:放大镜 + "-"
-                float r = half * 0.65f;
-                D2D1_ELLIPSE circle{D2D1::Point2F(centerX - r * 0.3f, iconCenterY - r * 0.3f), r, r};
-                target_->DrawEllipse(circle, iconBrush, kBottomBarIconStrokeWidthDip);
-                target_->DrawLine(
-                    D2D1::Point2F(centerX - r * 0.3f + r * 0.7f, iconCenterY - r * 0.3f + r * 0.7f),
-                    D2D1::Point2F(centerX + half * 0.75f, iconCenterY + half * 0.75f), iconBrush,
-                    kBottomBarIconStrokeWidthDip);
-                float signCx = circle.point.x, signCy = circle.point.y;
-                target_->DrawLine(D2D1::Point2F(signCx - r * 0.45f, signCy),
-                                  D2D1::Point2F(signCx + r * 0.45f, signCy), iconBrush,
-                                  kBottomBarIconStrokeWidthDip);
-                if (i == 0) {
-                    target_->DrawLine(D2D1::Point2F(signCx, signCy - r * 0.45f),
-                                      D2D1::Point2F(signCx, signCy + r * 0.45f), iconBrush,
+            case 0: {  // 大纲:三条横线(列表图标)
+                float w = half * 1.6f;
+                float lineTop = iconCenterY - half;
+                for (int line = 0; line < 3; ++line) {
+                    float y = lineTop + kBottomBarIconSizeDip * (0.25f + 0.3f * line);
+                    target_->DrawLine(D2D1::Point2F(centerX - w * 0.5f, y),
+                                      D2D1::Point2F(centerX + w * 0.5f, y), iconBrush,
                                       kBottomBarIconStrokeWidthDip);
                 }
+                break;
+            }
+            case 1: {  // 打开文档:文件夹轮廓
+                float w = half * 1.7f, h = half * 1.2f;
+                D2D1_RECT_F body =
+                    D2D1::RectF(centerX - w * 0.5f, iconCenterY - h * 0.3f,
+                                centerX + w * 0.5f, iconCenterY + h * 0.7f);
+                target_->DrawRectangle(body, iconBrush, kBottomBarIconStrokeWidthDip);
+                D2D1_RECT_F tab = D2D1::RectF(body.left, body.top - h * 0.35f,
+                                               body.left + w * 0.4f, body.top);
+                target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
                 break;
             }
             case 2: {  // 主题:太阳(圆 + 四条短射线)
@@ -887,25 +913,23 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                 }
                 break;
             }
-            case 3: {  // 打开文档:文件夹轮廓
-                float w = half * 1.7f, h = half * 1.2f;
-                D2D1_RECT_F body =
-                    D2D1::RectF(centerX - w * 0.5f, iconCenterY - h * 0.3f,
-                                centerX + w * 0.5f, iconCenterY + h * 0.7f);
-                target_->DrawRectangle(body, iconBrush, kBottomBarIconStrokeWidthDip);
-                D2D1_RECT_F tab = D2D1::RectF(body.left, body.top - h * 0.35f,
-                                               body.left + w * 0.4f, body.top);
-                target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
-                break;
-            }
+            case 3:  // 缩小:放大镜 + "-"
             case 4:
-            default: {  // 大纲:三条横线(列表图标)
-                float w = half * 1.6f;
-                float lineTop = iconCenterY - half;
-                for (int line = 0; line < 3; ++line) {
-                    float y = lineTop + kBottomBarIconSizeDip * (0.25f + 0.3f * line);
-                    target_->DrawLine(D2D1::Point2F(centerX - w * 0.5f, y),
-                                      D2D1::Point2F(centerX + w * 0.5f, y), iconBrush,
+            default: {  // 放大:放大镜 + "+"
+                float r = half * 0.65f;
+                D2D1_ELLIPSE circle{D2D1::Point2F(centerX - r * 0.3f, iconCenterY - r * 0.3f), r, r};
+                target_->DrawEllipse(circle, iconBrush, kBottomBarIconStrokeWidthDip);
+                target_->DrawLine(
+                    D2D1::Point2F(centerX - r * 0.3f + r * 0.7f, iconCenterY - r * 0.3f + r * 0.7f),
+                    D2D1::Point2F(centerX + half * 0.75f, iconCenterY + half * 0.75f), iconBrush,
+                    kBottomBarIconStrokeWidthDip);
+                float signCx = circle.point.x, signCy = circle.point.y;
+                target_->DrawLine(D2D1::Point2F(signCx - r * 0.45f, signCy),
+                                  D2D1::Point2F(signCx + r * 0.45f, signCy), iconBrush,
+                                  kBottomBarIconStrokeWidthDip);
+                if (i == 4) {
+                    target_->DrawLine(D2D1::Point2F(signCx, signCy - r * 0.45f),
+                                      D2D1::Point2F(signCx, signCy + r * 0.45f), iconBrush,
                                       kBottomBarIconStrokeWidthDip);
                 }
                 break;
@@ -1508,7 +1532,19 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->overlayBarText, &overlayBarTextBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightBackground, &outlineHighlightBgBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
-    target_->CreateSolidColorBrush(palette_->outlineOverlayMaskBackground, &outlineOverlayMaskBrush);
+
+    // Fade-in / fade-out alpha animation for outline mask overlay.
+    //
+    // 大纲蒙层淡入淡出透明度动画。
+    D2D1_COLOR_F maskColor = palette_->outlineOverlayMaskBackground;
+    float animProgress = (overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0)
+                             ? overlay_->outlineAnimProgress
+                             : 0.0f;
+    if (animProgress < 0.0f) animProgress = 0.0f;
+    if (animProgress > 1.0f) animProgress = 1.0f;
+    maskColor.a *= animProgress;
+    target_->CreateSolidColorBrush(maskColor, &outlineOverlayMaskBrush);
+
     target_->CreateSolidColorBrush(palette_->background, &outlinePanelBgBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyIcon, &copyIconBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyHoverBackground, &copyHoverBgBrush);
@@ -1580,12 +1616,15 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
     // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
     if (!outlineOpen) {
-        float usableViewportHeight = targetSize.height - 2.0f * leftPaddingDip;
-        ID2D1SolidColorBrush* trackBrush =
-            mainScrollbarActive ? scrollbarTrackActiveBrush : scrollbarTrackIdleBrush;
+        float scrollbarHeight = targetSize.height - kBottomBarHeightDip;
+        if (scrollbarHeight < 0.0f) scrollbarHeight = 0.0f;
+        // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
+        //
+        // Scrollbar track background does not highlight on mouse hover (remains idle color).
+        ID2D1SolidColorBrush* trackBrush = scrollbarTrackIdleBrush;
         ID2D1SolidColorBrush* thumbBrush =
             mainScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush;
-        DrawScrollbar(targetSize.width, usableViewportHeight, layout.TotalHeight(),
+        DrawScrollbar(targetSize.width, scrollbarHeight, layout.TotalHeight(),
                       scrollY + leftPaddingDip, trackBrush, thumbBrush);
     }
 
@@ -1633,7 +1672,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
         DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
                          outlineHighlightBgBrush, outlineHighlightTextBrush,
-                         outlineScrollbarActive ? scrollbarTrackActiveBrush : scrollbarTrackIdleBrush,
+                         scrollbarTrackIdleBrush,
                          outlineScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
     }
 

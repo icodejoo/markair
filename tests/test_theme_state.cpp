@@ -1,4 +1,4 @@
-// T47 覆盖测试:主题三态状态机(System/Light/Dark 循环、系统值解析规则)以及
+// T47 覆盖测试:主题双态状态机(Light/Dark 切换、系统值解析规则)以及
 // state.ini 里 theme 键的解析。真实注册表读取(DetectSystemIsDark)不做单测,
 // 逻辑已收敛到可单测的 AppsUseLightThemeValueToIsDark 里。
 #include "mdvn_test.h"
@@ -29,54 +29,54 @@ u32 ParseFresh(const char* text, AppSettings* out) {
 
 }  // namespace
 
-// 用例 1:三态循环 System -> Light -> Dark -> System。
+// 用例 1:双态循环 Light <-> Dark。
 MDVN_TEST(ThemeState_NextThemeSettingCycles) {
-    MDVN_CHECK(NextThemeSetting(ThemeSetting::System) == ThemeSetting::Light);
     MDVN_CHECK(NextThemeSetting(ThemeSetting::Light) == ThemeSetting::Dark);
-    MDVN_CHECK(NextThemeSetting(ThemeSetting::Dark) == ThemeSetting::System);
+    MDVN_CHECK(NextThemeSetting(ThemeSetting::Dark) == ThemeSetting::Light);
 }
 
-// 用例 2:setting == System 时,ResolveEffectiveTheme 跟随 systemIsDark 变化。
-MDVN_TEST(ThemeState_SystemSettingFollowsSystemIsDark) {
-    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::System, false) == false);
-    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::System, true) == true);
-}
-
-// 用例 3:非 System 时,systemIsDark 无论怎么翻转都不影响结果。
-MDVN_TEST(ThemeState_NonSystemSettingIgnoresSystemIsDark) {
-    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Light, false) == false);
+// 用例 2:ResolveEffectiveTheme 针对 Light/Dark 返回对应布尔值。
+MDVN_TEST(ThemeState_ResolveEffectiveThemeReturnsCorrectBool) {
+    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Light) == false);
+    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Dark) == true);
+    // 带两个参数也能正常工作(向后兼容)
     MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Light, true) == false);
     MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Dark, false) == true);
-    MDVN_CHECK(ResolveEffectiveTheme(ThemeSetting::Dark, true) == true);
 }
 
-// 用例 4:AppsUseLightTheme 的 DWORD 值到 systemIsDark 的映射。
+// 用例 3:AppsUseLightTheme 的 DWORD 值到 systemIsDark 的映射。
 MDVN_TEST(ThemeState_AppsUseLightThemeValueMapping) {
     MDVN_CHECK(AppsUseLightThemeValueToIsDark(1) == false);  // 1 = 浅色
     MDVN_CHECK(AppsUseLightThemeValueToIsDark(0) == true);   // 0 = 深色
 }
 
-// 用例 5:ini 里 theme=abc(非法值)时回落 ThemeSetting::System。
-MDVN_TEST(ThemeState_IniIllegalThemeFallsBackToSystem) {
+// 用例 4:ini 里 theme=abc(非法值)不被识别,hasTheme 保持 false。
+MDVN_TEST(ThemeState_IniIllegalThemeDoesNotSetHasTheme) {
     AppSettings s;
     ParseFresh("theme=abc\n", &s);
-    MDVN_CHECK(s.theme == ThemeSetting::System);
+    MDVN_CHECK(s.theme == ThemeSetting::Light);
+    MDVN_CHECK(s.hasTheme == false);
 }
 
-// 用例 6:ini 里 theme=DARK(大小写混合)正确解析成 ThemeSetting::Dark。
+// 用例 5:ini 里 theme=DARK(大小写混合)正确解析成 ThemeSetting::Dark,hasTheme 为 true。
 MDVN_TEST(ThemeState_IniThemeCaseInsensitiveDark) {
     AppSettings s;
     ParseFresh("theme=DARK\n", &s);
     MDVN_CHECK(s.theme == ThemeSetting::Dark);
+    MDVN_CHECK(s.hasTheme == true);
 }
 
-// 用例 7:ini 里 theme=light / theme=system 都能正确映射到对应枚举值。
-MDVN_TEST(ThemeState_IniThemeLightAndSystem) {
+// 用例 6:ini 里 theme=light 正确映射为 ThemeSetting::Light,hasTheme 为 true。
+MDVN_TEST(ThemeState_IniThemeLight) {
     AppSettings light;
     ParseFresh("theme=light\n", &light);
     MDVN_CHECK(light.theme == ThemeSetting::Light);
+    MDVN_CHECK(light.hasTheme == true);
+}
 
-    AppSettings system;
-    ParseFresh("theme=system\n", &system);
-    MDVN_CHECK(system.theme == ThemeSetting::System);
+// 用例 7:ini 里 theme=system(老版本遗留值)不被采纳,hasTheme 保持 false 以触发初始化系统探测。
+MDVN_TEST(ThemeState_IniOldSystemThemeTriggersReinit) {
+    AppSettings s;
+    ParseFresh("theme=system\n", &s);
+    MDVN_CHECK(s.hasTheme == false);
 }

@@ -121,4 +121,61 @@ inline float ScrollYAfterThumbDrag(float dragStartScrollYDip, float dragDeltaYDi
     return ClampScrollOffset(newScrollY, totalHeightDip, viewportHeightDip);
 }
 
+/**
+ * Click on track: calculate new scroll offset when clicking on the scrollbar track.
+ * The center of the thumb is placed at the clicked local Y position, clamped to valid range.
+ *
+ * 点击轨道:算出点击滚动条轨道后的新滚动偏移。
+ * 滑块中心对齐到点击处的局部纵坐标,并夹取到合法滚动区间。
+ *
+ * @param clickYDip The clicked local vertical position in DIPs.
+ *
+ *   点击处的视口局部纵坐标 (DIP)。
+ *
+ * @param viewportHeightDip The height of the viewport in DIPs.
+ *
+ *   视口高度 (DIP)。
+ *
+ * @param totalHeightDip The total height of the content in DIPs.
+ *
+ *   内容总高度 (DIP)。
+ *
+ * @return The clamped new scroll offset in DIPs; returns 0 if content fits viewport.
+ *
+ *   夹取后的新滚动偏移 (DIP);内容不超过一屏时返回 0。
+ *
+ * @example float y = mdvn::ScrollYAfterTrackClick(300.0f, 600.0f, 2000.0f);
+ */
+inline float ScrollYAfterTrackClick(float clickYDip, float viewportHeightDip, float totalHeightDip) {
+    if (viewportHeightDip <= 0.0f || totalHeightDip <= viewportHeightDip) return 0.0f;
+
+    // Minimum thumb height clamping matching CalcScrollbarMetrics.
+    //
+    // 与 CalcScrollbarMetrics 保持一致的滑块最小高度夹取。
+    float thumbHeight = viewportHeightDip * (viewportHeightDip / totalHeightDip);
+    if (thumbHeight < kScrollbarMinThumbHeightDip) thumbHeight = kScrollbarMinThumbHeightDip;
+    if (thumbHeight > viewportHeightDip) thumbHeight = viewportHeightDip;
+
+    // Maximum thumb top position within the viewport.
+    //
+    // 滑块在视口内的最大 top 坐标。
+    float maxThumbTop = viewportHeightDip - thumbHeight;
+    if (maxThumbTop <= 0.0f) return 0.0f;
+
+    // Desired thumb top so that the thumb center aligns with the click position.
+    //
+    // 期望的滑块顶部坐标,使得滑块中心对齐到鼠标点击位置。
+    float thumbTop = clickYDip - thumbHeight * 0.5f;
+    float ratio = thumbTop / maxThumbTop;
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+
+    // Content scrollable distance.
+    //
+    // 内容的可滚动距离。
+    float maxScrollY = totalHeightDip - viewportHeightDip;
+    float newScrollY = ratio * maxScrollY;
+    return ClampScrollOffset(newScrollY, totalHeightDip, viewportHeightDip);
+}
+
 }  // namespace mdvn

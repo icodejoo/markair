@@ -250,9 +250,7 @@ bool AppendKnownKeyLine(const char* key, const AppSettings& s, char* out, u32 ca
     if (strcmp(key, "load_remote_images") == 0) {
         if (!AppendCStr(out, cap, pos, s.loadRemoteImages ? "1" : "0")) return false;
     } else if (strcmp(key, "theme") == 0) {
-        const char* v = "system";
-        if (s.theme == ThemeSetting::Light) v = "light";
-        else if (s.theme == ThemeSetting::Dark) v = "dark";
+        const char* v = (s.theme == ThemeSetting::Dark) ? "dark" : "light";
         if (!AppendCStr(out, cap, pos, v)) return false;
     } else if (strcmp(key, "zoom") == 0) {
         char buf[32];
@@ -352,8 +350,9 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
     if (target.loadRemoteImages != g_baseline.loadRemoteImages) {
         effective.loadRemoteImages = target.loadRemoteImages;
     }
-    if (target.theme != g_baseline.theme) {
+    if (target.theme != g_baseline.theme || target.hasTheme != g_baseline.hasTheme) {
         effective.theme = target.theme;
+        effective.hasTheme = target.hasTheme;
     }
     if (target.zoom != g_baseline.zoom) {
         effective.zoom = target.zoom;
@@ -454,7 +453,8 @@ void DefaultAppSettings(AppSettings* out) {
     out->fontBodyFallback[0] = 0;
     out->fontMonoPrimary[0] = 0;
     out->fontMonoFallback[0] = 0;
-    out->theme = ThemeSetting::System;  // 默认跟随系统
+    out->theme = ThemeSetting::Light;  // 默认浅色
+    out->hasTheme = false;
     out->zoom = 1.0f;  // T57:默认档位,与 FontSubsystem 的 kDefaultZoomIndex 对应
     // T56:winW/winH <= 0 表示"从未存过窗口矩形",window.cpp 据此判断走
     // 系统默认位置/尺寸,不进入越界钳制流程。
@@ -504,18 +504,18 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
         }
 
         if (KeyEquals(key, "theme")) {
-            // 非法值口径与 load_remote_images 一致:不识别就整段跳过、不计入
-            // applied、也不改动 out->theme——由于调用方总是先 DefaultAppSettings
-            // 再解析,"不改动"的效果就是保留默认值 System,天然满足"非法值回落
-            // system"的验收要求,不需要另外写一次"回落"逻辑。
-            if (KeyEquals(value, "system")) {
-                out->theme = ThemeSetting::System;
-                applied++;
-            } else if (KeyEquals(value, "light")) {
+            // Theme only has Light and Dark; no System theme.
+            // System theme is only read once during software initialization when hasTheme is false.
+            //
+            // 主题仅有亮色和暗色,无系统色。
+            // 当 hasTheme 为 false 时仅在软件初始化期读取一次系统主题并存盘。
+            if (KeyEquals(value, "light")) {
                 out->theme = ThemeSetting::Light;
+                out->hasTheme = true;
                 applied++;
             } else if (KeyEquals(value, "dark")) {
                 out->theme = ThemeSetting::Dark;
+                out->hasTheme = true;
                 applied++;
             }
             continue;

@@ -79,7 +79,19 @@ struct AppSettings {
     wchar_t fontBodyFallback[kMaxFontFamilyChars];
     wchar_t fontMonoPrimary[kMaxFontFamilyChars];
     wchar_t fontMonoFallback[kMaxFontFamilyChars];
-    ThemeSetting theme;                            // 主题偏好,默认 ThemeSetting::System
+    /**
+     * Theme preference (ThemeSetting::Light or ThemeSetting::Dark).
+     *
+     * 主题偏好(ThemeSetting::Light 或 ThemeSetting::Dark)。
+     */
+    ThemeSetting theme;
+
+    /**
+     * Whether a valid theme key was explicitly present in state.ini.
+     *
+     * 是否在 state.ini 中显式解析到了有效的主题配置键。
+     */
+    bool hasTheme;
 
     // T57:字号缩放系数,恒为 FontSubsystem 8 个离散档位之一,默认 1.0。
     float zoom;

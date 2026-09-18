@@ -35,21 +35,21 @@ MDVN_TEST(BottomBar_IsPointInBottomBarChecksBandOnly) {
     MDVN_CHECK(IsPointInBottomBar(clientH, clientH - 1.0f));
 }
 
-// 按横坐标分段命中对应按钮,从左到右依次是 ZoomIn/ZoomOut/Theme/OpenDoc/Outline,
+// 按横坐标分段命中对应按钮,从左到右依次是 Outline/OpenDoc/Theme/ZoomOut/ZoomIn,
 // 每段固定宽度 kBottomBarButtonWidthDip。
 MDVN_TEST(BottomBar_HitTestReturnsCorrectButtonByColumn) {
     float clientW = 800.0f;  // 远大于 5 * kBottomBarButtonWidthDip,右侧是状态区
     float w = kBottomBarButtonWidthDip;
     MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, 5.0f)),
-                  static_cast<int>(BottomBarButton::ZoomIn));
+                  static_cast<int>(BottomBarButton::Outline));
     MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w + 5.0f)),
-                  static_cast<int>(BottomBarButton::ZoomOut));
+                  static_cast<int>(BottomBarButton::OpenDoc));
     MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f + 5.0f)),
                   static_cast<int>(BottomBarButton::Theme));
     MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 3.0f + 5.0f)),
-                  static_cast<int>(BottomBarButton::OpenDoc));
+                  static_cast<int>(BottomBarButton::ZoomOut));
     MDVN_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 4.0f + 5.0f)),
-                  static_cast<int>(BottomBarButton::Outline));
+                  static_cast<int>(BottomBarButton::ZoomIn));
 }
 
 // 边界:恰好落在两段交界处(第 2/3 段边界)算作右边那一段(下标用

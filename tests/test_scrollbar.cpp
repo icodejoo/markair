@@ -11,6 +11,7 @@ using mdvn::IsPointInScrollbarThumb;
 using mdvn::kScrollbarMinThumbHeightDip;
 using mdvn::ScrollbarMetrics;
 using mdvn::ScrollYAfterThumbDrag;
+using mdvn::ScrollYAfterTrackClick;
 
 namespace {
 bool NearlyEqual(float a, float b, float eps = 0.01f) { return std::fabs(a - b) < eps; }
@@ -83,4 +84,39 @@ MDVN_TEST(ScrollbarColumnHoverIgnoresY) {
     MDVN_CHECK(IsPointInScrollbarColumn(800.0f, 794.0f));   // 轨道范围内
     MDVN_CHECK(!IsPointInScrollbarColumn(800.0f, 400.0f));  // 远离轨道
     MDVN_CHECK(!IsPointInScrollbarColumn(800.0f, 799.9f));  // 超出右边距外
+}
+
+// Track click: clicking at top/middle/bottom centers thumb at click position and maps to content scroll range.
+//
+// 点击轨道:点击顶部/中部/底部时,滑块中心对齐点击位置并正确映射到内容滚动范围。
+MDVN_TEST(ScrollbarTrackClickTopCenterBottom) {
+    float viewportHeight = 600.0f;
+    float totalHeight = 2000.0f;
+    float maxScrollY = totalHeight - viewportHeight;  // 1400.0f
+
+    // Click at top (0.0f): thumb goes to top, scroll offset should be 0.
+    //
+    // 点击顶部(0.0f):滑块到顶,滚动偏移应为 0。
+    float yTop = ScrollYAfterTrackClick(0.0f, viewportHeight, totalHeight);
+    MDVN_CHECK(NearlyEqual(yTop, 0.0f));
+
+    // Click at bottom (viewportHeight): thumb goes to bottom, scroll offset should be maxScrollY.
+    //
+    // 点击底部(viewportHeight):滑块到底,滚动偏移应为 maxScrollY。
+    float yBottom = ScrollYAfterTrackClick(viewportHeight, viewportHeight, totalHeight);
+    MDVN_CHECK(NearlyEqual(yBottom, maxScrollY, 0.5f));
+
+    // Click at center (viewportHeight * 0.5f): thumb centered, scroll offset should be maxScrollY * 0.5f.
+    //
+    // 点击正中央(viewportHeight * 0.5f):滑块居中,滚动偏移应为 maxScrollY * 0.5f。
+    float yCenter = ScrollYAfterTrackClick(viewportHeight * 0.5f, viewportHeight, totalHeight);
+    MDVN_CHECK(NearlyEqual(yCenter, maxScrollY * 0.5f, 0.5f));
+}
+
+// Track click is no-op when content fits within viewport.
+//
+// 内容不超过一屏时点击轨道不产生任何滚动。
+MDVN_TEST(ScrollbarTrackClickNoopWhenContentFitsViewport) {
+    float y = ScrollYAfterTrackClick(200.0f, 600.0f, 400.0f);
+    MDVN_CHECK(NearlyEqual(y, 0.0f));
 }

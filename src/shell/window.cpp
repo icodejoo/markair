@@ -51,6 +51,13 @@ constexpr UINT_PTR kBenchLoopTimerId = 4;
 // 真正跑完一轮消息循环,不与自身重叠。
 constexpr UINT kBenchLoopIntervalMs = 30;
 
+// Outline drawer slide & mask fade animation timer ID and parameters.
+//
+// 大纲侧栏滑动与蒙层淡入淡出动画的定时器 ID 及参数。
+constexpr UINT_PTR kOutlineAnimTimerId = 5;
+constexpr UINT kOutlineAnimIntervalMs = 16;       // ~60 FPS
+constexpr float kOutlineAnimDurationMs = 180.0f;  // 180 ms transition / 180毫秒过渡时长
+
 // T56:枚举显示器/已有本程序窗口时的固定容量上限,均放在栈上,不做动态分配。
 // 显示器 16 个、已有窗口 32 个,远超真实使用场景(验收要求"连开 5 个窗口"),
 // 超出部分静默截断,不影响正确性,只是层叠/越界判定少看几个显示器/窗口。
@@ -145,14 +152,29 @@ void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
     }
 }
 
-// T47/T48:主题三态循环的核心动作,抽成一个函数供 Ctrl+Shift+T 复用——只改
-// 指针 + 触发重绘,不做任何重排/重建。
+/**
+ * Cycle between Light and Dark theme, apply renderer palette and titlebar, and persist immediately.
+ *
+ * 切换浅色与深色主题,更新渲染器调色板与标题栏样式,并触发立即持久化。
+ *
+ * @param hwnd Window handle.
+ *
+ *   主窗口句柄。
+ *
+ * @param state Window state containing renderer, theme setting, and callbacks.
+ *
+ *   包含渲染器、主题设置与回调函数的窗口状态指针。
+ */
 void CycleTheme(HWND hwnd, WindowState* state) {
+    if (!state || !state->renderer) return;
     state->themeSetting = NextThemeSetting(state->themeSetting);
-    bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
+    bool isDark = ResolveEffectiveTheme(state->themeSetting);
     state->renderer->SetPalette(isDark ? &kDarkPalette : &kLightPalette);
     ApplyTitleBarTheme(hwnd, isDark);
     InvalidateRect(hwnd, nullptr, FALSE);
+    if (state->onWindowGeometryChanged) {
+        state->onWindowGeometryChanged(state->callbackUserData);
+    }
 }
 
 // 取窗口当前的 DPI 缩放系数(实际 DPI / 96);系统不支持按窗口查 DPI 时回退 1.0。
@@ -339,43 +361,87 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
     return true;
 }
 
-// T63:侧栏可视高度(DIP),与正文视口高度取同一个"可用视口高度"——两者
-// 都是"客户区高度减去上下内边距",侧栏本身不额外留白。
-float OutlinePanelViewportHeightOf(HWND hwnd) { return UsableViewportHeightOf(hwnd); }
+// T63:侧栏可视高度(DIP),侧栏纵向铺满整个客户区。
+float OutlinePanelViewportHeightOf(HWND hwnd) { return ClientHeightDip(hwnd); }
 
 // 前向声明:`ToggleOutlinePanel` 打开侧栏时要立即调一次(见下方定义与调用点注释)。
 void RecomputeOutlineHighlight(HWND hwnd, WindowState* state);
 
-// T63:`Ctrl+\` 的核心动作——严格的"指针为空即不存在"实现:
-//   - 打开:在 outlineArena 上(惰性 Init,幂等)placement-new 构造一个
-//     OutlinePanel,提取一次大纲,`state->outline` 从 nullptr 变为该实例。
-//   - 关闭:直接把指针置空(成员全是 POD/Arena 绑定容器,无需析构),杀掉
-//     去抖定时器。
-// 两个分支都只做"构造/置空 + 一次全窗重绘",不触发任何 Relayout、不释放任何
-// IDWriteTextLayout——与 T49 主题切换"纯重绘"同一口径。
+// T63:`Ctrl+\` 的核心动作——抽屉式滑动与蒙层淡入淡出动画:
+//   - 打开:在 outlineArena 上(惰性 Init,幂等)就地构造 OutlinePanel 提取大纲,
+//     启动 Opening 动画定时器;若在收起动画中途触发,则从当前进度平滑反向展开。
+//   - 关闭:启动 Closing 动画定时器,侧栏向左滑出且蒙层淡出;动画完成时才置空
+//     state->outline 并 Reset Arena,维持"关闭时开销为 0"的设计。
 void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
     if (!state || !state->outlineArena) return;
 
-    if (state->outline) {
-        state->outline = nullptr;
-        KillTimer(hwnd, kOutlineHighlightTimerId);
+    // Bench loop stress probe (T78): bypass animation for 30ms rapid automated loop.
+    //
+    // 内存泄漏自动化基准循环测试 (T78): 绕过动画以适配 30ms 极短节拍。
+    if (state->benchLoopKind != 0) {
+        if (state->outline) {
+            state->outline = nullptr;
+            state->outlineAnimState = OutlineAnimState::Closed;
+            state->outlineAnimProgress = 0.0f;
+            if (state->outlineArena) state->outlineArena->Reset();
+            KillTimer(hwnd, kOutlineHighlightTimerId);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
+        state->outlineArena->Init(4 * 1024 * 1024);
+        state->outlineArena->Reset();
+        void* mem = state->outlineArena->Alloc(sizeof(OutlinePanel), alignof(OutlinePanel));
+        if (!mem) return;
+        OutlinePanel* panel = new (mem) OutlinePanel(state->outlineArena);
+        if (state->doc) panel->Rebuild(*state->doc);
+        state->outline = panel;
+        state->outlineAnimState = OutlineAnimState::Open;
+        state->outlineAnimProgress = 1.0f;
+        RecomputeOutlineHighlight(hwnd, state);
         InvalidateRect(hwnd, nullptr, FALSE);
         return;
     }
 
-    // Init 幂等(已初始化过时静默返回 false,不重复预留地址空间);Reset 把
-    // 上一次打开时用过的内容整体丢弃,避免反复开关侧栏时 Arena 无限增长。
-    state->outlineArena->Init(4 * 1024 * 1024);
-    state->outlineArena->Reset();
-    void* mem = state->outlineArena->Alloc(sizeof(OutlinePanel), alignof(OutlinePanel));
-    if (!mem) return;  // Arena 耗尽(几乎不可能:4MB 对大纲条目数组绰绰有余),静默放弃
-    OutlinePanel* panel = new (mem) OutlinePanel(state->outlineArena);
-    if (state->doc) panel->Rebuild(*state->doc);
-    state->outline = panel;
-    // 立即算一次当前阅读位置高亮:以前这一步靠"打开侧栏后随便滚一下正文"
-    // 顺带触发(SetScrollY 里的去抖定时器),现在正文在侧栏打开时已经不可滚动
-    // (蒙层不可穿透),必须在这里主动算一次,否则高亮永远不会出现。
-    RecomputeOutlineHighlight(hwnd, state);
+    if (state->outlineAnimState == OutlineAnimState::Open ||
+        state->outlineAnimState == OutlineAnimState::Opening) {
+        // Start closing animation (smooth reversal if mid-flight).
+        //
+        // 启动收起动画 (支持动画进行中平滑反向收起)。
+        state->outlineAnimState = OutlineAnimState::Closing;
+        state->outlineAnimStartTick = GetTickCount64();
+        state->outlineAnimStartProgress = state->outlineAnimProgress;
+        KillTimer(hwnd, kOutlineHighlightTimerId);
+        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    // Currently Closed or Closing -> Start opening animation.
+    //
+    // 当前处于关闭或正在收起状态 -> 启动展开动画。
+    if (state->outlineAnimState == OutlineAnimState::Closed) {
+        // Init 幂等(已初始化过时静默返回 false,不重复预留地址空间);Reset 把
+        // 上一次打开时用过的内容整体丢弃,避免反复开关侧栏时 Arena 无限增长。
+        state->outlineArena->Init(4 * 1024 * 1024);
+        state->outlineArena->Reset();
+        void* mem = state->outlineArena->Alloc(sizeof(OutlinePanel), alignof(OutlinePanel));
+        if (!mem) return;  // Arena 耗尽(4MB 极充裕),静默放弃
+        OutlinePanel* panel = new (mem) OutlinePanel(state->outlineArena);
+        if (state->doc) panel->Rebuild(*state->doc);
+        state->outline = panel;
+        RecomputeOutlineHighlight(hwnd, state);
+        state->outlineAnimStartProgress = 0.0f;
+        state->outlineAnimProgress = 0.0f;
+    } else {
+        // Reversing from Closing mid-flight.
+        //
+        // 在收起中途平滑反向展开。
+        state->outlineAnimStartProgress = state->outlineAnimProgress;
+    }
+
+    state->outlineAnimState = OutlineAnimState::Opening;
+    state->outlineAnimStartTick = GetTickCount64();
+    SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -945,12 +1011,14 @@ void PaintOnce(HWND hwnd, WindowState* state) {
             overlay.outlineCurrentItem = state->outline->CurrentItem();
             overlay.outlineScrollY = state->outline->ScrollY();
             overlay.outlinePanelWidthDip = state->outlinePanelWidthDip;
+            overlay.outlineAnimProgress = state->outlineAnimProgress;
             // 悬浮或正在拖动都算 Active(见 theme.h 的 Idle/Active 两档透明度)。
             overlay.outlineScrollbarActive =
                 state->outlineScrollbarHover ||
                 state->scrollbarDragTarget == ScrollbarDragTarget::Outline;
         } else {
             overlay.outlineCurrentItem = kInvalidIndex;
+            overlay.outlineAnimProgress = 0.0f;
         }
         overlayPtr = &overlay;
     }
@@ -1127,17 +1195,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return 0;
 
     case WM_SETTINGCHANGE: {
-        // T47:系统深浅色切换时,Explorer 广播 WM_SETTINGCHANGE 并把 lParam
-        // 指向字符串 "ImmersiveColorSet"(其余系统设置变化也走这个消息,
-        // 用字符串内容筛掉不相关的那些)。重新探测系统值缓存起来;只有当前
-        // 偏好是 System 时才据此改变实际显示的调色板,否则只更新缓存不重绘。
+        // System light/dark setting changed broadcast by Explorer ("ImmersiveColorSet").
+        // Theme only has Light and Dark now; system theme is only read once at software
+        // initialization. Runtime OS theme change does not alter app palette.
+        //
+        // Explorer 广播的系统深浅色切换消息("ImmersiveColorSet")。
+        // 当前主题仅有亮色和暗色,系统色仅在软件初始化时读取一次,运行期系统变色不再联动改变程序主题。
         const wchar_t* settingName = reinterpret_cast<const wchar_t*>(lparam);
         if (settingName && wcscmp(settingName, L"ImmersiveColorSet") == 0 && state) {
             state->systemIsDark = DetectSystemIsDark();
-            if (state->themeSetting == ThemeSetting::System && state->renderer) {
-                state->renderer->SetPalette(state->systemIsDark ? &kDarkPalette : &kLightPalette);
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
         }
         return 0;
     }
@@ -1159,9 +1225,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // T63b:大纲侧栏右边缘拖拽调宽度的抓手——优先级最高(高于滚动条/条目
-        // 点击),因为抓手横跨侧栏/蒙层边界,不这样处理会被两边的点击逻辑抢走。
-        if (state && state->outline) {
+        // T63b:大纲侧栏右边缘拖拽调宽度的抓手——仅在侧栏完全展开时允许。
+        if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open) {
             float scale = DipScaleOf(hwnd);
             if (IsPointInOutlinePanelResizeHandle(GET_X_LPARAM(lparam), scale,
                                                   state->outlinePanelWidthDip)) {
@@ -1182,7 +1247,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
 
-            if (state->outline &&
+            if (state->outline && state->outlineAnimState == OutlineAnimState::Open &&
                 IsPointInOutlinePanelRect(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), scale,
                                           state->outlinePanelWidthDip, ClientHeightDip(hwnd))) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
@@ -1195,9 +1260,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     state->scrollbarDragStartScrollY = state->outline->ScrollY();
                     SetCapture(hwnd);
                     return 0;
+                } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
+                           IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX)) {
+                    // Click on the outline scrollbar track: jump and initiate dragging.
+                    //
+                    // 点击大纲侧栏滚动条轨道:跳转到对应位置并直接进入拖动状态。
+                    float newY = ScrollYAfterTrackClick(dipY, viewportHeight, contentHeight);
+                    state->outline->SetScrollY(newY, viewportHeight);
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Outline;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = newY;
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
                 }
-            } else if (!state->outline && state->layout) {
-                float viewportHeight = UsableViewportHeightOf(hwnd);
+            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) && state->layout) {
+                float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
                                                           state->layout->TotalHeight(), state->scrollY);
@@ -1207,19 +1285,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     state->scrollbarDragStartScrollY = state->scrollY;
                     SetCapture(hwnd);
                     return 0;
+                } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
+                           IsPointInScrollbarColumn(viewportWidth, dipX)) {
+                    // Click on the main scrollbar track: jump and initiate dragging.
+                    //
+                    // 点击正文滚动条轨道:跳转到对应位置并直接进入拖动状态。
+                    float newY = ScrollYAfterTrackClick(dipY, viewportHeight, state->layout->TotalHeight());
+                    SetScrollY(hwnd, state, newY);
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Main;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = newY;
+                    SetCapture(hwnd);
+                    return 0;
                 }
             }
         }
 
-        // T64:大纲侧栏区域与正文互不干扰 —— 侧栏打开且点击落在侧栏区域内时,
-        // 短路掉正文的命中测试,不让下面的链接/图片/复制按钮命中再跑一遍,
-        // 否则会出现"点侧栏结果打开了底下的链接"。
-        if (state && state->outline) {
-            if (IsPointInOutlinePanel(GET_X_LPARAM(lparam), DipScaleOf(hwnd),
-                                      state->outlinePanelWidthDip)) {
-                OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
-            } else if (IsPointInOutlineOverlayMask(GET_X_LPARAM(lparam), DipScaleOf(hwnd),
-                                                    state->outlinePanelWidthDip)) {
+        // T64:大纲侧栏区域与正文互不干扰 —— 侧栏打开或正在动画时,
+        // 短路掉正文的命中测试,不让下面的链接/图片/复制按钮命中再跑一遍。
+        if (state && (state->outline || state->outlineAnimState != OutlineAnimState::Closed)) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float visibleWidth = state->outlinePanelWidthDip * state->outlineAnimProgress;
+            if (dipX < visibleWidth) {
+                if (state->outlineAnimState == OutlineAnimState::Open) {
+                    OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
+                }
+            } else {
                 // 点击蒙层区域(侧栏之外的正文区域):关闭侧栏,同 Ctrl+\。
                 ToggleOutlinePanel(hwnd, state);
             }
@@ -1289,7 +1381,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             float dragDelta = dipY - state->scrollbarDragStartMouseYDip;
 
             if (state->scrollbarDragTarget == ScrollbarDragTarget::Main && state->layout) {
-                float viewportHeight = UsableViewportHeightOf(hwnd);
+                float viewportHeight = ViewportHeightOf(hwnd);
                 float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
                                                    viewportHeight, state->layout->TotalHeight());
                 SetScrollY(hwnd, state, newY);
@@ -1341,12 +1433,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
             bool newOutlineHover = false;
             bool newMainHover = false;
-            if (state->outline) {
+            if (state->outline && state->outlineAnimState == OutlineAnimState::Open) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
                 newOutlineHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                    IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX);
-            } else if (state->layout) {
-                float viewportHeight = UsableViewportHeightOf(hwnd);
+            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) && state->layout) {
+                float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                 IsPointInScrollbarColumn(viewportWidth, dipX);
@@ -1442,6 +1534,41 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             RecomputeOutlineHighlight(hwnd, state);
             return 0;
         }
+        // Outline drawer slide & mask fade animation timer tick (~60 FPS).
+        //
+        // 大纲侧栏滑动与蒙层淡入淡出动画节拍 (~60 FPS)。
+        if (wparam == kOutlineAnimTimerId) {
+            if (!state) return 0;
+            ULONGLONG now = GetTickCount64();
+            float elapsed = static_cast<float>(now - state->outlineAnimStartTick);
+            float t = elapsed / kOutlineAnimDurationMs;
+            if (t > 1.0f) t = 1.0f;
+            float easeT = EaseOutCubic(t);
+
+            if (state->outlineAnimState == OutlineAnimState::Opening) {
+                state->outlineAnimProgress =
+                    state->outlineAnimStartProgress + (1.0f - state->outlineAnimStartProgress) * easeT;
+                if (t >= 1.0f || state->outlineAnimProgress >= 1.0f) {
+                    state->outlineAnimProgress = 1.0f;
+                    state->outlineAnimState = OutlineAnimState::Open;
+                    KillTimer(hwnd, kOutlineAnimTimerId);
+                }
+            } else if (state->outlineAnimState == OutlineAnimState::Closing) {
+                state->outlineAnimProgress =
+                    state->outlineAnimStartProgress * (1.0f - easeT);
+                if (t >= 1.0f || state->outlineAnimProgress <= 0.0001f) {
+                    state->outlineAnimProgress = 0.0f;
+                    state->outlineAnimState = OutlineAnimState::Closed;
+                    state->outline = nullptr;
+                    if (state->outlineArena) {
+                        state->outlineArena->Reset();
+                    }
+                    KillTimer(hwnd, kOutlineAnimTimerId);
+                }
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         // T78:内存泄漏排查探针的循环节拍——每次到点执行一次对应动作,
         // 复用与真实快捷键完全相同的代码路径(不是重新实现一遍语义)。
         if (wparam == kBenchLoopTimerId && state && state->benchLoopKind != 0) {
@@ -1486,7 +1613,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
             return TRUE;
         }
-        if (state && state->outline && LOWORD(lparam) == HTCLIENT) {
+        if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open &&
+            LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt) &&
                 IsPointInOutlinePanelResizeHandle(pt.x, DipScaleOf(hwnd),
@@ -1497,7 +1625,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标;
         // T45 的代码块复制按钮同理(它就是个按钮,手型光标是最符合直觉的提示)。
-        if (state && state->layout && LOWORD(lparam) == HTCLIENT) {
+        if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
+            LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
                 if (ShouldUseHandCursor(HitTestAtClientPoint(hwnd, state, pt.x, pt.y))) {
@@ -1536,7 +1665,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         // 大纲侧栏打开且鼠标落在其区域内时,滚轮滚动侧栏自身,不滚正文——
         // WM_MOUSEWHEEL 携带的是屏幕坐标,先 ScreenToClient 换算成客户区坐标。
-        if (state && state->outline) {
+        if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open) {
             POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
             if (ScreenToClient(hwnd, &pt) &&
                 IsPointInOutlinePanelRect(pt.x, pt.y, DipScaleOf(hwnd), state->outlinePanelWidthDip,
@@ -1562,7 +1691,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // 大纲侧栏打开时,正文被半透明蒙层盖住,不接受滚轮——上面的分支已经
         // 处理了"滚在侧栏自身范围内"的情况,走到这里说明鼠标落在蒙层区域,
         // 直接忽略,不能穿透蒙层滚动看不见的正文。
-        if (state && state->layout && !state->outline) {
+        if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed)) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
                                        state->layout->TotalHeight(), UsableViewportHeightOf(hwnd));
             SetScrollY(hwnd, state, newY);
@@ -1667,8 +1796,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_DESTROY:
         // T45:窗口销毁前把可能还在跑的一次性定时器收掉。
         KillTimer(hwnd, kCopyFeedbackTimerId);
-        // T63:同理,收掉大纲高亮的去抖定时器。
+        // T63:同理,收掉大纲高亮的去抖定时器与滑动动画定时器。
         KillTimer(hwnd, kOutlineHighlightTimerId);
+        KillTimer(hwnd, kOutlineAnimTimerId);
         // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
         // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
         KillTimer(hwnd, kWindowGeometryTimerId);
@@ -1761,6 +1891,10 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // T63:显式确认默认关闭——调用方应已经把这个字段填成 nullptr,这里再赋
     // 一次是防御性写法(与其余"由调用方填好"的字段一致,不额外分配任何东西)。
     state->outline = nullptr;
+    state->outlineAnimState = OutlineAnimState::Closed;
+    state->outlineAnimProgress = 0.0f;
+    state->outlineAnimStartTick = 0;
+    state->outlineAnimStartProgress = 0.0f;
 
     // T56:winW/winH <= 0 表示从未存过窗口矩形(首次启动),走原来的默认
     // 位置/尺寸;否则按上次记住的矩形恢复,先做多显示器越界钳制,再做

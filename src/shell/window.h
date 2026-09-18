@@ -224,6 +224,26 @@ struct WindowState {
     float outlinePanelResizeStartMouseXDip;  // 拖拽起始时的鼠标横坐标(DIP)
     float outlinePanelResizeStartWidthDip;   // 拖拽起始时的侧栏宽度(DIP)
 
+    // Outline drawer slide & mask fade animation state machine.
+    //
+    // 大纲抽屉式侧栏滑动与蒙层淡入淡出动画状态机。
+    OutlineAnimState outlineAnimState;
+
+    // Current normalized animation progress in [0.0f, 1.0f] (0.0f = closed, 1.0f = fully open).
+    //
+    // 当前归一化动画进度，取值范围 [0.0f, 1.0f] (0.0f 表示完全收起，1.0f 表示完全展开)。
+    float outlineAnimProgress;
+
+    // Millisecond timestamp when the current animation phase started (via GetTickCount64).
+    //
+    // 当前动画阶段开始时的毫秒时间戳 (通过 GetTickCount64 获取)。
+    ULONGLONG outlineAnimStartTick;
+
+    // Animation progress value when starting current transition (allows smooth reversal mid-flight).
+    //
+    // 动画本次过渡开始时的初始进度值 (支持动画进行中反向切换时的平滑过渡)。
+    float outlineAnimStartProgress;
+
     // 底部栏右侧状态区(2026-09-18 新增):与 `currentDocumentPath` 同步维护
     // 的当前文档字节数,换文档成功的每处都要一并更新,画进状态区的
     // "路径 (大小)"文字。未打开文件时保持聚合初始化留下的 0。
