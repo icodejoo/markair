@@ -60,6 +60,8 @@ struct Palette {
     D2D1_COLOR_F findCurrentHighlight;        // 查找当前命中高亮底色
     D2D1_COLOR_F overlayBarBackground;        // 浮出条(查找条/大纲侧栏共用)底色
     D2D1_COLOR_F overlayBarText;              // 浮出条文字色
+    D2D1_COLOR_F outlineHighlightBackground;  // T63:大纲侧栏当前阅读位置条目底色
+    D2D1_COLOR_F outlineHighlightText;        // T63:大纲侧栏当前阅读位置条目前景色
     // T53 代码语法着色:与 hl/lexer.h 的 TokenType 七类逐一对应,只在
     // 语言被识别(languageId != kLanguageNone)时才会用到。
     D2D1_COLOR_F hlKeyword;                   // 关键字
@@ -99,6 +101,8 @@ inline constexpr Palette kLightPalette{
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* outlineHighlightBackground */ MakeColor(0x0366D6u, 0.16f),
+    /* outlineHighlightText       */ MakeColor(0x0366D6u),
     /* hlKeyword                  */ MakeColor(0xD73A49u),
     /* hlString                   */ MakeColor(0x032F62u),
     /* hlNumber                   */ MakeColor(0x005CC5u),
@@ -145,6 +149,8 @@ inline constexpr Palette kDarkPalette{
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
+    /* outlineHighlightBackground */ MakeColor(0x58A6FFu, 0.18f),
+    /* outlineHighlightText       */ MakeColor(0x58A6FFu),
     /* hlKeyword                  */ MakeColor(0xFF7B72u),
     /* hlString                   */ MakeColor(0xA5D6FFu),
     /* hlNumber                   */ MakeColor(0x79C0FFu),

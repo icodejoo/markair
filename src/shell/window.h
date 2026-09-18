@@ -24,6 +24,7 @@
 #include "find.h"
 #include "hit_test.h"
 #include "navigate.h"
+#include "outline_panel.h"
 #include "scroll.h"
 #include "theme_state.h"
 #include "window_state.h"
@@ -57,6 +58,16 @@ struct WindowState {
     // 为空时对应功能静默失效(不崩溃),其余功能不受影响。
     FindSession* find;                    // Ctrl+F 查找会话(T37/T38)
     const wchar_t* statusMessage;         // 窗口内提示(如"文件不存在"),不弹 MessageBox
+
+    // T63 大纲侧栏(`Ctrl+\` 切换,默认关闭)。"指针为空即不存在":为空表示
+    // 侧栏关闭,此时不会有任何 ExtractOutline/IDWriteTextLayout/Arena 分配
+    // 发生;由 window.cpp 在切换打开时用 `outlineArena` 现场构造。
+    OutlinePanel* outline;
+    // 供 outline 对象自身与其内部 Vec<OutlineItem> 分配的 Arena,由调用方
+    // (main.cpp)持有并传入指针;`Init` 延迟到首次打开侧栏才调用,默认关闭
+    // 状态下永远不会被 Init,保持"不分配任何 Arena"的验收口径。可为空表示
+    // 不支持大纲侧栏(Ctrl+\ 静默无效)。
+    Arena* outlineArena;
 
     /**
      * T36 ②:在当前窗口内替换文档(裁决 #6,不新开进程)。由 app 层实现——

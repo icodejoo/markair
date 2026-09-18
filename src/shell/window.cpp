@@ -1,5 +1,6 @@
 #include "window.h"
 
+#include <new>         // placement new(T63 侧栏在 outlineArena 上就地构造 OutlinePanel)
 #include <dwmapi.h>    // DwmSetWindowAttribute(T48 标题栏深浅色,/DELAYLOAD)
 #include <uxtheme.h>   // SetWindowTheme(原生滚动条深浅色,/DELAYLOAD)
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
@@ -36,6 +37,11 @@ constexpr UINT kCopyFeedbackDurationMs = 2000;
 // (裁决 #7 的通用要求,窗口矩形是它列举的三类触发点之一)。
 constexpr UINT_PTR kWindowGeometryTimerId = 2;
 constexpr UINT kWindowGeometryDebounceMs = 500;
+
+// T63:大纲侧栏"当前阅读位置"高亮的去抖定时器 ID。时长常量
+// `kOutlineHighlightDebounceMs`(150ms)定义在 outline_panel.h,滚动/键盘
+// 滚动路径只重置这一个定时器,到点才做一次二分 + 局部重绘(裁决 #6)。
+constexpr UINT_PTR kOutlineHighlightTimerId = 3;
 
 // T56:枚举显示器/已有本程序窗口时的固定容量上限,均放在栈上,不做动态分配。
 // 显示器 16 个、已有窗口 32 个,远超真实使用场景(验收要求"连开 5 个窗口"),
@@ -348,6 +354,76 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
     return true;
 }
 
+// T63:侧栏可视高度(DIP),与正文视口高度取同一个"可用视口高度"——两者
+// 都是"客户区高度减去上下内边距",侧栏本身不额外留白。
+float OutlinePanelViewportHeightOf(HWND hwnd) { return UsableViewportHeightOf(hwnd); }
+
+// T63:`Ctrl+\` 的核心动作——严格的"指针为空即不存在"实现:
+//   - 打开:在 outlineArena 上(惰性 Init,幂等)placement-new 构造一个
+//     OutlinePanel,提取一次大纲,`state->outline` 从 nullptr 变为该实例。
+//   - 关闭:直接把指针置空(成员全是 POD/Arena 绑定容器,无需析构),杀掉
+//     去抖定时器。
+// 两个分支都只做"构造/置空 + 一次全窗重绘",不触发任何 Relayout、不释放任何
+// IDWriteTextLayout——与 T49 主题切换"纯重绘"同一口径。
+void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
+    if (!state || !state->outlineArena) return;
+
+    if (state->outline) {
+        state->outline = nullptr;
+        KillTimer(hwnd, kOutlineHighlightTimerId);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    // Init 幂等(已初始化过时静默返回 false,不重复预留地址空间);Reset 把
+    // 上一次打开时用过的内容整体丢弃,避免反复开关侧栏时 Arena 无限增长。
+    state->outlineArena->Init(4 * 1024 * 1024);
+    state->outlineArena->Reset();
+    void* mem = state->outlineArena->Alloc(sizeof(OutlinePanel), alignof(OutlinePanel));
+    if (!mem) return;  // Arena 耗尽(几乎不可能:4MB 对大纲条目数组绰绰有余),静默放弃
+    OutlinePanel* panel = new (mem) OutlinePanel(state->outlineArena);
+    if (state->doc) panel->Rebuild(*state->doc);
+    state->outline = panel;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// T63:去抖定时器到点后的高亮重算——在 T62 已有的、按块下标天然有序的标题
+// 数组上二分查找当前应高亮的条目,变化时只 InvalidateRect 侧栏矩形(局部
+// 重绘,不整窗失效)。
+void RecomputeOutlineHighlight(HWND hwnd, WindowState* state) {
+    if (!state || !state->outline || !state->layout) return;
+
+    OutlinePanel* panel = state->outline;
+    u32 count = panel->ItemCount();
+    if (count == 0) return;
+
+    // 按块下标取每条标题对应块的顶部 y(DIP),喂给纯函数二分查找。给一个
+    // 够用的栈上缓冲(300 条是验收给的量级,侧栏本来也只是展示大纲,现实中
+    // 不会有上万级标题的文档;超出部分只是不参与本次高亮计算,不影响其余
+    // 条目正常显示,不崩溃)。
+    constexpr u32 kMaxTopsOnStack = 4096;
+    float tops[kMaxTopsOnStack];
+    u32 n = (count < kMaxTopsOnStack) ? count : kMaxTopsOnStack;
+    for (u32 i = 0; i < n; ++i) {
+        u32 blockIdx = panel->Item(i).blockIdx;
+        tops[i] = (blockIdx < state->layout->BlockCount()) ? state->layout->Geometry(blockIdx).top
+                                                            : 0.0f;
+    }
+
+    u32 newCurrent = FindCurrentOutlineItem(tops, n, state->scrollY);
+    if (newCurrent == panel->CurrentItem()) return;  // 没变化,不重绘
+
+    panel->SetCurrentItem(newCurrent);
+
+    // 局部重绘:只失效侧栏那一块矩形,不整窗失效。侧栏固定浮在客户区左上角,
+    // 宽度按 DPI 缩放。
+    float scale = DipScaleOf(hwnd);
+    RECT rc{0, 0, static_cast<int>(kOutlinePanelWidthDip * scale + 0.5f),
+            static_cast<int>((OutlinePanelViewportHeightOf(hwnd) + 2.0f * kContentPaddingDip) *
+                             scale + 0.5f)};
+    InvalidateRect(hwnd, &rc, FALSE);
+}
+
 // 滚动偏移变化后的统一收尾:任何触发滚动的路径(滚轮/键盘/查找跳转/换文档/
 // 图片解码重排/原生滚动条拖动)都应该走这里,保证:
 //   ① scrollY 按当前视口/文档高度重新夹取一次(调用方传入的值未必已经夹过);
@@ -377,6 +453,12 @@ void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = f
         RelayoutForImagesIfNeeded(hwnd, state);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
+
+    // T63:滚动路径里唯一允许出现的侧栏相关调用——只重置去抖定时器,不做任何
+    // 二分查找/重绘(裁决 #6 的"滚动过程中零额外开销"就是靠这一行保证的)。
+    if (state->outline) {
+        SetTimer(hwnd, kOutlineHighlightTimerId, kOutlineHighlightDebounceMs, nullptr);
+    }
 }
 
 // T35:把一次鼠标事件翻译成命中结果(链接 / 图片 / 什么都没命中)。
@@ -651,7 +733,7 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     const ShellOverlay* overlayPtr = nullptr;
     bool hasCopyButtonState =
         state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
-    if (state->find || state->statusMessage || hasCopyButtonState) {
+    if (state->find || state->statusMessage || hasCopyButtonState || state->outline) {
         // T45:复制按钮的悬浮/已复制态同样通过叠加层视图交给渲染层,渲染层
         // 因此不需要认识"外壳层状态"这个概念(与查找高亮同一条通路)。
         overlay.copyButtonHoverBlock = state->copyButtonHover;
@@ -668,6 +750,18 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         }
         overlay.doc = state->doc;
         overlay.statusMessage = state->statusMessage;
+        // T63:大纲侧栏关闭时(state->outline == nullptr)以下字段保持零初始化,
+        // 渲染层据此判断"不画侧栏",零额外开销;打开时把条目数组/高亮下标/
+        // 自身滚动偏移原样转交渲染层,渲染层只读,不拥有。
+        if (state->outline) {
+            Span<const OutlineItem> items = state->outline->Items();
+            overlay.outlineItems = items.data;
+            overlay.outlineItemCount = items.len;
+            overlay.outlineCurrentItem = state->outline->CurrentItem();
+            overlay.outlineScrollY = state->outline->ScrollY();
+        } else {
+            overlay.outlineCurrentItem = kInvalidIndex;
+        }
         overlayPtr = &overlay;
     }
     // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
@@ -874,6 +968,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             return 0;
         }
+        // T63:大纲侧栏阅读位置高亮的去抖到点 -> 杀掉一次性定时器、做一次
+        // 二分查找 + (变化时)局部重绘。
+        if (wparam == kOutlineHighlightTimerId) {
+            KillTimer(hwnd, kOutlineHighlightTimerId);
+            RecomputeOutlineHighlight(hwnd, state);
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
@@ -995,6 +1096,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             ApplyZoomChange(hwnd, state);
             return 0;
         }
+        // T63:Ctrl+\ 切换大纲侧栏,默认关闭。
+        if (ctrlDown && wparam == VK_OEM_5 && state) {
+            ToggleOutlinePanel(hwnd, state);
+            return 0;
+        }
         // T47:Ctrl+Shift+T 在 System/Light/Dark 三态间循环,立即按新态重算
         // 生效主题并切调色板——只改指针 + 触发重绘,不做任何重排/重建。
         // T48:标题栏也要跟着热切换,追加一次 DwmSetWindowAttribute 调用;
@@ -1020,6 +1126,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_DESTROY:
         // T45:窗口销毁前把可能还在跑的一次性定时器收掉。
         KillTimer(hwnd, kCopyFeedbackTimerId);
+        // T63:同理,收掉大纲高亮的去抖定时器。
+        KillTimer(hwnd, kOutlineHighlightTimerId);
         // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
         // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
         KillTimer(hwnd, kWindowGeometryTimerId);
@@ -1096,6 +1204,9 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // "第 0 个块的复制按钮处于悬浮/已复制态"。
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
+    // T63:显式确认默认关闭——调用方应已经把这个字段填成 nullptr,这里再赋
+    // 一次是防御性写法(与其余"由调用方填好"的字段一致,不额外分配任何东西)。
+    state->outline = nullptr;
 
     // T56:winW/winH <= 0 表示从未存过窗口矩形(首次启动),走原来的默认
     // 位置/尺寸;否则按上次记住的矩形恢复,先做多显示器越界钳制,再做

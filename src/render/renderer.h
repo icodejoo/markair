@@ -7,8 +7,10 @@
 #include <windows.h>
 
 #include "../assets/image.h"
+#include "../doc/outline.h"
 #include "../doc/search.h"
 #include "../layout/layout.h"
+#include "../util/arena.h"
 #include "theme.h"
 
 namespace mdvn {
@@ -41,6 +43,13 @@ struct ShellOverlay {
     // "第 0 个块的按钮处于该状态"。
     u32 copyButtonHoverBlock;      // 鼠标当前悬浮的复制按钮所属块
     u32 copyButtonCopiedBlock;     // 处于"已复制"反馈态的复制按钮所属块
+
+    // T63 大纲侧栏:全部为空/为 0 时不画侧栏,零额外开销(与侧栏关闭时
+    // window.cpp 根本不构造 OutlinePanel 是同一套"不存在即不画"口径)。
+    const OutlineItem* outlineItems;   // 大纲条目数组(按块下标升序),可为 nullptr
+    u32 outlineItemCount;              // 条目总数
+    u32 outlineCurrentItem;            // 当前高亮条目下标;kInvalidIndex 表示无
+    float outlineScrollY;              // 侧栏自身滚动偏移(DIP)
 };
 
 /**
@@ -370,6 +379,14 @@ private:
                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                          float topOffset);
 
+    // 画大纲侧栏(T63):悬浮在正文左侧上方的一条固定宽度面板,与
+    // DrawOverlayBar 同一套"浮出条"底色/风格,只是画成整块矩形 + 逐行文字。
+    // 只在 overlay_->outlineItems 非空时被调用,不参与任何布局重排。
+    void DrawOutlinePanel(float targetHeight,
+                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                          ID2D1SolidColorBrush* highlightBgBrush,
+                          ID2D1SolidColorBrush* highlightTextBrush);
+
     ID2D1Factory* factory_;              // 不拥有,生命周期由调用方保证
     FontSubsystem* fonts_;                // 不拥有,可为空;供 T28 脚注标签与 T33 占位文案使用
     ImageCache* images_;                  // 不拥有,可为空;T33 按 href 取已解码位图
@@ -377,6 +394,13 @@ private:
     float dpi_;                           // 渲染目标 DPI,0 表示跟随系统默认
     const ShellOverlay* overlay_;         // 仅在一次 RenderFrame 期间有效的叠加层视图,不拥有
     const Palette* palette_;              // 当前调色板(T46),不拥有;默认指向 kLightPalette
+
+    // T63 大纲侧栏标题文本的临时拼接/UTF-16 转换缓冲。惰性 Init——侧栏从未
+    // 打开过(overlay_->outlineItems 始终为空)时永远不会调用 Init,保持
+    // "侧栏关闭时不分配任何 Arena"的口径;一旦打开过,后续帧复用同一块地址
+    // 空间(每帧 DrawOutlinePanel 开头 Reset)。
+    Arena outlineScratch_;
+    bool outlineScratchInited_;
 };
 
 }  // namespace mdvn

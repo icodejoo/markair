@@ -37,6 +37,7 @@ add_executable(mdvn_tests
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
     test_outline.cpp
+    test_outline_panel.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp
@@ -68,6 +69,7 @@ add_executable(mdvn_tests
     ../src/shell/find.cpp
     ../src/shell/clipboard.cpp
     ../src/shell/assoc.cpp
+    ../src/shell/outline_panel.cpp
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。

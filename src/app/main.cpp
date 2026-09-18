@@ -550,11 +550,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::Arena clipboardScratch;
     clipboardScratch.Init(16 * 1024 * 1024);
 
+    // T63:大纲侧栏专用 Arena,刻意**不在这里 Init**——`Init` 只是
+    // `VirtualAlloc` 预留地址空间(见 arena.cpp),但"默认关闭时不分配任何
+    // Arena"这条验收要求的是字面意义上"不调用 Init",因此延迟到用户第一次
+    // 按 `Ctrl+\` 打开侧栏时,由 window.cpp 的 ToggleOutlinePanel 现场调用。
+    mdvn::Arena outlineArena;
+
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
     mdvn::WindowState windowState{
         &fonts, &layout, &doc, &renderer, 0.0f,
         &imageCache, &residency, &remoteLoader, &tempFiles, &imageScratch, documentDirectory,
-        &find, nullptr, &OpenDocumentInPlace,
+        &find, nullptr,
+        // T63:默认关闭("指针为空即不存在"),outlineArena 只是把地址传过去,
+        // 尚未 Init,不产生任何分配。
+        nullptr, &outlineArena,
+        &OpenDocumentInPlace,
         &OnWindowCreatedBenchHook, &OnFirstPresentBenchHook, nullptr, false,
         // T42:只在 --bench 且目标语料是 BENCH-B 时开启"首屏之外强制全量解码"
         // (T44 修复,见 BenchTargetWantsFullDecode 注释);正常运行(双击打开

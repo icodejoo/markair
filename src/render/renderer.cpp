@@ -1,7 +1,10 @@
 #include "renderer.h"
 
+#include <cstring>
+
 #include "../assets/data_uri.h"
 #include "../hl/lexer.h"
+#include "../util/str.h"
 
 namespace mdvn {
 
@@ -105,6 +108,24 @@ constexpr UINT32 kMaxFindHitMetrics = 16;
 // 叠加层条文字的栈上缓冲长度,以及"查找条 + 提示条"同时出现时第二条的下移量。
 constexpr u32 kMaxOverlayBarChars = 256;
 constexpr float kOverlayBarStackStepDip = 34.0f;
+
+// T63 大纲侧栏几何常量。数值必须与 shell/outline_panel.h 里的同名常量保持一致
+// ——render 层不反向 include shell 目录下的头文件(架构约束,单向依赖
+// shell -> render),这里只重复几个纯数字,真正的"唯一权威定义"在 shell 侧,
+// window.cpp 传进来的坐标(outlineScrollY 等)都是按 shell 那份常量算出来的。
+constexpr float kOutlinePanelWidthDip = 220.0f;
+constexpr float kOutlineItemHeightDip = 28.0f;
+constexpr float kOutlineIndentStepDip = 14.0f;
+constexpr float kOutlinePanelPaddingDip = 10.0f;
+constexpr float kOutlineRowFontSizeDip = 13.0f;
+constexpr u32 kMaxOutlineTitleChars = 256;
+
+// 标题级别 -> 缩进量,口径与 mdvn::OutlineItemIndentDip 一致。
+float OutlineRowIndentDip(u8 level) {
+    u8 step = (level >= 1) ? static_cast<u8>(level - 1) : 0;
+    if (step > 5) step = 5;
+    return kOutlineIndentStepDip * static_cast<float>(step);
+}
 
 // 计算一个以 '\0' 结尾的宽字符串的长度(不含结尾符)。
 u32 WideLength(const wchar_t* s) {
@@ -302,7 +323,7 @@ void ImageResidencyManager::ReleaseResident(const ImageBox* boxes, u32 count) {
 // 构造一个未绑定工厂、未创建渲染目标的渲染器。
 Renderer::Renderer()
     : factory_(nullptr), fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
-      overlay_(nullptr), palette_(&kLightPalette) {}
+      overlay_(nullptr), palette_(&kLightPalette), outlineScratchInited_(false) {}
 
 // 析构时释放渲染目标本体;工厂/字体子系统均不归本对象所有,不在此释放。
 Renderer::~Renderer() { ReleaseRenderTarget(); }
@@ -536,6 +557,122 @@ void Renderer::DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLe
                                            top + kOverlayBarPaddingYDip),
                              layout, textBrush);
     layout->Release();
+}
+
+void Renderer::DrawOutlinePanel(float targetHeight,
+                                ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                                ID2D1SolidColorBrush* highlightBgBrush,
+                                ID2D1SolidColorBrush* highlightTextBrush) {
+    if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
+    if (!fonts_ || !overlay_->doc || !bgBrush || !textBrush || !target_) return;
+
+    // 悬浮覆盖:侧栏浮在正文左侧上方,不改变正文视口宽度,几何与主内容布局
+    // 完全无关(不读取任何 BlockGeometry 几何字段),开关侧栏因此是纯重绘。
+    D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, kOutlinePanelWidthDip, targetHeight);
+    target_->FillRectangle(panelRect, bgBrush);
+
+    // 标题原文的拼接/UTF-16 转换缓冲,惰性 Init(见头文件字段注释),每帧开头
+    // 整体 Reset 复用同一块地址空间——这是唯一被本函数使用的 Arena,侧栏从未
+    // 打开过时本函数永远不会被调用,自然也不会走到这里。
+    if (!outlineScratchInited_) outlineScratchInited_ = outlineScratch_.Init(1 * 1024 * 1024);
+    outlineScratch_.Reset();
+
+    for (u32 i = 0; i < overlay_->outlineItemCount; ++i) {
+        const OutlineItem& item = overlay_->outlineItems[i];
+        float rowTop = kOutlineItemHeightDip * static_cast<float>(i) - overlay_->outlineScrollY;
+        if (rowTop + kOutlineItemHeightDip < 0.0f || rowTop > targetHeight) continue;  // 侧栏自身裁剪:只画可见行
+
+        bool highlighted = (i == overlay_->outlineCurrentItem);
+        if (highlighted && highlightBgBrush) {
+            target_->FillRectangle(
+                D2D1::RectF(0.0f, rowTop, kOutlinePanelWidthDip, rowTop + kOutlineItemHeightDip),
+                highlightBgBrush);
+        }
+
+        if (item.blockIdx >= overlay_->doc->blocks.Size()) continue;  // 防御:块下标越界跳过
+        const Block& b = overlay_->doc->blocks[item.blockIdx];
+
+        // 拼接该块全部 inline run 的源字节 -> UTF-16,与 doc/search.cpp 的
+        // BuildBlockText 同一手法(未跨模块复用,量很小,不值得为此破坏
+        // search.cpp 的匿名命名空间封装)。
+        u32 totalBytes = 0;
+        for (u32 k = 0; k < b.inlineCount; ++k) {
+            totalBytes += overlay_->doc->inlines[b.firstInlineIdx + k].textLen;
+        }
+        if (totalBytes == 0) continue;
+        char* byteBuf = static_cast<char*>(outlineScratch_.Alloc(totalBytes, 1));
+        if (!byteBuf) continue;
+        u32 cursor = 0;
+        for (u32 k = 0; k < b.inlineCount; ++k) {
+            const Inline& in = overlay_->doc->inlines[b.firstInlineIdx + k];
+            if (in.textLen == 0) continue;
+            memcpy(byteBuf + cursor, InlineTextBytes(in, *overlay_->doc), in.textLen);
+            cursor += in.textLen;
+        }
+        Utf16Slice wide = Utf8ToUtf16(StrSlice{byteBuf, cursor}, &outlineScratch_);
+        if (wide.len == 0) continue;
+
+        float indent = OutlineRowIndentDip(item.level);
+        float maxTextWidth = kOutlinePanelWidthDip - kOutlinePanelPaddingDip * 2.0f - indent;
+        if (maxTextWidth <= 0.0f) continue;
+
+        // 超长标题截断成省略号:先量整段,放得下就直接画;放不下二分查出
+        // 能塞下的最大前缀长度(与 mdvn::TruncateOutlineTitle 同一口径,
+        // 这里不跨 shell/render 反向 include,直接用 fonts_ 现场量)。
+        u32 useLen = wide.len;
+        if (useLen > kMaxOutlineTitleChars) useLen = kMaxOutlineTitleChars;
+        IDWriteTextLayout* probe =
+            fonts_->CreateTextLayout(wide.data, useLen, FontRole::Body, 8192.0f, 64.0f);
+        if (!probe) continue;
+        probe->SetFontSize(kOutlineRowFontSizeDip, DWRITE_TEXT_RANGE{0, useLen});
+        DWRITE_TEXT_METRICS metrics{};
+        bool fits = SUCCEEDED(probe->GetMetrics(&metrics)) &&
+                    metrics.widthIncludingTrailingWhitespace <= maxTextWidth;
+        probe->Release();
+
+        wchar_t rowBuf[kMaxOutlineTitleChars + 4];
+        u32 rowLen;
+        if (fits) {
+            rowLen = useLen;
+            for (u32 c = 0; c < rowLen; ++c) rowBuf[c] = wide.data[c];
+        } else {
+            u32 lo = 0, hi = useLen;
+            while (lo < hi) {
+                u32 mid = lo + (hi - lo + 1) / 2;
+                IDWriteTextLayout* t =
+                    fonts_->CreateTextLayout(wide.data, mid, FontRole::Body, 8192.0f, 64.0f);
+                bool ok = false;
+                if (t) {
+                    t->SetFontSize(kOutlineRowFontSizeDip, DWRITE_TEXT_RANGE{0, mid});
+                    DWRITE_TEXT_METRICS m{};
+                    if (SUCCEEDED(t->GetMetrics(&m))) {
+                        // "..." 三个字符按当前字号的等宽估算(与整体截断量级相比,
+                        // 这个近似不影响可读性,避免为量一个固定字面量再建一次 layout)。
+                        float ellipsisApprox = kOutlineRowFontSizeDip * 1.8f;
+                        ok = (m.widthIncludingTrailingWhitespace + ellipsisApprox) <= maxTextWidth;
+                    }
+                    t->Release();
+                }
+                if (ok) lo = mid; else hi = mid - 1;
+            }
+            rowLen = lo;
+            for (u32 c = 0; c < rowLen; ++c) rowBuf[c] = wide.data[c];
+            rowBuf[rowLen++] = L'.';
+            rowBuf[rowLen++] = L'.';
+            rowBuf[rowLen++] = L'.';
+        }
+        if (rowLen == 0) continue;
+
+        IDWriteTextLayout* rowLayout =
+            fonts_->CreateTextLayout(rowBuf, rowLen, FontRole::Body, maxTextWidth, kOutlineItemHeightDip);
+        if (!rowLayout) continue;
+        rowLayout->SetFontSize(kOutlineRowFontSizeDip, DWRITE_TEXT_RANGE{0, rowLen});
+        float textTop = rowTop + (kOutlineItemHeightDip - kOutlineRowFontSizeDip - 4.0f) * 0.5f;
+        target_->DrawTextLayout(D2D1::Point2F(indent + kOutlinePanelPaddingDip, textTop),
+                                rowLayout,
+                                (highlighted && highlightTextBrush) ? highlightTextBrush : textBrush);
+        rowLayout->Release();
+    }
 }
 
 void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
@@ -988,6 +1125,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* findCurrentBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarBgBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* outlineHighlightBgBrush = nullptr;
+    ID2D1SolidColorBrush* outlineHighlightTextBrush = nullptr;
     ID2D1SolidColorBrush* copyIconBrush = nullptr;
     ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
     ID2D1SolidColorBrush* copyPaperBrush = nullptr;
@@ -1012,6 +1151,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->findCurrentHighlight, &findCurrentBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarBackground, &overlayBarBgBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarText, &overlayBarTextBrush);
+    target_->CreateSolidColorBrush(palette_->outlineHighlightBackground, &outlineHighlightBgBrush);
+    target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyIcon, &copyIconBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyHoverBackground, &copyHoverBgBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyPaper, &copyPaperBrush);
@@ -1067,6 +1208,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                            WideLength(overlay_->statusMessage), overlayBarBgBrush,
                            overlayBarTextBrush, topOffset);
         }
+        // T63:大纲侧栏,浮在正文左侧上方,与查找条/提示条共用同一套浮出条
+        // 底色/文字色(overlayBar* 槽位),只有当前阅读位置高亮换用新槽位。
+        DrawOutlinePanel(targetSize.height, overlayBarBgBrush, overlayBarTextBrush,
+                         outlineHighlightBgBrush, outlineHighlightTextBrush);
     }
 
     if (textBrush) textBrush->Release();
@@ -1086,6 +1231,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (findCurrentBrush) findCurrentBrush->Release();
     if (overlayBarBgBrush) overlayBarBgBrush->Release();
     if (overlayBarTextBrush) overlayBarTextBrush->Release();
+    if (outlineHighlightBgBrush) outlineHighlightBgBrush->Release();
+    if (outlineHighlightTextBrush) outlineHighlightTextBrush->Release();
     if (copyIconBrush) copyIconBrush->Release();
     if (copyHoverBgBrush) copyHoverBgBrush->Release();
     if (copyPaperBrush) copyPaperBrush->Release();
