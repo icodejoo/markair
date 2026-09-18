@@ -32,6 +32,17 @@ constexpr INT_PTR kDpiAwarenessContextPerMonitorV2 = -4;
 constexpr UINT_PTR kCopyFeedbackTimerId = 1;
 constexpr UINT kCopyFeedbackDurationMs = 2000;
 
+// T56:窗口矩形变化(移动/缩放)去抖 500ms 再写盘,拖一次窗口不会写几十次
+// (裁决 #7 的通用要求,窗口矩形是它列举的三类触发点之一)。
+constexpr UINT_PTR kWindowGeometryTimerId = 2;
+constexpr UINT kWindowGeometryDebounceMs = 500;
+
+// T56:枚举显示器/已有本程序窗口时的固定容量上限,均放在栈上,不做动态分配。
+// 显示器 16 个、已有窗口 32 个,远超真实使用场景(验收要求"连开 5 个窗口"),
+// 超出部分静默截断,不影响正确性,只是层叠/越界判定少看几个显示器/窗口。
+constexpr u32 kMaxMonitorsForRestore = 16;
+constexpr u32 kMaxExistingWindowsForCascade = 32;
+
 // 窗口类是否已注册成功,保证 RegisterMainWindowClass 幂等(POD 全局,零初始化)。
 bool g_classRegistered = false;
 
@@ -143,6 +154,116 @@ float DipScaleOf(HWND hwnd) {
     UINT dpi = getDpi(hwnd);
     if (dpi == 0) return 1.0f;
     return static_cast<float>(dpi) / static_cast<float>(kBaselineDpi);
+}
+
+// T56:取一个近似的"新窗口所在显示器"DPI 缩放系数,用于把 kCascadeOffsetDip
+// 换算成物理像素。窗口此刻尚未创建,拿不到 GetDpiForWindow;这里退而求其次
+// 用 GetDpiForSystem(Win10 1607+ 起 user32 导出),与 DipScaleOf 同样的
+// GetProcAddress 动态取址手法,系统不支持时回退 1.0——层叠偏移本来就是体验
+// 优化,近似值不影响正确性,只是高 DPI 副屏上偏移量可能略有偏差。
+float DipScaleForNewWindow() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) return 1.0f;
+    using GetDpiForSystemFn = UINT(WINAPI*)();
+    GetDpiForSystemFn getDpi = reinterpret_cast<GetDpiForSystemFn>(
+        reinterpret_cast<void*>(GetProcAddress(user32, "GetDpiForSystem")));
+    if (!getDpi) return 1.0f;
+    UINT dpi = getDpi();
+    if (dpi == 0) return 1.0f;
+    return static_cast<float>(dpi) / static_cast<float>(kBaselineDpi);
+}
+
+// T56:EnumDisplayMonitors 收集当前系统全部显示器的完整边界 + 工作区,
+// 供 ClampWindowRectToMonitors 越界判定用。回调上下文放在栈上,不做堆分配。
+struct MonitorCollectContext {
+    MonitorRect* items;
+    u32 cap;
+    u32 count;
+    u32 primaryIndex;
+};
+
+BOOL CALLBACK CollectMonitorProc(HMONITOR hMonitor, HDC, LPRECT, LPARAM lparam) {
+    MonitorCollectContext* ctx = reinterpret_cast<MonitorCollectContext*>(lparam);
+    if (ctx->count >= ctx->cap) return TRUE;  // 容量已满,静默截断,继续枚举完计数无意义但安全
+
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(hMonitor, &info)) return TRUE;
+
+    MonitorRect rect{};
+    rect.bounds = RectI{info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right,
+                        info.rcMonitor.bottom};
+    rect.workArea = RectI{info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom};
+    if (info.dwFlags & MONITORINFOF_PRIMARY) ctx->primaryIndex = ctx->count;
+    ctx->items[ctx->count++] = rect;
+    return TRUE;
+}
+
+// 收集当前系统的显示器列表,返回实际数量;`*primaryIndexOut` 写入主显示器
+// 在返回数组里的下标(找不到时保持 0——EnumDisplayMonitors 理论上总会枚举到
+// 主显示器,这里只是防御性兜底)。
+u32 CollectMonitors(MonitorRect* out, u32 cap, u32* primaryIndexOut) {
+    MonitorCollectContext ctx{out, cap, 0, 0};
+    EnumDisplayMonitors(nullptr, nullptr, CollectMonitorProc, reinterpret_cast<LPARAM>(&ctx));
+    if (primaryIndexOut) *primaryIndexOut = ctx.primaryIndex;
+    return ctx.count;
+}
+
+// T56:按窗口类名枚举本程序已有窗口,取其矩形原点(左上角),用于层叠偏移的
+// "同位置是否已有窗口"判定。不新增任何跨进程共享状态——纯粹是本机已存在
+// 的窗口对象的一次性快照(裁决 #8 明文要求)。
+struct WindowOriginCollectContext {
+    RectI* items;
+    u32 cap;
+    u32 count;
+};
+
+BOOL CALLBACK CollectWindowOriginProc(HWND hwnd, LPARAM lparam) {
+    WindowOriginCollectContext* ctx = reinterpret_cast<WindowOriginCollectContext*>(lparam);
+    if (ctx->count >= ctx->cap) return TRUE;
+
+    wchar_t className[64]{};
+    if (GetClassNameW(hwnd, className, 64) == 0) return TRUE;
+    if (wcscmp(className, kWindowClassName) != 0) return TRUE;
+
+    RECT rc{};
+    if (!GetWindowRect(hwnd, &rc)) return TRUE;
+    ctx->items[ctx->count++] = RectI{rc.left, rc.top, rc.right, rc.bottom};
+    return TRUE;
+}
+
+u32 CollectExistingWindowOrigins(RectI* out, u32 cap) {
+    WindowOriginCollectContext ctx{out, cap, 0};
+    EnumWindows(CollectWindowOriginProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.count;
+}
+
+// T56:用 GetWindowPlacement(不是 GetWindowRect——最大化态下 GetWindowRect
+// 拿到的是全屏矩形)把窗口当前的"还原态矩形 + 是否最大化"同步进 state,
+// 供移动/缩放/退出时的持久化读取。
+void UpdateWindowGeometryState(HWND hwnd, WindowState* state) {
+    if (!state) return;
+    WINDOWPLACEMENT wp{};
+    wp.length = sizeof(wp);
+    if (!GetWindowPlacement(hwnd, &wp)) return;
+
+    const RECT& r = wp.rcNormalPosition;
+    state->winX = r.left;
+    state->winY = r.top;
+    state->winW = r.right - r.left;
+    state->winH = r.bottom - r.top;
+    state->winMaximized = wp.showCmd == SW_SHOWMAXIMIZED;
+}
+
+// T56:移动/缩放后统一收尾——先同步一次当前矩形,再(重新)起 500ms 去抖
+// 定时器;真正的写盘发生在定时器到点时(`WM_TIMER` 分支),这里不直接调用
+// `onWindowGeometryChanged`,避免拖动窗口时几十次连续写盘。
+void OnWindowGeometryMaybeChanged(HWND hwnd, WindowState* state) {
+    if (!state) return;
+    UpdateWindowGeometryState(hwnd, state);
+    if (state->onWindowGeometryChanged) {
+        SetTimer(hwnd, kWindowGeometryTimerId, kWindowGeometryDebounceMs, nullptr);
+    }
 }
 
 // 客户区高度/宽度(DIP)的内部别名,实现见文件末尾的公开函数 ClientHeightDip /
@@ -584,6 +705,9 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         // 窗口尺寸变化必然改变滚动条的 nMax/nPage,即使 scrollY 数值没变也要同步。
         SyncScrollBar(hwnd, state);
     }
+    // T56:尺寸变化(含最大化/还原)去抖后写盘;放在这里而不是只放 WM_MOVE,
+    // 因为纯拖边框改尺寸不会触发 WM_MOVE。
+    OnWindowGeometryMaybeChanged(hwnd, state);
     // 强制整个客户区重绘:窗口变大时,Windows 会为新露出的区域自动生成
     // WM_PAINT,让人误以为"重排生效了";窗口变小时没有新露出的区域,系统
     // 不会自动触发 WM_PAINT,若这里不主动 Invalidate,画面会停留在旧的
@@ -649,6 +773,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
     case WM_SIZE:
         OnSize(hwnd, state, LOWORD(lparam), HIWORD(lparam));
+        return 0;
+
+    case WM_MOVE:
+        // T56:纯移动(不改尺寸)也要去抖后写盘。
+        OnWindowGeometryMaybeChanged(hwnd, state);
         return 0;
 
     case WM_DPICHANGED:
@@ -729,6 +858,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             KillTimer(hwnd, kCopyFeedbackTimerId);
             if (state) state->copyButtonCopied = kInvalidIndex;
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        // T56:窗口矩形去抖到点 -> 杀掉一次性定时器、真正触发一次写盘回调。
+        if (wparam == kWindowGeometryTimerId) {
+            KillTimer(hwnd, kWindowGeometryTimerId);
+            if (state && state->onWindowGeometryChanged) {
+                state->onWindowGeometryChanged(state->callbackUserData);
+            }
             return 0;
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -877,6 +1014,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_DESTROY:
         // T45:窗口销毁前把可能还在跑的一次性定时器收掉。
         KillTimer(hwnd, kCopyFeedbackTimerId);
+        // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
+        // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
+        KillTimer(hwnd, kWindowGeometryTimerId);
+        if (state) {
+            UpdateWindowGeometryState(hwnd, state);
+            if (state->onWindowGeometryChanged) {
+                state->onWindowGeometryChanged(state->callbackUserData);
+            }
+        }
         PostQuitMessage(0);
         return 0;
 
@@ -945,11 +1091,55 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
 
+    // T56:winW/winH <= 0 表示从未存过窗口矩形(首次启动),走原来的默认
+    // 位置/尺寸;否则按上次记住的矩形恢复,先做多显示器越界钳制,再做
+    // "同位置已有本程序窗口"的层叠偏移(裁决 #8)。
+    bool hasSavedRect = state->winW > 0 && state->winH > 0;
+    bool restoreMaximized = hasSavedRect && state->winMaximized;
+    int createX = CW_USEDEFAULT;
+    int createY = CW_USEDEFAULT;
+    int createW = kInitialWidthDip;
+    int createH = kInitialHeightDip;
+
+    if (hasSavedRect) {
+        MonitorRect monitors[kMaxMonitorsForRestore];
+        u32 primaryIndex = 0;
+        u32 monitorCount = CollectMonitors(monitors, kMaxMonitorsForRestore, &primaryIndex);
+
+        RectI saved{state->winX, state->winY, state->winX + state->winW,
+                    state->winY + state->winH};
+        RectI clamped = ClampWindowRectToMonitors(saved, monitors, monitorCount, primaryIndex);
+
+        RectI existing[kMaxExistingWindowsForCascade];
+        u32 existingCount = CollectExistingWindowOrigins(existing, kMaxExistingWindowsForCascade);
+
+        // 层叠偏移用"clamped 矩形落在的那个显示器"的工作区判断是否碰到边界;
+        // 极端兜底(理论上不该发生:显示器列表在上面刚枚举过,clamped 又是
+        // ClampWindowRectToMonitors 的输出)时退回主屏工作区,再退回矩形自身。
+        i32 monitorIdx =
+            monitorCount > 0 ? FindMonitorContaining(clamped, monitors, monitorCount) : -1;
+        RectI cascadeWorkArea = clamped;
+        if (monitorIdx >= 0) {
+            cascadeWorkArea = monitors[static_cast<u32>(monitorIdx)].workArea;
+        } else if (monitorCount > 0) {
+            cascadeWorkArea = monitors[primaryIndex].workArea;
+        }
+
+        i32 offsetPx = static_cast<i32>(kCascadeOffsetDip * DipScaleForNewWindow() + 0.5f);
+        RectI finalRect =
+            ApplyCascadeOffset(clamped, existing, existingCount, cascadeWorkArea, offsetPx);
+
+        createX = finalRect.left;
+        createY = finalRect.top;
+        createW = finalRect.Width();
+        createH = finalRect.Height();
+    }
+
     // 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
     // WS_VSCROLL:原生右侧滚动条,外观完全交给系统主题,不自绘。
     HWND hwnd = CreateWindowExW(
         0, kWindowClassName, title, WS_OVERLAPPEDWINDOW | WS_VSCROLL,
-        CW_USEDEFAULT, CW_USEDEFAULT, kInitialWidthDip, kInitialHeightDip,
+        createX, createY, createW, createH,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
 
@@ -960,19 +1150,22 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // 窗口创建成功、显示之前触发一次回调(T14 性能埋点用,为空时零开销)。
     if (state->onWindowCreated) state->onWindowCreated(state->callbackUserData);
 
-    // Per-Monitor V2 下窗口尺寸是物理像素,按实际所在显示器的 DPI 放大初始尺寸,
-    // 让高 DPI 屏上的初始窗口与 100% 缩放时视觉大小一致。
-    HMODULE user32 = GetModuleHandleW(L"user32.dll");
-    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
-    GetDpiForWindowFn getDpi = user32 ? reinterpret_cast<GetDpiForWindowFn>(
-        reinterpret_cast<void*>(GetProcAddress(user32, "GetDpiForWindow"))) : nullptr;
-    if (getDpi) {
-        UINT dpi = getDpi(hwnd);
-        if (dpi != 0 && dpi != static_cast<UINT>(kBaselineDpi)) {
-            int width = MulDiv(kInitialWidthDip, static_cast<int>(dpi), kBaselineDpi);
-            int height = MulDiv(kInitialHeightDip, static_cast<int>(dpi), kBaselineDpi);
-            SetWindowPos(hwnd, nullptr, 0, 0, width, height,
-                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (!hasSavedRect) {
+        // Per-Monitor V2 下窗口尺寸是物理像素,按实际所在显示器的 DPI 放大
+        // 初始尺寸,让高 DPI 屏上的初始窗口与 100% 缩放时视觉大小一致。
+        // 有保存矩形时不需要这一步——那份矩形本来就是上次的物理像素矩形。
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        GetDpiForWindowFn getDpi = user32 ? reinterpret_cast<GetDpiForWindowFn>(
+            reinterpret_cast<void*>(GetProcAddress(user32, "GetDpiForWindow"))) : nullptr;
+        if (getDpi) {
+            UINT dpi = getDpi(hwnd);
+            if (dpi != 0 && dpi != static_cast<UINT>(kBaselineDpi)) {
+                int width = MulDiv(kInitialWidthDip, static_cast<int>(dpi), kBaselineDpi);
+                int height = MulDiv(kInitialHeightDip, static_cast<int>(dpi), kBaselineDpi);
+                SetWindowPos(hwnd, nullptr, 0, 0, width, height,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
         }
     }
 
@@ -981,8 +1174,15 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // 如预期触发)也不会出现"滚动条还没配置好"的窗口。
     SyncScrollBar(hwnd, state);
 
-    ShowWindow(hwnd, SW_SHOW);
+    // T56:恢复最大化态——`ShowWindow(SW_SHOWMAXIMIZED)` 会以刚才创建时的
+    // 矩形作为还原态(`rcNormalPosition`),再整体最大化,与
+    // `WINDOWPLACEMENT::rcNormalPosition` 才是还原态矩形的口径一致。
+    ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_SHOW);
     UpdateWindow(hwnd);
+
+    // T56:创建完成后把 winX/Y/W/H/winMaximized 更新为窗口当前的实际值
+    // (不再是"待恢复值"),供后续移动/缩放/退出时的持久化读取。
+    UpdateWindowGeometryState(hwnd, state);
     return hwnd;
 }
 

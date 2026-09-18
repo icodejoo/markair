@@ -27,6 +27,7 @@ add_executable(mdvn_tests
     test_hit_test.cpp
     test_search.cpp
     test_ini.cpp
+    test_window_state.cpp
     test_theme.cpp
     test_theme_state.cpp
     test_languages.cpp

@@ -262,6 +262,12 @@ struct DocumentHost {
     mdvn::ImageCache* imageCache;    // 图片缓存,换文档时位图与条目一并作废
     mdvn::Arena* imageArena;         // 图片缓存所在 Arena,换文档时整体 Reset
     wchar_t* documentDirectory;      // MAX_PATH 缓冲,换文档后要更新成新文档的目录
+
+    // T56:窗口状态记忆的写盘回调需要读到"当前窗口实时矩形"(windowState)
+    // 与"要写进哪份配置"(settings),借用同一个 DocumentHost 传递,不另起
+    // 一个只装两个指针的小结构体。
+    mdvn::WindowState* windowState;
+    mdvn::AppSettings* settings;
 };
 
 // T36 ②的实际执行体。返回 false 表示新文档打不开(此时窗口里是一份空文档,
@@ -312,6 +318,19 @@ void OnWindowCreatedBenchHook(void*) { mdvn::bench::MarkWindowCreated(); }
 void OnFirstPresentBenchHook(void*) {
     mdvn::bench::MarkFirstPresent();
     mdvn::bench::EmitReport();
+}
+
+// T56:窗口矩形去抖到点、或窗口即将销毁前,把当前实时矩形写进 state.ini。
+// 走 T55 的"读-改-写 + 命名互斥体"通道(SaveAppSettings 内部),不绕过它。
+void OnWindowGeometryChangedHook(void* userData) {
+    DocumentHost* host = static_cast<DocumentHost*>(userData);
+    if (!host || !host->windowState || !host->settings) return;
+    host->settings->winX = host->windowState->winX;
+    host->settings->winY = host->windowState->winY;
+    host->settings->winW = host->windowState->winW;
+    host->settings->winH = host->windowState->winH;
+    host->settings->winMaximized = host->windowState->winMaximized;
+    mdvn::SaveAppSettings(*host->settings);
 }
 
 }  // namespace
@@ -468,7 +487,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // 统一初始化成 kInvalidIndex,这里占位传 0 即可(会被覆盖,值本身不重要)。
         &clipboardScratch, 0, 0,
         // T47:主题偏好读自 state.ini(theme 键),系统深浅色在启动期探测一次。
-        settings.theme, systemIsDark};
+        settings.theme, systemIsDark,
+        // T56:窗口矩形/最大化态的"待恢复值"读自 state.ini 的 win_x/y/w/h/
+        // win_maximized;winW/winH <= 0(从未存过)时 CreateMainWindow 走默认
+        // 位置/尺寸。onWindowGeometryChanged 留空,拿到 hwnd 之后再补上
+        // (它需要 documentHost,而 documentHost 需要 hwnd 才能填完)。
+        settings.winX, settings.winY, settings.winW, settings.winH, settings.winMaximized,
+        nullptr};
 
     // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
     // settings.theme 解出生效主题(上面第 425~428 行已经算过一次结果给
@@ -490,10 +515,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     remoteLoader.Init(hwnd, settings.loadRemoteImages);
 
     // T36:窗口内换文档所需的上下文,必须在 hwnd 拿到之后才能填完。
+    // T56:一并携带 windowState/settings 指针,供 OnWindowGeometryChangedHook
+    // 在窗口矩形去抖到点/销毁前读取当前矩形并写回 state.ini。
     DocumentHost documentHost{hwnd,        &fileMap,     &docArena,   &doc,
                               &layout,     &fonts,       &imageCache, &imageArena,
-                              documentDirectory};
+                              documentDirectory,
+                              &windowState, &settings};
     windowState.callbackUserData = &documentHost;
+    windowState.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
 
     // 把路径哈希写进窗口属性,供其它进程的 TryFocusExistingWindowForHash
     // 找到本窗口(系统会在窗口销毁时自动清理属性,不需要手动 RemoveProp)。
@@ -508,6 +537,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 唯一会被用户实时改动的字段(Ctrl+Shift+T 循环,见 T47);字体族名覆盖
     // M1/M2 都还是启动期只读、运行期不可改,直接沿用启动时读到的 settings 值。
     // 写盘内部走"读-改-写 + 命名互斥体",失败(超时/只读目录等)一律静默。
+    // T56:窗口矩形/最大化态已经在 WM_DESTROY 里通过 onWindowGeometryChanged
+    // 同步写进了 settings.winX/Y/W/H/winMaximized(documentHost.settings 与
+    // 这里的 settings 是同一个对象),这里不需要再重复赋值,直接一起写出。
     settings.theme = windowState.themeSetting;
     mdvn::SaveAppSettings(settings);
 

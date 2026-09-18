@@ -102,6 +102,27 @@ MDVN_TEST(Ini_DefaultsAreSafe) {
     MDVN_CHECK_EQ(s.fontBodyFallback[0], L'\0');
     MDVN_CHECK_EQ(s.fontMonoPrimary[0], L'\0');
     MDVN_CHECK_EQ(s.fontMonoFallback[0], L'\0');
+    // T56:默认没有存过窗口矩形,winW/winH 必须是 <= 0 的"未设置"哨兵值。
+    MDVN_CHECK_EQ(s.winW, 0);
+    MDVN_CHECK_EQ(s.winH, 0);
+    MDVN_CHECK(!s.winMaximized);
+}
+
+// 用例:窗口矩形键的基本解析,含负坐标(副屏在主屏左侧的合法场景)。
+MDVN_TEST(Ini_ParsesWindowRectKeys) {
+    AppSettings s;
+    const char* text =
+        "win_x=-100\n"
+        "win_y=50\n"
+        "win_w=1024\n"
+        "win_h=768\n"
+        "win_maximized=1\n";
+    MDVN_CHECK_EQ(ParseFresh(text, &s), 5u);
+    MDVN_CHECK_EQ(s.winX, -100);
+    MDVN_CHECK_EQ(s.winY, 50);
+    MDVN_CHECK_EQ(s.winW, 1024);
+    MDVN_CHECK_EQ(s.winH, 768);
+    MDVN_CHECK(s.winMaximized);
 }
 
 // 用例(缺失文件):`%LOCALAPPDATA%\mdvn\state.ini` 正常情况下不存在,
@@ -237,6 +258,12 @@ MDVN_TEST(Ini_SaveThenLoadRoundTrips) {
     loaded.theme = ThemeSetting::Dark;
     wcscpy_s(loaded.fontBodyPrimary, mdvn::kMaxFontFamilyChars, L"Consolas");
     wcscpy_s(loaded.fontMonoFallback, mdvn::kMaxFontFamilyChars, L"微软雅黑");
+    // T56:窗口矩形键(含负坐标,验证副屏在主屏左侧这类合法负值也能原样往返)。
+    loaded.winX = -200;
+    loaded.winY = 50;
+    loaded.winW = 900;
+    loaded.winH = 650;
+    loaded.winMaximized = true;
 
     MDVN_CHECK(SaveAppSettings(loaded));
 
@@ -246,6 +273,11 @@ MDVN_TEST(Ini_SaveThenLoadRoundTrips) {
     MDVN_CHECK(readBack.theme == ThemeSetting::Dark);
     MDVN_CHECK(wcscmp(readBack.fontBodyPrimary, L"Consolas") == 0);
     MDVN_CHECK(wcscmp(readBack.fontMonoFallback, L"微软雅黑") == 0);
+    MDVN_CHECK_EQ(readBack.winX, -200);
+    MDVN_CHECK_EQ(readBack.winY, 50);
+    MDVN_CHECK_EQ(readBack.winW, 900);
+    MDVN_CHECK_EQ(readBack.winH, 650);
+    MDVN_CHECK(readBack.winMaximized);
 }
 
 // 用例(未识别键保留):老版本/手改的键在写盘后必须原样留在文件里。

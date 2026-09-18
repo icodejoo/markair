@@ -112,11 +112,12 @@ void Utf8ToWideFixed(StrSlice s, wchar_t* out, u32 cap) {
     out[w] = 0;
 }
 
-// T55:已知键的固定顺序,写盘时按此顺序追加磁盘原文里缺失的键。
+// T55/T56:已知键的固定顺序,写盘时按此顺序追加磁盘原文里缺失的键。
 constexpr const char* kKnownKeys[] = {
     "load_remote_images", "font_body_primary", "font_body_fallback",
-    "font_mono_primary",  "font_mono_fallback", "theme"};
-constexpr u32 kKnownKeyCount = 6;
+    "font_mono_primary",  "font_mono_fallback", "theme",
+    "win_x", "win_y", "win_w", "win_h", "win_maximized"};
+constexpr u32 kKnownKeyCount = 11;
 
 // T55:本进程最近一次 Load/Save 成功后"磁盘上应该有"的配置快照,用来判断
 // SaveAppSettings 调用时哪些键是"本进程真正改动过的"——只有 target 与这份
@@ -191,6 +192,15 @@ bool AppendCStr(char* out, u32 cap, u32* pos, const char* s) {
     return AppendBytes(out, cap, pos, s, len);
 }
 
+// 把有符号整数编码成十进制 ASCII 追加进定长缓冲(T56 窗口矩形键用);
+// 复用 sprintf_s 而不是手写转换,与项目里 swprintf_s 的用法口径一致。
+bool AppendInt(char* out, u32 cap, u32* pos, i32 value) {
+    char buf[16];
+    int n = sprintf_s(buf, sizeof(buf), "%d", value);
+    if (n < 0) return false;
+    return AppendBytes(out, cap, pos, buf, static_cast<u32>(n));
+}
+
 // 把某个已知键按 settings 的当前值序列化成一行"key=value\n",追加到 out。
 // `key` 一律来自 kKnownKeys 数组,用 strcmp 精确匹配即可,不需要 KeyEquals
 // 的大小写不敏感与切片语义。
@@ -205,6 +215,16 @@ bool AppendKnownKeyLine(const char* key, const AppSettings& s, char* out, u32 ca
         if (s.theme == ThemeSetting::Light) v = "light";
         else if (s.theme == ThemeSetting::Dark) v = "dark";
         if (!AppendCStr(out, cap, pos, v)) return false;
+    } else if (strcmp(key, "win_x") == 0) {
+        if (!AppendInt(out, cap, pos, s.winX)) return false;
+    } else if (strcmp(key, "win_y") == 0) {
+        if (!AppendInt(out, cap, pos, s.winY)) return false;
+    } else if (strcmp(key, "win_w") == 0) {
+        if (!AppendInt(out, cap, pos, s.winW)) return false;
+    } else if (strcmp(key, "win_h") == 0) {
+        if (!AppendInt(out, cap, pos, s.winH)) return false;
+    } else if (strcmp(key, "win_maximized") == 0) {
+        if (!AppendCStr(out, cap, pos, s.winMaximized ? "1" : "0")) return false;
     } else {
         const wchar_t* wide = nullptr;
         if (strcmp(key, "font_body_primary") == 0) wide = s.fontBodyPrimary;
@@ -303,6 +323,14 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
     if (wcscmp(target.fontMonoFallback, g_baseline.fontMonoFallback) != 0) {
         wcscpy_s(effective.fontMonoFallback, kMaxFontFamilyChars, target.fontMonoFallback);
     }
+    // T56:窗口矩形 4 个键 + 最大化标记,同样只在"本进程真正改动过"时才覆盖
+    // 磁盘上的当前值——多开时 A 窗口移动、B 窗口没动,B 退出时不应把 A
+    // 刚写好的矩形又覆盖回 B 自己旧的那份。
+    if (target.winX != g_baseline.winX) effective.winX = target.winX;
+    if (target.winY != g_baseline.winY) effective.winY = target.winY;
+    if (target.winW != g_baseline.winW) effective.winW = target.winW;
+    if (target.winH != g_baseline.winH) effective.winH = target.winH;
+    if (target.winMaximized != g_baseline.winMaximized) effective.winMaximized = target.winMaximized;
     return effective;
 }
 
@@ -380,6 +408,13 @@ void DefaultAppSettings(AppSettings* out) {
     out->fontMonoPrimary[0] = 0;
     out->fontMonoFallback[0] = 0;
     out->theme = ThemeSetting::System;  // 默认跟随系统
+    // T56:winW/winH <= 0 表示"从未存过窗口矩形",window.cpp 据此判断走
+    // 系统默认位置/尺寸,不进入越界钳制流程。
+    out->winX = 0;
+    out->winY = 0;
+    out->winW = 0;
+    out->winH = 0;
+    out->winMaximized = false;
 }
 
 u32 ParseIniSettings(StrSlice text, AppSettings* out) {
@@ -433,6 +468,40 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
                 applied++;
             } else if (KeyEquals(value, "dark")) {
                 out->theme = ThemeSetting::Dark;
+                applied++;
+            }
+            continue;
+        }
+
+        // T56:窗口矩形整数键,直接采信 ParseInt 的结果(不做范围钳制——
+        // 越界保护是 window.cpp 里 ClampWindowRectToMonitors 的职责,这里只
+        // 负责如实还原上次写盘的数值;解析失败的行按"未识别"处理,保持默认值)。
+        if (KeyEquals(key, "win_x")) {
+            i32 v = 0;
+            if (ParseInt(value, &v)) { out->winX = v; applied++; }
+            continue;
+        }
+        if (KeyEquals(key, "win_y")) {
+            i32 v = 0;
+            if (ParseInt(value, &v)) { out->winY = v; applied++; }
+            continue;
+        }
+        if (KeyEquals(key, "win_w")) {
+            i32 v = 0;
+            if (ParseInt(value, &v)) { out->winW = v; applied++; }
+            continue;
+        }
+        if (KeyEquals(key, "win_h")) {
+            i32 v = 0;
+            if (ParseInt(value, &v)) { out->winH = v; applied++; }
+            continue;
+        }
+        if (KeyEquals(key, "win_maximized")) {
+            i32 v = 0;
+            if (ParseInt(value, &v)) {
+                if (v < 0) v = 0;
+                if (v > 1) v = 1;
+                out->winMaximized = v != 0;
                 applied++;
             }
             continue;

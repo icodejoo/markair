@@ -26,6 +26,7 @@
 #include "navigate.h"
 #include "scroll.h"
 #include "theme_state.h"
+#include "window_state.h"
 
 namespace mdvn {
 
@@ -103,6 +104,32 @@ struct WindowState {
     // 调用方填好"的字段是同一套职责划分,不单独新造一套。
     ThemeSetting themeSetting;
     bool systemIsDark;
+
+    // T56 窗口状态记忆(裁决 #8:全局一份 + 层叠偏移)。
+    //
+    // 传入 `CreateMainWindow` 之前:代表"待恢复"的窗口矩形(物理像素,来自
+    // `state.ini` 的 win_x/y/w/h)与是否要以最大化态打开;`winW`/`winH` <= 0
+    // 表示从未存过(首次启动),此时 `CreateMainWindow` 走系统默认位置/尺寸,
+    // 不进入越界钳制/层叠偏移流程。
+    //
+    // `CreateMainWindow` 返回之后、以及此后任何一次移动/缩放/退出:这 5 个
+    // 字段被 `window.cpp` 内部持续更新为"当前实时的还原态矩形"(用
+    // `GetWindowPlacement` 的 `rcNormalPosition`,不是最大化后的矩形),
+    // 调用方(main.cpp)在 `onWindowGeometryChanged` 回调触发时读取这些字段
+    // 写回 `state.ini`。
+    i32 winX;
+    i32 winY;
+    i32 winW;
+    i32 winH;
+    bool winMaximized;
+
+    /**
+     * 窗口矩形变化(移动/缩放)去抖 500ms 后,或窗口即将销毁前立即触发一次,
+     * 通知调用方把当前的 `winX/winY/winW/winH/winMaximized` 写进 `state.ini`
+     * (裁决 #7 的读-改-写 + 命名互斥体通道)。为空表示不持久化窗口状态。
+     * @param userData 即 `callbackUserData`。
+     */
+    void (*onWindowGeometryChanged)(void* userData);
 };
 
 /**
@@ -150,28 +177,32 @@ void ReleaseMainWindowClassResources();
 /**
  * 创建并显示主窗口,把窗口过程需要的运行期状态绑定到该窗口上。
  *
- * 调用前须先成功调用 `RegisterMainWindowClass`。窗口采用标准
- * `WS_OVERLAPPEDWINDOW` 标题栏,初始逻辑尺寸 800x600,并按窗口所在显示器的
- * DPI 缩放。拿到 HWND 后会立即按 `state->themeSetting`/`state->systemIsDark`
- * 解出的生效主题调用一次 `DwmSetWindowAttribute` 切标题栏深浅色(T48)。
+ * 调用前须先成功调用 `RegisterMainWindowClass`。**T56 起**创建位置/尺寸由
+ * `state->winW`/`winH` 决定:<= 0(从未存过)时走原来的行为——标准位置、
+ * 初始逻辑尺寸 800x600 并按所在显示器 DPI 缩放;否则按 `state->winX/Y/W/H`
+ * 恢复(先做多显示器越界钳制,再做同位置多开层叠偏移),并按
+ * `state->winMaximized` 决定是否以最大化态显示。拿到 HWND 后会立即按
+ * `state->themeSetting`/`state->systemIsDark` 解出的生效主题调用一次
+ * `DwmSetWindowAttribute` 切标题栏深浅色(T48)。返回前会把 `winX/Y/W/H/
+ * winMaximized` 更新为窗口创建后的实际当前值,供后续移动/缩放/退出时的
+ * 持久化读取。
  *
  * @param instance 当前进程实例句柄。
  * @param title 窗口标题(UTF-16,非空)。
  * @param state 运行期状态,生命周期须覆盖整个消息循环;函数内部会把
  *              `scrollY`/`firstPresentDone` 归零、把两个 `copyButtonXxx`
- *              置为 `kInvalidIndex`,其余字段由调用方填好。
+ *              置为 `kInvalidIndex`,其余字段由调用方填好(`winX/Y/W/H/
+ *              winMaximized` 填"待恢复值",`winW`/`winH` <= 0 表示不恢复)。
  *              `onWindowCreated` 会在窗口创建成功、显示之前被调用一次
  *              (若非空)。
  * @return 创建成功返回窗口句柄,失败返回 nullptr。
  * @example
- *   mdvn::WindowState state{&fonts, &layout, &doc, &renderer, 0.0f,
- *                            &images, &residency, &remote, &temps, &imgArena, docDir,
- *                            &find, nullptr, &OpenDocumentInPlace,
- *                            nullptr, nullptr, nullptr, false, false, &clipScratch};
- *   // 末尾依次是 onWindowCreated/onFirstPresent/callbackUserData=nullptr、
- *   // firstPresentDone=false(会被下面这行归零)、benchForceFullDecode=false、
- *   // clipboardScratch=&clipScratch;两个 copyButtonXxx 留给聚合初始化补零,
- *   // CreateMainWindow 内部会把它们改写成 kInvalidIndex,不需要调用方填。
+ *   mdvn::WindowState state{};
+ *   state.fonts = &fonts; state.layout = &layout;  // ...其余字段同上...
+ *   state.winX = settings.winX; state.winY = settings.winY;
+ *   state.winW = settings.winW; state.winH = settings.winH;
+ *   state.winMaximized = settings.winMaximized;
+ *   state.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
  *   HWND hwnd = mdvn::CreateMainWindow(hInstance, L"mdvn", &state);
  */
 HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state);

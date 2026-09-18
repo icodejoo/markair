@@ -14,6 +14,13 @@
 //                        默认 system,非法值回落 system
 // 明确**不含** `image_cache_mb`(随 T32 二次裁决作废)与 `zoom`(裁决 #4,留给 M2)。
 //
+// T56 追加(裁决 #8:窗口状态记忆,全局一份 + 层叠偏移):
+//   win_x/win_y/win_w/win_h = 整数    上次窗口的还原态矩形(物理像素,
+//                        `WINDOWPLACEMENT::rcNormalPosition`,不是最大化后的
+//                        矩形);`win_w`/`win_h` 缺失或 <= 0 表示"没有存过"
+//                        (首次启动),按系统默认位置/尺寸走。
+//   win_maximized      = 0|1          上次退出时窗口是否处于最大化态,默认 0。
+//
 // T55 起本文件同时具备**写盘**能力(`SaveAppSettings`):写出格式与本文件
 // 的解析口径完全对称,UTF-8 无 BOM;保留未识别的原有键;先写 `.tmp` 再
 // `MoveFileExW` 原子替换;写盘失败一律静默降级(不弹窗、不写日志)。
@@ -66,6 +73,14 @@ struct AppSettings {
     wchar_t fontMonoPrimary[kMaxFontFamilyChars];
     wchar_t fontMonoFallback[kMaxFontFamilyChars];
     ThemeSetting theme;                            // 主题偏好,默认 ThemeSetting::System
+
+    // T56:上次窗口的还原态矩形(物理像素)。winW/winH <= 0 表示"没有存过",
+    // 调用方(window.cpp)据此判断要不要走系统默认位置/尺寸,而不是走越界钳制。
+    i32 winX;
+    i32 winY;
+    i32 winW;
+    i32 winH;
+    bool winMaximized;  // 上次退出时是否处于最大化态,默认 false
 };
 
 /**
