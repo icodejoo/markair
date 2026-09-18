@@ -12,7 +12,12 @@
        exe 体积；
     5.（T44 新增）调用 bench\run_bench.ps1 -Target BENCH-B 做一次图片密集场景
        的内存测量，对 private_bytes 做阈值判断；
-    6.（T44 新增）调用 ci\run_fuzz.ps1，其非零退出码直接计入整体失败。
+    6.（T44 新增）调用 ci\run_fuzz.ps1，其非零退出码直接计入整体失败；
+    7.（T69 新增）调用 bench\run_bench.ps1 -Target BENCH-C 做一次高亮最坏
+       情况场景的首屏与内存测量，只打印/记录数值，不做阈值判断（04 没有为
+       这份语料定线，不自造门槛，见 bench/BENCH-C.md）；
+    8.（T69 新增）调用 ci\verify_assoc.ps1（T61 建好的文件关联注册表零残留
+       验收脚本），其非零退出码直接计入整体失败。
     任一项超标 / 任一步骤非零退出，则本脚本以非零退出码结束。
 
     重要口径说明（必须诚实注明，不能不声不响套用文档数字）：
@@ -111,9 +116,20 @@
     人为制造"0 秒内必然判定为卡死"从而让 run_fuzz.ps1 必然非零退出，验证
     本脚本能正确把这个非零退出码计入整体失败（而不是被吞掉）。
 
+.PARAMETER NBenchC
+    （T69 新增）BENCH-C 测量轮数，透传给 run_bench.ps1 -Target BENCH-C。
+    默认 5（只记录趋势，不设门禁，不追求和 BENCH-A 同样的统计功效，
+    轮数与 NBenchB 一致）。
+
+.PARAMETER SkipVerifyAssoc
+    （T69 新增）跳过 ci\verify_assoc.ps1 这一步。仅用于本地调试其它门禁项
+    时节省时间（该脚本会真实读写 HKCU\Software\Classes 下的注册表），
+    CI 环境下不应加这个开关。
+
 .EXAMPLE
     powershell -File ci\check_budget.ps1 -N 10
-    本地手动验证：跑 10 轮暖启动测量并做门禁判断（含 BENCH-B 内存与 fuzz 门禁）。
+    本地手动验证：跑 10 轮暖启动测量并做门禁判断（含 BENCH-B/BENCH-C 记录、
+    fuzz 与 verify_assoc 门禁）。
 #>
 
 param(
@@ -127,7 +143,9 @@ param(
     [int]$NBenchB = 5,
     [double]$HighlightExeSizeThresholdBytes = 394240,
     [switch]$SkipFuzz,
-    [int]$FuzzTimeoutSeconds = -1
+    [int]$FuzzTimeoutSeconds = -1,
+    [int]$NBenchC = 5,
+    [switch]$SkipVerifyAssoc
 )
 
 $ErrorActionPreference = "Stop"
@@ -144,7 +162,7 @@ $runBenchScript = Join-Path $repoRoot "bench\run_bench.ps1"
 # 记录一次失败原因，最后统一汇总输出，方便一次性看到"到底超了几项"。
 $failures = @()
 
-Write-Host "==== mdvn CI 性能门禁（M0 T16 + M1 T44）===="
+Write-Host "==== mdvn CI 性能门禁（M0 T16 + M1 T44 + M2 T69）===="
 Write-Host "当前门禁阈值参照 M0/M1 表格但测量口径与文档严格定义不完全一致，这是已知简化，非最终门禁。"
 Write-Host ""
 
@@ -152,7 +170,7 @@ Write-Host ""
 
 $needBuild = $ForceRebuild -or (-not (Test-Path $exePath)) -or (-not (Test-Path $testsExePath))
 if ($needBuild) {
-    Write-Host "[1/6] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
+    Write-Host "[1/8] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
     if (-not (Test-Path $buildDir)) {
         cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
         if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
@@ -160,7 +178,7 @@ if ($needBuild) {
     cmake --build $buildDir --config $BuildConfig
     if ($LASTEXITCODE -ne 0) { throw "CMake 构建失败，退出码 $LASTEXITCODE" }
 } else {
-    Write-Host "[1/6] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
+    Write-Host "[1/8] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
 }
 
 if (-not (Test-Path $exePath)) { throw "构建后仍找不到 mdvn.exe：$exePath" }
@@ -169,7 +187,7 @@ if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 mdvn_tests.ex
 # ------------------------- 第二步：单元测试 -------------------------
 
 Write-Host ""
-Write-Host "[2/6] 运行 mdvn_tests.exe ..."
+Write-Host "[2/8] 运行 mdvn_tests.exe ..."
 # 注意：PowerShell 5.1 下，$ErrorActionPreference = "Stop" 时，原生程序往
 # stderr 写内容会被包装成终止性 ErrorRecord 抛出，即便退出码是 0（mdvn_tests
 # 的汇总行走的就是 stderr）。这里临时降级为 "Continue"，只靠 $LASTEXITCODE
@@ -188,7 +206,7 @@ if ($testsExitCode -ne 0) {
 # ------------------------- 第三步：暖启动性能测量 -------------------------
 
 Write-Host ""
-Write-Host "[3/6] 运行 bench\run_bench.ps1 做暖启动测量（BENCH-A，N=$N）..."
+Write-Host "[3/8] 运行 bench\run_bench.ps1 做暖启动测量（BENCH-A，N=$N）..."
 & $runBenchScript -N $N -MdvnExe $exePath
 if ($LASTEXITCODE -ne 0) {
     throw "run_bench.ps1 执行失败，退出码 $LASTEXITCODE"
@@ -232,7 +250,7 @@ if ($privateBytesMB -gt $PrivateBytesThresholdMB) {
 # ------------------------- 第四步：exe 体积 -------------------------
 
 Write-Host ""
-Write-Host "[4/6] 记录 exe 体积基线..."
+Write-Host "[4/8] 记录 exe 体积基线..."
 $exeSizeBytes = (Get-Item $exePath).Length
 $exeSizeMB = $exeSizeBytes / 1MB
 Write-Host "mdvn.exe 体积：$([Math]::Round($exeSizeMB, 4)) MB（$exeSizeBytes 字节）"
@@ -257,7 +275,7 @@ if ($exeSizeBytes -gt $HighlightExeSizeThresholdBytes) {
 # ------------------------- 第五步：BENCH-B 图片密集场景内存门禁（T44） -------------------------
 
 Write-Host ""
-Write-Host "[5/6] 运行 bench\run_bench.ps1 -Target BENCH-B 做图片密集场景内存测量（N=$NBenchB）..."
+Write-Host "[5/8] 运行 bench\run_bench.ps1 -Target BENCH-B 做图片密集场景内存测量（N=$NBenchB）..."
 & $runBenchScript -Target "BENCH-B" -N $NBenchB -MdvnExe $exePath
 if ($LASTEXITCODE -ne 0) {
     throw "run_bench.ps1 -Target BENCH-B 执行失败，退出码 $LASTEXITCODE"
@@ -288,9 +306,9 @@ if ($benchBPrivateBytesMB -gt $BenchBPrivateBytesThresholdMB) {
 
 Write-Host ""
 if ($SkipFuzz) {
-    Write-Host "[6/6] -SkipFuzz 已指定，跳过 ci\run_fuzz.ps1（仅限本地调试使用，CI 中不应跳过）。"
+    Write-Host "[6/8] -SkipFuzz 已指定，跳过 ci\run_fuzz.ps1（仅限本地调试使用，CI 中不应跳过）。"
 } else {
-    Write-Host "[6/6] 调用 ci\run_fuzz.ps1（畸形文档语料，非零退出即失败）..."
+    Write-Host "[6/8] 调用 ci\run_fuzz.ps1（畸形文档语料，非零退出即失败）..."
     if ($FuzzTimeoutSeconds -ge 0) {
         Write-Host "（-FuzzTimeoutSeconds 覆盖为 $FuzzTimeoutSeconds 秒，仅用于门禁反向验证，正式跑法不应传这个参数）"
         & (Join-Path $scriptDir "run_fuzz.ps1") -BuildConfig $BuildConfig -TimeoutSeconds $FuzzTimeoutSeconds
@@ -302,6 +320,53 @@ if ($SkipFuzz) {
         $failures += "run_fuzz.ps1 退出码为 $fuzzExitCode（应为 0），畸形文档语料未全部通过。"
     } else {
         Write-Host "run_fuzz.ps1 通过（退出码 0）。"
+    }
+}
+
+# ------------------------- 第七步：BENCH-C 高亮最坏情况场景，只记录不设门禁（T69） -------------------------
+# bench/BENCH-C.md 是 T54 造的高亮最坏情况语料，04 没有为它定线，这里只跑一次
+# 测量并把首屏时间与内存的 P95 打印出来记录趋势，不做任何阈值判断，不自造门槛。
+
+Write-Host ""
+Write-Host "[7/8] 运行 bench\run_bench.ps1 -Target BENCH-C 做高亮最坏情况场景测量（N=$NBenchC，只记录不设门禁）..."
+& $runBenchScript -Target "BENCH-C" -N $NBenchC -MdvnExe $exePath
+if ($LASTEXITCODE -ne 0) {
+    throw "run_bench.ps1 -Target BENCH-C 执行失败，退出码 $LASTEXITCODE"
+}
+
+$latestCsvBenchC = Get-ChildItem -Path $benchDir -Filter "results_*.csv" |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $latestCsvBenchC) { throw "未找到 BENCH-C 测量产出的 results_*.csv，无法记录数值。" }
+if ($latestCsvBenchC.FullName -eq $latestCsvBenchB.FullName) {
+    throw "BENCH-C 的 CSV 与 BENCH-B 的 CSV 是同一份文件，测量顺序可能有误，无法信任本次记录。"
+}
+
+$rowsBenchC = Import-Csv -Path $latestCsvBenchC.FullName
+$benchCFirstPaintP95 = Get-P95FromRows -rows $rowsBenchC -field "t_process_to_present_ms"
+$benchCPrivateBytesP95 = Get-P95FromRows -rows $rowsBenchC -field "private_bytes"
+$benchCPrivateBytesMB = $benchCPrivateBytesP95 / 1MB
+
+Write-Host ""
+Write-Host "BENCH-C 首屏时间 t_process_to_present_ms 的 P95（N=$NBenchC）：$([Math]::Round($benchCFirstPaintP95, 3)) ms（仅记录，不设门禁）"
+Write-Host "BENCH-C private_bytes 的 P95（N=$NBenchC）：$([Math]::Round($benchCPrivateBytesMB, 3)) MB（仅记录，不设门禁）"
+Write-Host "口径说明：04 没有为高亮最坏情况语料定线，这里不自造门槛，只用于观察趋势，见 bench/BENCH-C.md。"
+
+# ------------------------- 第八步：文件关联注册表零残留验收（T61 接入，T69） -------------------------
+# ci\verify_assoc.ps1 会真实读写 HKCU\Software\Classes 下的注册表（注册 md
+# 关联再卸载），这是它自身设计好的行为，脚本自己以 --unregister 收尾清理，
+# 安全性已在 T61 验证过，这里只是把它的非零退出码接入整体门禁。
+
+Write-Host ""
+if ($SkipVerifyAssoc) {
+    Write-Host "[8/8] -SkipVerifyAssoc 已指定，跳过 ci\verify_assoc.ps1（仅限本地调试使用，CI 中不应跳过）。"
+} else {
+    Write-Host "[8/8] 调用 ci\verify_assoc.ps1（文件关联注册表零残留验收，非零退出即失败）..."
+    & (Join-Path $scriptDir "verify_assoc.ps1") -ExePath $exePath
+    $verifyAssocExitCode = $LASTEXITCODE
+    if ($verifyAssocExitCode -ne 0) {
+        $failures += "verify_assoc.ps1 退出码为 $verifyAssocExitCode（应为 0），文件关联注册表验收未通过。"
+    } else {
+        Write-Host "verify_assoc.ps1 通过（退出码 0）。"
     }
 }
 

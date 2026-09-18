@@ -29,10 +29,12 @@
     高于 -Target（两者都给时以 -BenchFile 为准）。
 
 .PARAMETER Target
-    语料预设名（T42 新增），是 -BenchFile 的语法糖：
+    语料预设名（T42 新增，T69 补充 BENCH-C），是 -BenchFile 的语法糖：
     "BENCH-A"（默认，等价于原有行为，语料文件 bench\BENCH-A.md）、
     "BENCH-B"（图片密集场景，语料文件 bench\BENCH-B.md，用于验证图片密集
-    文档的峰值内存门槛）。只在调用方未显式传 -BenchFile 时生效。
+    文档的峰值内存门槛）、"BENCH-C"（T54 新增的高亮最坏情况语料，语料文件
+    bench\BENCH-C.md，只用于记录趋势，不设门禁）。只在调用方未显式传
+    -BenchFile 时生效。
 
 .EXAMPLE
     powershell -File bench\run_bench.ps1 -N 20
@@ -52,7 +54,7 @@ param(
     [switch]$Cold,
     [string]$MdvnExe = "build\src\Release\mdvn.exe",
     [string]$BenchFile,
-    [ValidateSet("BENCH-A", "BENCH-B")]
+    [ValidateSet("BENCH-A", "BENCH-B", "BENCH-C")]
     [string]$Target = "BENCH-A",
     [string]$RamMapPath = "RAMMap64.exe"
 )
@@ -64,6 +66,7 @@ $ErrorActionPreference = "Stop"
 if (-not $PSBoundParameters.ContainsKey('BenchFile')) {
     $BenchFile = switch ($Target) {
         "BENCH-B" { "bench\BENCH-B.md" }
+        "BENCH-C" { "bench\BENCH-C.md" }
         default   { "bench\BENCH-A.md" }
     }
 }
