@@ -65,6 +65,18 @@ public:
     // 当前生效的缩放系数(离散档位之一)。
     float Scale() const;
 
+    /**
+     * 把任意浮点缩放钳制到 T29 固定的 8 个离散档位
+     * {0.8, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0} 中最近的一个。静态函数,
+     * 不依赖 `FontSubsystem` 实例、不触发任何 DirectWrite 调用,供
+     * `state.ini` 的 `zoom` 键解析(T57)复用同一份档位表,避免两处各存
+     * 一份容易走样的常量。
+     * @param scale 任意缩放浮点值。
+     * @return 8 个档位中距 `scale` 最近的一个。
+     * @example float z = mdvn::FontSubsystem::ClampToNearestZoomLevel(1.31f); // 1.3f
+     */
+    static float ClampToNearestZoomLevel(float scale);
+
     // 放大一档(Ctrl+=);已在最大档时保持不变。返回生效后的缩放系数。
     float ZoomIn();
 

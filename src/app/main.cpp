@@ -321,7 +321,9 @@ void OnFirstPresentBenchHook(void*) {
 }
 
 // T56:窗口矩形去抖到点、或窗口即将销毁前,把当前实时矩形写进 state.ini。
-// 走 T55 的"读-改-写 + 命名互斥体"通道(SaveAppSettings 内部),不绕过它。
+// T57:字号缩放变更(Ctrl+=/Ctrl+-/Ctrl+0)后也会复用这同一个钩子(见
+// window.cpp 的 ApplyZoomChange),顺带把当前 zoom 一起写出——两者共用
+// T55 的"读-改-写 + 命名互斥体"通道(SaveAppSettings 内部),不绕过它。
 void OnWindowGeometryChangedHook(void* userData) {
     DocumentHost* host = static_cast<DocumentHost*>(userData);
     if (!host || !host->windowState || !host->settings) return;
@@ -330,6 +332,7 @@ void OnWindowGeometryChangedHook(void* userData) {
     host->settings->winW = host->windowState->winW;
     host->settings->winH = host->windowState->winH;
     host->settings->winMaximized = host->windowState->winMaximized;
+    if (host->fonts) host->settings->zoom = host->fonts->Scale();
     mdvn::SaveAppSettings(*host->settings);
 }
 
@@ -390,6 +393,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     fonts.SetFamilyOverrides(settings.fontBodyPrimary, settings.fontBodyFallback,
                              settings.fontMonoPrimary, settings.fontMonoFallback);
     fonts.Init();
+    // T57:接过 M1 T29 的挂账,启动期把 state.ini 的 zoom 键(已在 ParseIniSettings
+    // 钳制过一次)重新套用到字体子系统——SetScale 内部会再钳一次最近邻,
+    // 双重钳制是幂等的,不会产生副作用。
+    fonts.SetScale(settings.zoom);
 
     // 文档相关数据全部落在这一块 Arena 上;fileMap 与它一样活到 wWinMain
     // 结尾,保证 Document::source 引用的内存(无论来自映射视图还是 arena
@@ -541,6 +548,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 同步写进了 settings.winX/Y/W/H/winMaximized(documentHost.settings 与
     // 这里的 settings 是同一个对象),这里不需要再重复赋值,直接一起写出。
     settings.theme = windowState.themeSetting;
+    // T57:兜底同理——万一本次会话缩放变了但从未触发过 onWindowGeometryChanged
+    // (例如只按了 Ctrl+= 就直接关窗口,没移动/缩放过窗口),这里补上最终值。
+    settings.zoom = fonts.Scale();
     mdvn::SaveAppSettings(settings);
 
     // T36b:正常退出前统一删除本次会话创建过的全部临时文件(裁决:不追踪外部

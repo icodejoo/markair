@@ -5,6 +5,7 @@
 #include "mdvn_test.h"
 #include "../src/util/ini.h"
 #include "../src/shell/theme_state.h"
+#include "../src/text/font.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -102,6 +103,8 @@ MDVN_TEST(Ini_DefaultsAreSafe) {
     MDVN_CHECK_EQ(s.fontBodyFallback[0], L'\0');
     MDVN_CHECK_EQ(s.fontMonoPrimary[0], L'\0');
     MDVN_CHECK_EQ(s.fontMonoFallback[0], L'\0');
+    // T57:默认缩放档位是 1.0。
+    MDVN_CHECK(s.zoom > 0.99f && s.zoom < 1.01f);
     // T56:默认没有存过窗口矩形,winW/winH 必须是 <= 0 的"未设置"哨兵值。
     MDVN_CHECK_EQ(s.winW, 0);
     MDVN_CHECK_EQ(s.winH, 0);
@@ -212,13 +215,65 @@ MDVN_TEST(Ini_FontFamilyOverrides) {
         "font_body_fallback=微软雅黑\n"
         "font_mono_primary=Cascadia Code\n"
         "font_mono_fallback=Courier New\n"
-        "image_cache_mb=64\n"     // 已作废的键:必须被静默忽略
-        "zoom=1.5\n";             // M1 不支持的键:同样忽略
+        "image_cache_mb=64\n";    // 已作废的键:必须被静默忽略
     MDVN_CHECK_EQ(ParseFresh(text, &s), 4u);
     MDVN_CHECK(wcscmp(s.fontBodyPrimary, L"Consolas") == 0);
     MDVN_CHECK(wcscmp(s.fontBodyFallback, L"微软雅黑") == 0);
     MDVN_CHECK(wcscmp(s.fontMonoPrimary, L"Cascadia Code") == 0);
     MDVN_CHECK(wcscmp(s.fontMonoFallback, L"Courier New") == 0);
+}
+
+// 用例(T57 zoom):档位内的精确值原样保持。
+MDVN_TEST(Ini_ZoomExactLevelKept) {
+    AppSettings s;
+    MDVN_CHECK_EQ(ParseFresh("zoom=1.3\n", &s), 1u);
+    MDVN_CHECK(s.zoom > 1.29f && s.zoom < 1.31f);
+}
+
+// 用例(T57 zoom):档位外的浮点值被吸附到最近的离散档位,而不是原样采信
+// (任意浮点会让 layout 缓存抖动,这正是 T29 选离散档位的理由)。
+MDVN_TEST(Ini_ZoomSnapsToNearestLevel) {
+    AppSettings s;
+    MDVN_CHECK_EQ(ParseFresh("zoom=1.31\n", &s), 1u);
+    MDVN_CHECK(s.zoom > 1.29f && s.zoom < 1.31f);  // 吸附到 1.3
+}
+
+// 用例(T57 zoom):超出最大档的值被钳到 2.0(最大档),而不是被当成非法值丢弃。
+MDVN_TEST(Ini_ZoomClampsAboveMax) {
+    AppSettings s;
+    MDVN_CHECK_EQ(ParseFresh("zoom=99\n", &s), 1u);
+    MDVN_CHECK(s.zoom > 1.99f && s.zoom < 2.01f);
+}
+
+// 用例(T57 zoom):非法值(非数字)不生效,回落默认档位 1.0。
+MDVN_TEST(Ini_ZoomInvalidValueFallsBackToDefault) {
+    AppSettings s;
+    MDVN_CHECK_EQ(ParseFresh("zoom=abc\n", &s), 0u);
+    MDVN_CHECK(s.zoom > 0.99f && s.zoom < 1.01f);
+}
+
+// 用例(T57 zoom):ClampToNearestZoomLevel 与 ParseIniSettings 走同一份档位表,
+// 结果必须完全一致(避免两处各存一份容易走样的常量)。
+MDVN_TEST(Ini_ZoomMatchesFontSubsystemClamp) {
+    AppSettings s;
+    ParseFresh("zoom=1.31\n", &s);
+    MDVN_CHECK(s.zoom == mdvn::FontSubsystem::ClampToNearestZoomLevel(1.31f));
+}
+
+// 用例(T57 zoom 写盘 round-trip):写出后再读回,吸附后的值保持不变。
+MDVN_TEST(Ini_ZoomSaveThenLoadRoundTrips) {
+    StateIniBackup backup;
+    DeleteFileW(backup.path);
+
+    AppSettings loaded;
+    LoadAppSettings(&loaded);  // 建立"磁盘为空"的基线
+    loaded.zoom = mdvn::FontSubsystem::ClampToNearestZoomLevel(1.31f);  // 1.3
+
+    MDVN_CHECK(SaveAppSettings(loaded));
+
+    AppSettings readBack;
+    MDVN_CHECK(LoadAppSettings(&readBack));
+    MDVN_CHECK(readBack.zoom > 1.29f && readBack.zoom < 1.31f);
 }
 
 // 用例:没有 '=' 的行、空键名、超长值都不应导致越界或崩溃。

@@ -79,6 +79,22 @@ const wchar_t* PickFamily(const wchar_t* override_, const wchar_t* fallbackDefau
     return (override_ && override_[0] != 0) ? override_ : fallbackDefault;
 }
 
+// 在 kZoomLevels 里找与 scale 最接近的档位下标;SetScale 与
+// ClampToNearestZoomLevel 共用同一份查找逻辑,避免两处各写一遍最近邻算法。
+u32 FindNearestZoomLevelIndex(float scale) {
+    u32 best = 0;
+    float bestDiff = -1.0f;
+    for (u32 i = 0; i < kZoomLevelCount; ++i) {
+        float diff = scale - kZoomLevels[i];
+        if (diff < 0.0f) diff = -diff;
+        if (bestDiff < 0.0f || diff < bestDiff) {
+            bestDiff = diff;
+            best = i;
+        }
+    }
+    return best;
+}
+
 }  // namespace
 
 // 构造一个未初始化的子系统,所有指针清零。
@@ -231,17 +247,13 @@ float FontSubsystem::ApplyZoomIndex(i32 newIndex) {
 
 // 设置缩放系数,钳制到最近的离散档位。
 float FontSubsystem::SetScale(float scale) {
-    u32 best = 0;
-    float bestDiff = -1.0f;
-    for (u32 i = 0; i < kZoomLevelCount; ++i) {
-        float diff = scale - kZoomLevels[i];
-        if (diff < 0.0f) diff = -diff;
-        if (bestDiff < 0.0f || diff < bestDiff) {
-            bestDiff = diff;
-            best = i;
-        }
-    }
-    return ApplyZoomIndex(static_cast<i32>(best));
+    return ApplyZoomIndex(static_cast<i32>(FindNearestZoomLevelIndex(scale)));
+}
+
+// 把任意浮点缩放钳制到最近的离散档位(T57:供 ini.cpp 的 zoom 键解析复用,
+// 不依赖实例、不触发 DirectWrite 调用)。
+float FontSubsystem::ClampToNearestZoomLevel(float scale) {
+    return kZoomLevels[FindNearestZoomLevelIndex(scale)];
 }
 
 // 放大一档。

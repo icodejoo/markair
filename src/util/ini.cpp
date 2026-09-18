@@ -1,5 +1,7 @@
 #include "ini.h"
 
+#include "../text/font.h"  // T57:FontSubsystem::ClampToNearestZoomLevel 供 zoom 键复用档位表
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -60,6 +62,43 @@ bool ParseInt(StrSlice s, i32* out) {
     return true;
 }
 
+// 把一段十进制文本(允许一个小数点、一个前导 '-'/'+')解析成浮点数;
+// 整段必须都是数字/小数点,否则返回 false 让调用方保持原值——与 ParseInt
+// 的"非法值不生效"口径一致(T57:zoom 键用)。
+bool ParseFloat(StrSlice s, float* out) {
+    if (s.len == 0) return false;
+    u32 i = 0;
+    bool negative = false;
+    if (s.data[0] == '-' || s.data[0] == '+') {
+        negative = s.data[0] == '-';
+        i = 1;
+        if (s.len == 1) return false;
+    }
+    double value = 0.0;
+    double frac = 0.1;
+    bool seenDot = false;
+    bool seenDigit = false;
+    for (; i < s.len; ++i) {
+        char c = s.data[i];
+        if (c == '.') {
+            if (seenDot) return false;  // 不允许多个小数点
+            seenDot = true;
+            continue;
+        }
+        if (c < '0' || c > '9') return false;
+        seenDigit = true;
+        if (!seenDot) {
+            value = value * 10.0 + (c - '0');
+        } else {
+            value += (c - '0') * frac;
+            frac *= 0.1;
+        }
+    }
+    if (!seenDigit) return false;
+    *out = static_cast<float>(negative ? -value : value);
+    return true;
+}
+
 // 把 UTF-8 文本解码进固定大小的宽字符缓冲(含结尾 '\0')。
 // 自己实现而不是调 MultiByteToWideChar,是为了让解析层保持"纯函数、不依赖
 // Win32"的可单测性;非法字节按 U+FFFD 处理,与 util/str.cpp 的口径一致。
@@ -115,9 +154,9 @@ void Utf8ToWideFixed(StrSlice s, wchar_t* out, u32 cap) {
 // T55/T56:已知键的固定顺序,写盘时按此顺序追加磁盘原文里缺失的键。
 constexpr const char* kKnownKeys[] = {
     "load_remote_images", "font_body_primary", "font_body_fallback",
-    "font_mono_primary",  "font_mono_fallback", "theme",
+    "font_mono_primary",  "font_mono_fallback", "theme", "zoom",
     "win_x", "win_y", "win_w", "win_h", "win_maximized"};
-constexpr u32 kKnownKeyCount = 11;
+constexpr u32 kKnownKeyCount = 12;
 
 // T55:本进程最近一次 Load/Save 成功后"磁盘上应该有"的配置快照,用来判断
 // SaveAppSettings 调用时哪些键是"本进程真正改动过的"——只有 target 与这份
@@ -215,6 +254,11 @@ bool AppendKnownKeyLine(const char* key, const AppSettings& s, char* out, u32 ca
         if (s.theme == ThemeSetting::Light) v = "light";
         else if (s.theme == ThemeSetting::Dark) v = "dark";
         if (!AppendCStr(out, cap, pos, v)) return false;
+    } else if (strcmp(key, "zoom") == 0) {
+        char buf[32];
+        int n = sprintf_s(buf, sizeof(buf), "%.2f", s.zoom);
+        if (n < 0) return false;
+        if (!AppendBytes(out, cap, pos, buf, static_cast<u32>(n))) return false;
     } else if (strcmp(key, "win_x") == 0) {
         if (!AppendInt(out, cap, pos, s.winX)) return false;
     } else if (strcmp(key, "win_y") == 0) {
@@ -310,6 +354,9 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
     }
     if (target.theme != g_baseline.theme) {
         effective.theme = target.theme;
+    }
+    if (target.zoom != g_baseline.zoom) {
+        effective.zoom = target.zoom;
     }
     if (wcscmp(target.fontBodyPrimary, g_baseline.fontBodyPrimary) != 0) {
         wcscpy_s(effective.fontBodyPrimary, kMaxFontFamilyChars, target.fontBodyPrimary);
@@ -408,6 +455,7 @@ void DefaultAppSettings(AppSettings* out) {
     out->fontMonoPrimary[0] = 0;
     out->fontMonoFallback[0] = 0;
     out->theme = ThemeSetting::System;  // 默认跟随系统
+    out->zoom = 1.0f;  // T57:默认档位,与 FontSubsystem 的 kDefaultZoomIndex 对应
     // T56:winW/winH <= 0 表示"从未存过窗口矩形",window.cpp 据此判断走
     // 系统默认位置/尺寸,不进入越界钳制流程。
     out->winX = 0;
@@ -468,6 +516,18 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
                 applied++;
             } else if (KeyEquals(value, "dark")) {
                 out->theme = ThemeSetting::Dark;
+                applied++;
+            }
+            continue;
+        }
+
+        if (KeyEquals(key, "zoom")) {
+            // T57:钳制到最近的离散档位,而不是直接采信任意浮点(任意浮点
+            // 会让 layout 缓存抖动)。解析失败(非数字)时保持默认值 1.0,
+            // 不计入 applied——与其余键"非法值不生效"的口径一致。
+            float v = 0.0f;
+            if (ParseFloat(value, &v)) {
+                out->zoom = FontSubsystem::ClampToNearestZoomLevel(v);
                 applied++;
             }
             continue;

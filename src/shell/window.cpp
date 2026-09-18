@@ -737,6 +737,12 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
                                       *state->fonts, state->residency);
     SyncScrollBar(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
+    // T57:字号缩放持久化(接过 M1 T29 的挂账)。复用 T56 的
+    // onWindowGeometryChanged 钩子而不是新起一套回调——调用方(main.cpp)的
+    // 钩子实现里已经会顺带读取 state->fonts->Scale() 一起写出,两个持久化
+    // 项走同一条 T55"读-改-写 + 命名互斥体"通道,不绕过它。缩放是离散按键
+    // 触发、不连续,不需要像窗口拖拽那样去抖。
+    if (state->onWindowGeometryChanged) state->onWindowGeometryChanged(state->callbackUserData);
 }
 
 // DPI 变化:先应用系统建议的新窗口矩形,再通知渲染器按新 DPI 重建 D2D 资源。

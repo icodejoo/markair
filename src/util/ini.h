@@ -12,7 +12,14 @@
 //   font_mono_fallback = <族名>   等宽回退族名覆盖
 //   theme              = system|light|dark  主题偏好(T47),大小写不敏感,
 //                        默认 system,非法值回落 system
-// 明确**不含** `image_cache_mb`(随 T32 二次裁决作废)与 `zoom`(裁决 #4,留给 M2)。
+// 明确**不含** `image_cache_mb`(随 T32 二次裁决作废)。
+//
+// T57 追加(接过 M1 T29 的挂账,字号缩放持久化):
+//   zoom = <浮点值>   字号缩放系数,读入后钳制到 FontSubsystem 固定的 8 个
+//                      离散档位 {0.8, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0}
+//                      中最近的一个(`FontSubsystem::ClampToNearestZoomLevel`),
+//                      不直接采信任意浮点(任意浮点会让 layout 缓存抖动);
+//                      非法值(解析失败)回落默认档位 1.0。
 //
 // T56 追加(裁决 #8:窗口状态记忆,全局一份 + 层叠偏移):
 //   win_x/win_y/win_w/win_h = 整数    上次窗口的还原态矩形(物理像素,
@@ -73,6 +80,9 @@ struct AppSettings {
     wchar_t fontMonoPrimary[kMaxFontFamilyChars];
     wchar_t fontMonoFallback[kMaxFontFamilyChars];
     ThemeSetting theme;                            // 主题偏好,默认 ThemeSetting::System
+
+    // T57:字号缩放系数,恒为 FontSubsystem 8 个离散档位之一,默认 1.0。
+    float zoom;
 
     // T56:上次窗口的还原态矩形(物理像素)。winW/winH <= 0 表示"没有存过",
     // 调用方(window.cpp)据此判断要不要走系统默认位置/尺寸,而不是走越界钳制。
