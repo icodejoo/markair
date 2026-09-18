@@ -225,6 +225,65 @@ private:
         if (!rule_.supportsRawStrings) return false;
         u8 c = static_cast<u8>(code_[pos_]);
 
+        // Rust:生命周期标注 'a 与字符字面量 'x'/'\n'/'\'' 的区分。必须写在
+        // TryQuotedString 之前——否则 'a 会被通用扫描当成字符字面量的开
+        // 引号,一路吞到文件里下一个单引号(T67 语料点名的经典陷阱)。
+        if (rule_.id == kLanguageRust && c == '\'') {
+            u32 p = pos_ + 1;
+            if (p < len_ && code_[p] == '\\' && p + 1 < len_) {
+                // 转义字符字面量,如 '\n' '\t' '\''。转义序列固定占 2 字节
+                // (反斜杠+1 字节),紧跟闭合单引号才算合法字符字面量。
+                u32 afterEscape = p + 2;
+                if (afterEscape < len_ && code_[afterEscape] == '\'') {
+                    u32 start = pos_;
+                    pos_ = afterEscape + 1;
+                    Emit(start, pos_, kTokenString);
+                    return true;
+                }
+                // 不是标准转义字符字面量形态,退化交给 TryQuotedString。
+            } else if (p < len_ && IsIdentStart(static_cast<u8>(code_[p]))) {
+                u32 identStart = p;
+                u32 q = p;
+                while (q < len_ && IsIdentCont(static_cast<u8>(code_[q]))) ++q;
+                if (q == identStart + 1 && q < len_ && code_[q] == '\'') {
+                    // 单字符字符字面量,如 'x'。
+                    u32 start = pos_;
+                    pos_ = q + 1;
+                    Emit(start, pos_, kTokenString);
+                    return true;
+                }
+                // 生命周期标注:' + 标识符,不吞闭合引号(本来就没有)。
+                u32 start = pos_;
+                pos_ = q;
+                Emit(start, pos_, kTokenBuiltin);
+                return true;
+            }
+            // 其余情况(如 ' 后紧跟数字/符号)交给 TryQuotedString 按普通
+            // 字符字面量扫描。
+        }
+
+        // Rust 原始字符串 r#"..."#(仅支持单个 # 的最简形式,与 C++ 分支的
+        // 取舍一致)。
+        if (rule_.id == kLanguageRust && c == 'r' && MatchesAt(code_, len_, pos_, "r#\"")) {
+            u32 start = pos_;
+            pos_ += 3;
+            while (pos_ < len_ && !MatchesAt(code_, len_, pos_, "\"#")) ++pos_;
+            if (pos_ < len_) pos_ += 2;
+            Emit(start, pos_, kTokenString);
+            return true;
+        }
+
+        // Java 文本块 """..."""(三重双引号,可直接复用 Python 三引号的
+        // 消费逻辑)。
+        if (rule_.id == kLanguageJava && c == '"' && MatchesAt(code_, len_, pos_, "\"\"\"")) {
+            u32 start = pos_;
+            pos_ += 3;
+            while (pos_ < len_ && !MatchesAt(code_, len_, pos_, "\"\"\"")) ++pos_;
+            if (pos_ < len_) pos_ += 3;
+            Emit(start, pos_, kTokenString);
+            return true;
+        }
+
         // C++ 原始字符串 R"(...)"(仅支持这个最简单的定界符形式)。
         if (rule_.id == kLanguageCpp && c == 'R' && MatchesAt(code_, len_, pos_, "R\"(")) {
             u32 start = pos_;

@@ -11,8 +11,10 @@ using mdvn::GetLanguageRule;
 using mdvn::kLanguageC;
 using mdvn::kLanguageCpp;
 using mdvn::kLanguageGo;
+using mdvn::kLanguageJava;
 using mdvn::kLanguageJson;
 using mdvn::kLanguagePython;
+using mdvn::kLanguageRust;
 using mdvn::kLanguageShell;
 using mdvn::kMaxTokensPerBlock;
 using mdvn::kTokenBuiltin;
@@ -181,6 +183,115 @@ MDVN_TEST(Lexer_GoBacktickRawString) {
     LexResult r = LexCodeBlock(Slice(code), rule, &arena);
     MDVN_CHECK_EQ(r.tokens.len, 1u);
     MDVN_CHECK_EQ(r.tokens[0].type, static_cast<mdvn::u8>(kTokenString));
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+// ---- Rust 生命周期标注 vs 字符字面量(T67 语料发现的必修缺陷,修复回归) ----
+
+MDVN_TEST(Lexer_RustLifetimeNotTreatedAsCharLiteral) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    // sample.rs 里的真实陷阱写法:泛型生命周期标注紧跟真实字符字面量。
+    const char* code = "struct Greeter<'a> { name: &'a str }";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    // 'a 不应被当成未闭合字符字面量吞掉整段代码;后面的标识符/标点仍能
+    // 正常各自成 token。
+    for (u32 i = 0; i < r.tokens.len; ++i) {
+        MDVN_CHECK(r.tokens[i].type != static_cast<mdvn::u8>(kTokenString));
+    }
+    MDVN_CHECK(r.tokens.len > 5u);
+}
+
+MDVN_TEST(Lexer_RustLifetimeTokenCoversQuoteAndIdent) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    const char* code = "'a>";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK(r.tokens.len >= 1);
+    MDVN_CHECK(TokenTextEquals(code, r.tokens[0], "'a"));
+    MDVN_CHECK(r.tokens[0].type != static_cast<mdvn::u8>(kTokenString));
+}
+
+MDVN_TEST(Lexer_RustCharLiteralStillRecognized) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    const char* code = "let ch: char = 'x';";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    bool foundCharLiteral = false;
+    for (u32 i = 0; i < r.tokens.len; ++i) {
+        if (TokenTextEquals(code, r.tokens[i], "'x")) {
+            // 不应该走生命周期分支
+            MDVN_CHECK(false);
+        }
+        if (r.tokens[i].type == static_cast<mdvn::u8>(kTokenString) &&
+            TokenTextEquals(code, r.tokens[i], "'x'")) {
+            foundCharLiteral = true;
+        }
+    }
+    MDVN_CHECK(foundCharLiteral);
+}
+
+MDVN_TEST(Lexer_RustEscapedNewlineCharLiteralRecognized) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    const char* code = "'\\n'";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
+    MDVN_CHECK_EQ(r.tokens[0].type, static_cast<mdvn::u8>(kTokenString));
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+MDVN_TEST(Lexer_RustEscapedQuoteCharLiteralRecognized) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    const char* code = "'\\''"; // '\'' 转义单引号字符字面量
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
+    MDVN_CHECK_EQ(r.tokens[0].type, static_cast<mdvn::u8>(kTokenString));
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+// ---- Rust r#"..."# 原始字符串 ----
+
+MDVN_TEST(Lexer_RustRawStringWithHashCloses) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    // sample.rs 里的真实陷阱:内部含裸双引号,不应提前闭合。
+    const char* code = "r#\"path: \"C:\\Users\\test\"\"#";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
+    MDVN_CHECK_EQ(r.tokens[0].type, static_cast<mdvn::u8>(kTokenString));
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+MDVN_TEST(Lexer_RustRawStringUnclosedScansToEnd) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageRust);
+    const char* code = "r#\"never closes";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+// ---- Java """文本块""" ----
+
+MDVN_TEST(Lexer_JavaTextBlockWithBareQuotesInsideDoesNotSplit) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageJava);
+    // sample.java 里的真实陷阱:文本块内部含裸双引号,不应提前闭合。
+    const char* code = "\"\"\"\n内部可以直接写引号 \"不需要转义\",\n\"\"\"";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
+    MDVN_CHECK_EQ(r.tokens[0].type, static_cast<mdvn::u8>(kTokenString));
+    MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
+}
+
+MDVN_TEST(Lexer_JavaTextBlockUnclosedScansToEnd) {
+    MDVN_TEST_ARENA(arena, 4 * 1024 * 1024);
+    const LanguageRule& rule = GetLanguageRule(kLanguageJava);
+    const char* code = "\"\"\"never closes";
+    LexResult r = LexCodeBlock(Slice(code), rule, &arena);
+    MDVN_CHECK_EQ(r.tokens.len, 1u);
     MDVN_CHECK_EQ(r.tokens[0].len, static_cast<mdvn::u32>(strlen(code)));
 }
 
