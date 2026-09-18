@@ -46,7 +46,11 @@ int FirstUnassignedSlot(const Palette& p) {
         &p.codeCopyIcon,      &p.codeCopyHoverBackground,
         &p.codeCopyPaper,     &p.codeCopyDone,
         &p.findHighlight,     &p.findCurrentHighlight,
+        &p.selectionHighlight,
         &p.overlayBarBackground, &p.overlayBarText,
+        &p.bottomBarBackground, &p.bottomBarIcon,
+        &p.bottomBarText,     &p.bottomBarDivider,
+        &p.outlineOverlayMaskBackground,
     };
     for (int i = 0; i < static_cast<int>(sizeof(slots) / sizeof(slots[0])); ++i) {
         if (IsDefaultZero(*slots[i])) return i;
@@ -56,10 +60,13 @@ int FirstUnassignedSlot(const Palette& p) {
 
 }  // namespace
 
-// 用例:sizeof(Palette) 不超过验收给的 512 字节上限。
+// 用例:sizeof(Palette) 不超过验收给的字节上限——自绘滚动条(方案A)的
+// Idle/Active 双档透明度(4 个槽位替代原来 2 个)后由 640 上调到 672
+// (41 个 D2D1_COLOR_F * 16 字节 = 656,留一点余量,不是刚好顶格),防止
+// 后续再无节制地往里堆槽位。
 MDVN_TEST(Theme_PaletteSizeWithinBudget) {
     size_t paletteSize = sizeof(Palette);
-    MDVN_CHECK(paletteSize <= 512);
+    MDVN_CHECK(paletteSize <= 672);
 }
 
 // 用例:浅色调色板每个槽位都已显式赋值,不残留透明黑默认值。

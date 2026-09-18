@@ -20,6 +20,7 @@
 #include "../layout/layout.h"
 #include "../render/renderer.h"
 #include "../text/font.h"
+#include "bottom_bar.h"
 #include "clipboard.h"
 #include "find.h"
 #include "history.h"
@@ -27,10 +28,23 @@
 #include "navigate.h"
 #include "outline_panel.h"
 #include "scroll.h"
+#include "scrollbar.h"
+#include "selection.h"
 #include "theme_state.h"
 #include "window_state.h"
 
 namespace mdvn {
+
+/**
+ * 自绘滚动条(方案A)当前正在拖动哪一个实例;`None` 表示都没有。
+ * 正文与大纲侧栏各自的滑块几何/内容高度不同,但共用同一套
+ * shell/scrollbar.h 纯函数,这里只记"当前拖的是哪一个"。
+ */
+enum class ScrollbarDragTarget {
+    None,
+    Main,     // 正文滚动条
+    Outline,  // 大纲侧栏滚动条
+};
 
 /**
  * 窗口运行期状态:外壳层需要用到的各子系统引用 + 当前滚动偏移。
@@ -155,6 +169,72 @@ struct WindowState {
     // 未显式初始化的字段(不在 CreateMainWindow 之前的聚合初始化列表里)
     // 按聚合初始化规则清零,等价于空字符串。
     wchar_t currentDocumentPath[kHistoryPathCapacity];
+
+    // T76:逐帧重绘耗时埋点钩子,与上面 onWindowCreated/onFirstPresent 同一套
+    // "外壳层不认识 bench 模块"的约定。三者分别在一次重绘的开始、虚拟化阶段
+    // 结束、D2D 绘制返回时被调用;为空(默认/非 --bench)时每帧只多两三次
+    // 空指针判断,不产生任何计时调用。
+    void (*onFrameBegin)(void* userData);
+    void (*onFrameLayoutDone)(void* userData);
+    void (*onFrameEnd)(void* userData);
+
+    // T78:内存泄漏排查探针专用的"同进程内连续循环"驱动开关(--bench-loop=
+    // <kind>:<count>),与上面几组回调同一套"外壳层不认识 bench 模块"的约定,
+    // 默认(不带该参数)全为零值,不产生任何额外行为。
+    // benchLoopKind: 0=未启用,1=就地换文档(复用 T36 openDocumentInPlace),
+    // 2=主题循环(Ctrl+Shift+T 同路径),3=大纲侧栏开关(Ctrl+\ 同路径),
+    // 4=F5 重载(同路径)。
+    int benchLoopKind;
+    int benchLoopTotal;   // 目标循环次数
+    int benchLoopDone;    // 内部状态:已完成次数,调用方应初始化为 0
+    // benchLoopKind==1 时使用:待循环打开的语料文件路径数组与个数,由调用方
+    // (main.cpp)持有,生命周期须覆盖整个消息循环;其余 kind 下可为空/0。
+    const wchar_t* const* benchLoopFiles;
+    int benchLoopFileCount;
+    // 每完成一次循环动作调用一次(1-based 序号),为空表示不采样。
+    void (*onBenchLoopTick)(void* userData, int iteration);
+
+    // T80:鼠标拖选文本 + Ctrl+C 复制。为空表示不支持选择(纯渲染场景/单测),
+    // 此时拖选与 Ctrl+C 静默无效,其余功能不受影响。生命周期须覆盖整个消息
+    // 循环,由调用方(main.cpp)持有并传入指针。
+    SelectionState* selection;
+    // 提取选区跨块纯文本用的临时 Arena(Ctrl+C 复制前整体 Reset),与
+    // clipboardScratch 分开是为了不让"复制选中文本"和"点代码块复制按钮"
+    // 互相抹掉对方正在用的临时缓冲。为空时 Ctrl+C 静默无效。
+    Arena* selectionScratch;
+
+    // 自绘滚动条(方案A,替代原生 WS_VSCROLL,2026-09-18):拖动滑块过程中的
+    // 状态机,`None` 表示当前没有在拖任何滚动条。与 T80 的文本拖选(见上面
+    // `selection`)互斥——按下时优先判定是否命中滑块,命中则不再进入拖选。
+    ScrollbarDragTarget scrollbarDragTarget;
+    float scrollbarDragStartMouseYDip;   // 拖动起始时的鼠标纵坐标(DIP)
+    float scrollbarDragStartScrollY;     // 拖动起始时的滚动偏移(DIP,正文/侧栏各自的)
+
+    // 自绘滚动条 Idle/Active 双档透明度(2026-09-18):鼠标是否落在对应滚动条
+    // 的横向范围内(不含正在拖动的情况——拖动态由 scrollbarDragTarget 单独
+    // 判断,渲染层把"悬浮"和"拖动"都当 Active 处理,见 window.cpp 的调用点)。
+    bool mainScrollbarHover;
+    bool outlineScrollbarHover;
+
+    // T63b:大纲侧栏宽度支持拖拽调整(2026-09-18)。DIP,初始值由
+    // CreateMainWindow 设为 kOutlinePanelWidthDip 的默认值;拖拽范围钳制在
+    // [kOutlinePanelMinWidthDip, kOutlinePanelMaxWidthDip](见 outline_panel.h)。
+    float outlinePanelWidthDip;
+    bool outlinePanelResizing;            // 是否正在拖拽侧栏右边缘调宽度
+    float outlinePanelResizeStartMouseXDip;  // 拖拽起始时的鼠标横坐标(DIP)
+    float outlinePanelResizeStartWidthDip;   // 拖拽起始时的侧栏宽度(DIP)
+
+    // 底部栏右侧状态区(2026-09-18 新增):与 `currentDocumentPath` 同步维护
+    // 的当前文档字节数,换文档成功的每处都要一并更新,画进状态区的
+    // "路径 (大小)"文字。未打开文件时保持聚合初始化留下的 0。
+    u64 currentDocumentSizeBytes;
+
+    // 底部栏左侧图标按钮的悬浮态(2026-09-18 新增,取代常驻文字标签):
+    // `WM_MOUSEMOVE` 用现有的 `IsPointInBottomBar`/`HitTestBottomBar` 判定
+    // 结果写这里,`None` 表示鼠标未落在任何按钮上(含落在右侧状态区)。
+    // 渲染层据此在悬浮的按钮上方画一个纯 D2D 文字气泡当提示,不引入
+    // Win32 TOOLTIPS_CLASS 控件(风险更小、改动更集中)。
+    BottomBarButton bottomBarHoverButton;
 };
 
 /**

@@ -526,6 +526,24 @@ Document ParseMarkdown(StrSlice source, Arena* arena) {
     // 不需要再区分返回码(截断与否已经记录在 doc.truncated)。
     md_parse(source.data, static_cast<MD_SIZE>(source.len), &parser, &ctx);
 
+    // T76:截断收尾。`childCount` 只在 OnLeaveBlock 里回填,而触发截断后
+    // (ctx.aborted)md4c 不再派发任何回调、OnLeaveBlock 自身也第一行就返回,
+    // 于是**所有还开着的祖先块** —— 包括最外层的 Document 块(下标 0)——
+    // 的 childCount 永远停在 0。布局层从块 0 开始递归(layout.cpp 的
+    // LayoutSubtree(0, ...)),childCount 为 0 就意味着"整份文档没有任何内容":
+    // 实测 10 MB 语料因此排出 totalHeight=0 的空布局,窗口画面全空,同时那
+    // 8192 个几何全零的块被虚拟化判定为"全部可见",一次首帧就创建并绘制了
+    // 7355 个 IDWriteTextLayout(首帧 1.5 s 的真正来源)。
+    // 这里按"提前闭合"语义把栈上剩余的块逐个回填成"一直吃到已解析的末尾",
+    // 截断文档于是能正常显示已解析的那部分前缀,而不是一片空白。
+    if (ctx.aborted) {
+        u32 endIdx = doc.blocks.Size();
+        while (ctx.blockStackSize > 0) {
+            Block& b = doc.blocks[ctx.blockStack[--ctx.blockStackSize]];
+            b.childCount = endIdx - b.firstChildIdx;
+        }
+    }
+
     return doc;
 }
 

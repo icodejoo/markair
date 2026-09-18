@@ -26,8 +26,28 @@
 
 namespace mdvn {
 
-// 侧栏固定宽度(DIP),不做拖拽调宽;随 DPI/字号缩放(调用方按需再乘缩放系数)。
+// 侧栏默认宽度(DIP),随 DPI/字号缩放(调用方按需再乘缩放系数)。T63b 起
+// 支持拖拽调宽(WindowState::outlinePanelWidthDip 才是运行期的实际宽度),
+// 这个常量只作为"打开侧栏时的初始值"与其余不知道运行期宽度的场景(比如
+// render 层内部按同一数值重复定义的那份,见 renderer.cpp 顶部注释)的兜底。
 constexpr float kOutlinePanelWidthDip = 220.0f;
+
+// 拖拽调宽的合法区间(DIP):太窄放不下标题文字,太宽会挤占太多正文空间。
+constexpr float kOutlinePanelMinWidthDip = 160.0f;
+constexpr float kOutlinePanelMaxWidthDip = 480.0f;
+
+/**
+ * 把拖拽中的侧栏宽度夹到合法区间 `[kOutlinePanelMinWidthDip, kOutlinePanelMaxWidthDip]`。
+ * 纯数字函数,不依赖 Win32,可脱离窗口环境单测。
+ * @param widthDip 待夹取的宽度(DIP)。
+ * @return 夹取后的合法宽度(DIP)。
+ * @example float w = mdvn::ClampOutlinePanelWidth(50.0f); // 得 160
+ */
+inline float ClampOutlinePanelWidth(float widthDip) {
+    if (widthDip < kOutlinePanelMinWidthDip) return kOutlinePanelMinWidthDip;
+    if (widthDip > kOutlinePanelMaxWidthDip) return kOutlinePanelMaxWidthDip;
+    return widthDip;
+}
 
 // 每条大纲条目的行高(DIP),条目 y 坐标 = 下标 * 本常量。
 constexpr float kOutlineItemHeightDip = 28.0f;

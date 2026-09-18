@@ -17,7 +17,7 @@
 | 3 | `doc` | `src/doc/` | 文件读取 + 编码嗅探;调用 md4c;把回调流转成"文档模型" | md4c |
 | 4 | `layout` | `src/layout/` | 文档模型 → 行盒/块盒的布局结果(按宽度排版,支持增量重排) | 5 |
 | 5 | `text` | `src/text/` | DirectWrite 封装:字体解析与缓存、`IDWriteTextLayout` 生成、度量 | DirectWrite |
-| 6 | `render` | `src/render/` | Direct2D 设备/交换链管理、视口裁剪绘制、主题色、软件渲染回退 | Direct2D,5 |
+| 6 | `render` | `src/render/` | Direct2D 渲染目标管理(**恒定软件渲染,见 §9 的架构决策**)、视口裁剪绘制、主题色 | Direct2D,5 |
 | 7 | `assets` | `src/assets/` | 图片加载(WIC)、LRU 位图缓存、占位符 | WIC |
 | 8 | `watch` | `src/watch/` | `ReadDirectoryChangesW` 监听 + 去抖 + 重载通知 | — |
 | 9 | `hl` | `src/hl/` | 代码块极简词法高亮(M2) | — |
@@ -120,9 +120,27 @@ Inline { flags(bold/italic/code/strike/link), textOffset, textLen, linkTargetIdx
 
 ## 9. 错误与降级路径
 
+### 架构决策:恒定软件渲染(M3 裁决 #3 定稿)
+
+`src/render/renderer.cpp:379` **无条件**使用 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`
+(`CreateHwndRenderTarget`),**没有硬件探测、没有回退分支、也没有 mdvn 自建的 DXGI
+交换链**。依据是 M0 实测(`memory.md:103~108`):硬件加速目标会拉起 GPU 驱动模块,
+进程私有内存 **38 MB**;软件渲染目标的裸窗口基线是 **9.0~9.4 MB**。01 §4 的常驻内存
+硬指标 15 MB 只有后者做得到,且 38 MB 里的大头是驱动私有页,mdvn 侧无从优化。
+
+由此派生的两条架构事实,写在这里避免后续任务再次误判:
+
+1. **"软件渲染"对 mdvn 而言是主路径,不是降级路径。** 无 GPU / RDP / 老驱动这些
+   场景走的是同一条代码路径,不存在"另一条分支"需要单独验证功能正确性——需要
+   单独验证的只有帧率(T76 已做,见 `bench/M3-RENDER.md`)。
+2. **绘制成本全部落在 CPU 上**,所以"每帧只画可见的东西"是硬约束而不是优化偏好:
+   §5 的"可见 ± 1 屏"虚拟化必须在**布局层与渲染层两处**同时成立(T76 曾实测到
+   渲染层缺了这一层裁剪,10 MB 文档首帧因此花掉 1.5 s)。
+
 | 情况 | 行为 |
 |---|---|
-| D3D/D2D 硬件设备创建失败 | 回退软件渲染目标 |
+| ~~D3D/D2D 硬件设备创建失败~~ | **不适用**:从不创建硬件设备,见上方架构决策 |
+| D2D 软件渲染目标创建失败(极端内存不足) | 保持目标为空,静默跳过本帧,下次绘制重试(不崩溃) |
 | 设备丢失(`D2DERR_RECREATE_TARGET`) | 重建设备资源,保留布局 |
 | 文件不存在/无权限 | 窗口内显示错误态,不弹 MessageBox |
 | 文件超大(> 建议 50MB) | 提示并提供"仍然打开"选项,或只加载前 N MB |

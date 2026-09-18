@@ -144,6 +144,91 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
 bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip);
 
 /**
+ * 判断一次鼠标点击是否落在大纲侧栏打开时的背景蒙层区域内(侧栏矩形之外的
+ * 正文区域)——点这块区域应该关闭侧栏。与 `IsPointInOutlinePanel` 互补
+ * (不在侧栏内即在蒙层内),单独具名成一个函数,让调用点的意图("点蒙层关侧栏")
+ * 一望即知,也方便单测直接覆盖这条验收项。
+ *
+ * @param clientX 客户区横坐标(物理像素)。
+ * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
+ * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
+ * @return 点落在蒙层区域内返回 true。
+ * @example bool inMask = mdvn::IsPointInOutlineOverlayMask(500, 1.5f, 220.0f); // true
+ */
+bool IsPointInOutlineOverlayMask(int clientX, float dipScale, float panelWidthDip);
+
+/**
+ * 判断一个点(客户区物理像素坐标)是否落在大纲侧栏矩形内,同时校验纵坐标
+ * (侧栏铺满整个客户区高度这一约定本身也要能被单测校验,不是想当然认为
+ * "点在客户区内纵坐标必然合法")。供 `WM_MOUSEWHEEL` 判断鼠标是否落在
+ * 侧栏区域内、该滚侧栏自身还是滚正文使用。
+ *
+ * @param clientX 客户区横坐标(物理像素)。
+ * @param clientY 客户区纵坐标(物理像素)。
+ * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
+ * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
+ * @param clientHeightDip 客户区高度(DIP)。
+ * @return 点落在侧栏矩形内返回 true。
+ * @example bool inPanel = mdvn::IsPointInOutlinePanelRect(50, 300, 1.5f, 220.0f, 600.0f);
+ */
+bool IsPointInOutlinePanelRect(int clientX, int clientY, float dipScale, float panelWidthDip,
+                                float clientHeightDip);
+
+/**
+ * 大纲侧栏可拖拽调宽度的抓手宽度(DIP),横跨侧栏右边界左右各一半。
+ * 与 `kOutlinePanelWidthDip` 一样,数值只在 shell 侧定义一份;render 层不画
+ * 这个抓手(它没有独立视觉,只是紧贴侧栏边界的一条不可见可拖拽区)。
+ */
+constexpr float kOutlinePanelResizeHandleWidthDip = 6.0f;
+
+/**
+ * 判断一次鼠标点击是否落在大纲侧栏右边缘的拖拽抓手上(T63b,调整侧栏宽度)。
+ * 抓手横跨边界左右各 `kOutlinePanelResizeHandleWidthDip / 2`,纵向铺满整个
+ * 客户区高度,与侧栏本身同一约定。抓手比自绘滚动条的横向范围更靠右一点
+ * (滚动条贴在 `panelWidthDip` 以内,抓手横跨 `panelWidthDip` 本身),两者
+ * 不会互相误判。
+ *
+ * @param clientX 客户区横坐标(物理像素)。
+ * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
+ * @param panelWidthDip 侧栏当前宽度(DIP)。
+ * @return 点落在抓手范围内返回 true。
+ * @example bool onHandle = mdvn::IsPointInOutlinePanelResizeHandle(220, 1.5f, 220.0f);
+ */
+bool IsPointInOutlinePanelResizeHandle(int clientX, float dipScale, float panelWidthDip);
+
+/**
+ * 一次"文本位置"命中结果(供文本拖选使用,T80)。与 HitResult 不同——
+ * 后者只关心"命中了哪种可交互元素",这里只关心"这个屏幕点对应文档里
+ * 哪个块的哪个字符位置",用于选区的起点/终点标记。
+ */
+struct DocTextHit {
+    bool valid;        // 文档当前没有任何可选文本(如空文档)时为 false
+    u32 blockIndex;    // 命中的内容块下标
+    u32 charOffset;    // 该块 IDWriteTextLayout 文本里的 UTF-16 位置(半开区间的起点)
+};
+
+/**
+ * 命中测试:屏幕坐标(经 ClientToDocument 换算后的文档坐标)落在哪个内容块的
+ * 哪个字符位置上,用于鼠标拖选的起点/终点标记(T80)。
+ *
+ * 与 `HitTestDocument` 的取舍不同:后者严格要求点落在某个内容块的矩形内,
+ * 落在块间隙/文档上下边界外一律"没命中";这里要支持"像浏览器一样,从文档
+ * 任意位置拖到任意位置都能选中中间的连续文本",所以点落在块间隙时会取
+ * 竖直方向最近的那个有文本的内容块,超出文档顶部/底部时钳到第一个/最后一个
+ * 块的开头/末尾。
+ *
+ * @param layout 已完成 `Relayout`/`UpdateVisibleRange` 的布局引擎。
+ * @param docX 文档坐标 x(DIP)。
+ * @param docY 文档坐标 y(DIP)。
+ * @return 命中的文本位置;整份文档都没有可选文本(没有任何块持有
+ *         `textLayout`)时 `valid` 为 false。
+ * @example
+ *   mdvn::DocPoint p = mdvn::ClientToDocument(x, y, scale, scrollY);
+ *   mdvn::DocTextHit hit = mdvn::HitTestTextPosition(layout, p.x, p.y);
+ */
+DocTextHit HitTestTextPosition(const BlockLayoutEngine& layout, float docX, float docY);
+
+/**
  * 命中结果是否应当显示手型光标(链接、可点击的图片/占位块、代码块复制按钮)。
  * @param hit 命中结果。
  * @return 需要手型光标返回 true。

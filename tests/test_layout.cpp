@@ -661,3 +661,47 @@ MDVN_TEST(Layout_NoImagesMeansNoImageBoxes) {
         MDVN_CHECK_EQ(layout.Geometry(i).imageBoxes.len, 0u);
     }
 }
+
+// 用例(T76 回归):触发截断的文档,已解析的那部分仍然要能正常布局出来。
+//
+// 回归的 bug:`childCount` 只在 OnLeaveBlock 里回填,而截断置位 aborted 之后
+// md4c 不再派发回调、OnLeaveBlock 自身也直接返回,导致**最外层 Document 块
+// (下标 0)的 childCount 永远是 0**,LayoutSubtree(0, ...) 因此什么都不排,
+// totalHeight 恒为 0,窗口画面全空;同时那些几何全零的块被虚拟化判成"全部
+// 可见",一次首帧就创建并绘制上千个 IDWriteTextLayout(10 MB 语料实测首帧
+// 1.5 s)。修复是在 md_parse 返回后把栈上剩余的块逐个补回填。
+MDVN_TEST(Layout_TruncatedDocumentStillLaysOutParsedPrefix) {
+    Arena arena;
+    arena.Init(8 * 1024 * 1024);
+
+    // 嵌套深度超过 kMaxNestingDepth(64)即触发截断:构造 80 层嵌套引用块,
+    // 前面先放一个正常段落,确保"被截断前已经解析出来的内容"确实存在。
+    char src[4096];
+    int n = 0;
+    n += _snprintf_s(src + n, sizeof(src) - n, _TRUNCATE, "正常段落,截断前就已解析完。\n\n");
+    for (int level = 0; level < 80; ++level) {
+        n += _snprintf_s(src + n, sizeof(src) - n, _TRUNCATE, "> ");
+    }
+    n += _snprintf_s(src + n, sizeof(src) - n, _TRUNCATE, "很深的引用块文字\n");
+
+    Document doc = ParseMarkdown(StrSlice{src, static_cast<u32>(n)}, &arena);
+    MDVN_CHECK(doc.truncated);       // 前提:这份语料确实触发了截断
+    MDVN_CHECK(doc.blocks.Size() > 1);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+    MDVN_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
+
+    // 核心断言:根块的子树被排出了真实高度,而不是塌成 0。
+    MDVN_CHECK(layout.TotalHeight() > 0.0f);
+    MDVN_CHECK(doc.blocks[0].childCount > 0);
+
+    // 且不该再有"几何全零"的块——全零几何会让虚拟化判据 (g.bottom > top &&
+    // g.top < bottom) 对任意视口都成立,是上面那 1.5 s 首帧的直接成因。
+    u32 degenerate = 0;
+    for (u32 i = 0; i < layout.BlockCount(); ++i) {
+        const BlockGeometry& g = layout.Geometry(i);
+        if (g.top == 0.0f && g.bottom == 0.0f) ++degenerate;
+    }
+    MDVN_CHECK_EQ(degenerate, 0u);
+}

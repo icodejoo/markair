@@ -113,12 +113,49 @@ constexpr float kOverlayBarStackStepDip = 34.0f;
 // ——render 层不反向 include shell 目录下的头文件(架构约束,单向依赖
 // shell -> render),这里只重复几个纯数字,真正的"唯一权威定义"在 shell 侧,
 // window.cpp 传进来的坐标(outlineScrollY 等)都是按 shell 那份常量算出来的。
-constexpr float kOutlinePanelWidthDip = 220.0f;
+// 宽度本身 T63b 起可拖拽调整,不再是常量,由 overlay_->outlinePanelWidthDip
+// 传入,这里只留行高/缩进/内边距这些仍然固定的几何量。
 constexpr float kOutlineItemHeightDip = 28.0f;
 constexpr float kOutlineIndentStepDip = 14.0f;
 constexpr float kOutlinePanelPaddingDip = 10.0f;
 constexpr float kOutlineRowFontSizeDip = 13.0f;
+
+// 自绘滚动条几何常量(方案A)。数值必须与 shell/scrollbar.h 的同名常量保持
+// 一致——render 层不反向 include shell 目录下的头文件,这里只重复几个纯
+// 数字,与 T63 大纲侧栏常量同一约束(见上方注释)。
+constexpr float kScrollbarWidthDip = 8.0f;
+constexpr float kScrollbarCornerRadiusDip = 4.0f;
+constexpr float kScrollbarMarginDip = 4.0f;
+constexpr float kScrollbarMinThumbHeightDip = 24.0f;
 constexpr u32 kMaxOutlineTitleChars = 256;
+
+// 底部操作栏几何常量。数值必须与 shell/bottom_bar.h 里的同名常量保持一致
+// ——同一条"render 不反向 include shell"的约束(见上面大纲侧栏的注释),
+// 这里只重复几个纯数字,真正的"唯一权威定义"(含命中测试/文字标签)在 shell 侧。
+// 新布局(2026-09-18):栏高 32px 画不下"图标+文字"两行,图标改为在整条栏
+// 高度内垂直居中,不再画常驻文字标签;左侧按钮固定宽度紧贴排列,右侧是
+// 状态文字区。
+constexpr float kBottomBarHeightDip = 32.0f;
+constexpr u32 kBottomBarButtonCount = 5;
+constexpr float kBottomBarButtonWidthDip = kBottomBarHeightDip;  // 正方形按钮,与栏高相等
+constexpr float kBottomBarIconSizeDip = 15.0f;   // 图标绘制区正方形边长
+constexpr float kBottomBarIconStrokeWidthDip = 1.4f;
+constexpr float kBottomBarStatusFontSizeDip = 11.0f;    // 右侧状态文字字号
+constexpr float kBottomBarStatusPaddingDip = 10.0f;     // 状态文字右侧留白
+constexpr u64 kBottomBarBytesPerMb = 1024ull * 1024ull; // 1MB 对应字节数,KB/MB 切换阈值
+
+// 悬浮提示气泡几何常量(2026-09-18 新增,取代常驻文字标签)。
+constexpr float kBottomBarTooltipFontSizeDip = 12.0f;
+constexpr float kBottomBarTooltipPaddingDip = 6.0f;    // 气泡文字左右各留白
+constexpr float kBottomBarTooltipHeightDip = 22.0f;
+constexpr float kBottomBarTooltipGapDip = 4.0f;        // 气泡底边与底部栏顶边的间隙
+
+// 5 个按钮从左到右的悬浮提示文案,下标须与 shell/bottom_bar.h 的
+// BottomBarButton 枚举顺序一一对应。数值/文案必须与那边的 kBottomBarLabels
+// 保持一致——同一条"render 不反向 include shell"的约束。
+constexpr const wchar_t* kBottomBarTooltipLabels[kBottomBarButtonCount] = {
+    L"放大", L"缩小", L"主题", L"打开", L"大纲",
+};
 
 // 标题级别 -> 缩进量,口径与 mdvn::OutlineItemIndentDip 一致。
 float OutlineRowIndentDip(u8 level) {
@@ -176,6 +213,32 @@ u32 ComposeFindBarText(const ShellOverlay* overlay, wchar_t* buf, u32 cap) {
         cursor = AppendLiteral(buf, cursor, cap, L"/");
         cursor = AppendDecimal(buf, cursor, cap, overlay->matchCount);
     }
+    buf[cursor] = 0;
+    return cursor;
+}
+
+// 把文件大小格式化成状态区文字:< 1MB 显示 KB,否则显示 MB,保留 1 位小数
+// (如 "856.0 KB" / "2.3 MB")。口径必须与 shell/bottom_bar.h 的同名函数保持
+// 一致——同一条"render 不反向 include shell"的约束,这里独立实现一份。
+u32 AppendFormattedFileSize(wchar_t* buf, u32 cursor, u32 cap, u64 sizeBytes) {
+    bool useMb = sizeBytes >= kBottomBarBytesPerMb;
+    float kb = static_cast<float>(sizeBytes) / 1024.0f;
+    float value = useMb ? kb / 1024.0f : kb;
+    i32 tenths = static_cast<i32>(value * 10.0f + 0.5f);
+    cursor = AppendDecimal(buf, cursor, cap, static_cast<u32>(tenths / 10));
+    cursor = AppendLiteral(buf, cursor, cap, L".");
+    cursor = AppendDecimal(buf, cursor, cap, static_cast<u32>(tenths % 10));
+    cursor = AppendLiteral(buf, cursor, cap, useMb ? L" MB" : L" KB");
+    return cursor;
+}
+
+// 拼出底部栏状态区的一行文字:"<路径> (<大小>)"。
+u32 ComposeBottomBarStatusText(const wchar_t* documentPath, u64 documentSizeBytes,
+                                wchar_t* buf, u32 cap) {
+    u32 cursor = AppendLiteral(buf, 0, cap, documentPath);
+    cursor = AppendLiteral(buf, cursor, cap, L" (");
+    cursor = AppendFormattedFileSize(buf, cursor, cap, documentSizeBytes);
+    cursor = AppendLiteral(buf, cursor, cap, L")");
     buf[cursor] = 0;
     return cursor;
 }
@@ -323,7 +386,8 @@ void ImageResidencyManager::ReleaseResident(const ImageBox* boxes, u32 count) {
 // 构造一个未绑定工厂、未创建渲染目标的渲染器。
 Renderer::Renderer()
     : factory_(nullptr), fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
-      overlay_(nullptr), palette_(&kLightPalette), outlineScratchInited_(false) {}
+      overlay_(nullptr), frameViewportHeight_(0.0f), palette_(&kLightPalette),
+      outlineScratchInited_(false) {}
 
 // 析构时释放渲染目标本体;工厂/字体子系统均不归本对象所有,不在此释放。
 Renderer::~Renderer() { ReleaseRenderTarget(); }
@@ -447,11 +511,16 @@ void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1Soli
             D2D1_RECT_F clipRect = D2D1::RectF(
                 metrics[m].left, metrics[m].top,
                 metrics[m].left + metrics[m].width, metrics[m].top + metrics[m].height);
+            // T76:整条 run 已经滚出屏幕就直接跳过。下面那次 DrawTextLayout 画的是
+            // **整份** layout(只靠裁剪把可见部分留下来),代价与裁剪框大小无关,
+            // 所以屏幕外的 run 一个都不能白画。
+            if (clipRect.bottom < 0.0f || clipRect.top > frameViewportHeight_) continue;
             // 裁剪到该 link range 的矩形后整体重画一次 layout——裁剪区之外的部分
             // 不可见,效果上等价于"只给这段文字换色",但不需要 SetDrawingEffect
             // 与自定义 TextRenderer(T24 明确避免的成本)。
             target_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, linkBrush);
+            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, linkBrush,
+                                     D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
             target_->PopAxisAlignedClip();
         }
     }
@@ -481,10 +550,15 @@ void Renderer::DrawCodeHighlights(const BlockGeometry& g, float scrollY,
             D2D1_RECT_F clipRect = D2D1::RectF(
                 metrics[m].left, metrics[m].top,
                 metrics[m].left + metrics[m].width, metrics[m].top + metrics[m].height);
+            // T76:理由同 DrawLinkOverlays —— 屏幕外的 token 跳过,否则一个大代码块
+            // 里成百上千个 token 每个都要整份 layout 重画一次,而其中绝大多数根本
+            // 不在视口里(BENCH-C 实测这一项就占了每帧的大头)。
+            if (clipRect.bottom < 0.0f || clipRect.top > frameViewportHeight_) continue;
             // 裁剪到该 token range 的矩形后整体重画一次 layout——与 DrawLinkOverlays
             // 同一手法,不引入 SetDrawingEffect 与自定义 TextRenderer(T24/T53 同一约束)。
             target_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, brush);
+            target_->DrawTextLayout(D2D1::Point2F(drawLeft, drawTop), g.textLayout, brush,
+                                     D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
             target_->PopAxisAlignedClip();
         }
     }
@@ -555,20 +629,77 @@ void Renderer::DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLe
     target_->FillRoundedRectangle(rounded, bgBrush);
     target_->DrawTextLayout(D2D1::Point2F(left + kOverlayBarPaddingXDip,
                                            top + kOverlayBarPaddingYDip),
-                             layout, textBrush);
+                             layout, textBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
     layout->Release();
+}
+
+void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
+                                       ID2D1SolidColorBrush* maskBrush) {
+    // 与 DrawOutlinePanel 同一个"侧栏是否打开"判断依据,侧栏关闭时本函数
+    // 直接返回,不产生任何额外绘制(维持 T63"关闭时开销为 0"的设计)。
+    if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
+    if (!maskBrush || !target_) return;
+
+    // 只盖侧栏矩形之外的正文区域,侧栏本身随后单独画(DrawOutlinePanel),
+    // 不会被这层蒙层盖住。T63b:侧栏宽度可拖拽调整,用外壳层传来的实际
+    // 当前宽度,不再用固定常量。
+    D2D1_RECT_F maskRect =
+        D2D1::RectF(overlay_->outlinePanelWidthDip, 0.0f, targetWidth, targetHeight);
+    target_->FillRectangle(maskRect, maskBrush);
+}
+
+// 自绘滚动条滑块(方案A,见类头文件注释):按视口/内容尺寸算出滑块矩形,
+// 内容不超过一屏时不画。几何公式与 shell/scrollbar.h::CalcScrollbarMetrics
+// 保持一致(纯数字,那边可单测;这里只负责按结果画一个圆角矩形)。
+void Renderer::DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight,
+                              float scrollY, ID2D1SolidColorBrush* trackBrush,
+                              ID2D1SolidColorBrush* thumbBrush) {
+    if (!target_ || !thumbBrush) return;
+    if (viewportHeight <= 0.0f || totalHeight <= viewportHeight) return;
+
+    float right = viewportWidth - kScrollbarMarginDip;
+    float left = right - kScrollbarWidthDip;
+
+    // 轨道:常驻显示,标示"这一整条都是可滚动范围",与滑块共用一套圆角
+    // 几何,只是铺满整个视口高度。
+    if (trackBrush) {
+        D2D1_ROUNDED_RECT track = D2D1::RoundedRect(
+            D2D1::RectF(left, 0.0f, right, viewportHeight),
+            kScrollbarCornerRadiusDip, kScrollbarCornerRadiusDip);
+        target_->FillRoundedRectangle(track, trackBrush);
+    }
+
+    float thumbHeight = viewportHeight * (viewportHeight / totalHeight);
+    if (thumbHeight < kScrollbarMinThumbHeightDip) thumbHeight = kScrollbarMinThumbHeightDip;
+    if (thumbHeight > viewportHeight) thumbHeight = viewportHeight;
+
+    float maxScrollY = totalHeight - viewportHeight;
+    float maxThumbTop = viewportHeight - thumbHeight;
+    float ratio = (maxScrollY > 0.0f) ? (scrollY / maxScrollY) : 0.0f;
+    if (ratio < 0.0f) ratio = 0.0f;
+    if (ratio > 1.0f) ratio = 1.0f;
+    float thumbTop = ratio * maxThumbTop;
+
+    D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
+        D2D1::RectF(left, thumbTop, right, thumbTop + thumbHeight),
+        kScrollbarCornerRadiusDip, kScrollbarCornerRadiusDip);
+    target_->FillRoundedRectangle(rounded, thumbBrush);
 }
 
 void Renderer::DrawOutlinePanel(float targetHeight,
                                 ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                                 ID2D1SolidColorBrush* highlightBgBrush,
-                                ID2D1SolidColorBrush* highlightTextBrush) {
+                                ID2D1SolidColorBrush* highlightTextBrush,
+                                ID2D1SolidColorBrush* scrollbarTrackBrush,
+                                ID2D1SolidColorBrush* scrollbarThumbBrush) {
     if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
     if (!fonts_ || !overlay_->doc || !bgBrush || !textBrush || !target_) return;
 
     // 悬浮覆盖:侧栏浮在正文左侧上方,不改变正文视口宽度,几何与主内容布局
     // 完全无关(不读取任何 BlockGeometry 几何字段),开关侧栏因此是纯重绘。
-    D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, kOutlinePanelWidthDip, targetHeight);
+    // T63b:宽度可拖拽调整,用外壳层传来的实际当前宽度。
+    float panelWidth = overlay_->outlinePanelWidthDip;
+    D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, panelWidth, targetHeight);
     target_->FillRectangle(panelRect, bgBrush);
 
     // 标题原文的拼接/UTF-16 转换缓冲,惰性 Init(见头文件字段注释),每帧开头
@@ -585,7 +716,7 @@ void Renderer::DrawOutlinePanel(float targetHeight,
         bool highlighted = (i == overlay_->outlineCurrentItem);
         if (highlighted && highlightBgBrush) {
             target_->FillRectangle(
-                D2D1::RectF(0.0f, rowTop, kOutlinePanelWidthDip, rowTop + kOutlineItemHeightDip),
+                D2D1::RectF(0.0f, rowTop, panelWidth, rowTop + kOutlineItemHeightDip),
                 highlightBgBrush);
         }
 
@@ -613,7 +744,7 @@ void Renderer::DrawOutlinePanel(float targetHeight,
         if (wide.len == 0) continue;
 
         float indent = OutlineRowIndentDip(item.level);
-        float maxTextWidth = kOutlinePanelWidthDip - kOutlinePanelPaddingDip * 2.0f - indent;
+        float maxTextWidth = panelWidth - kOutlinePanelPaddingDip * 2.0f - indent;
         if (maxTextWidth <= 0.0f) continue;
 
         // 超长标题截断成省略号:先量整段,放得下就直接画;放不下二分查出
@@ -670,8 +801,169 @@ void Renderer::DrawOutlinePanel(float targetHeight,
         float textTop = rowTop + (kOutlineItemHeightDip - kOutlineRowFontSizeDip - 4.0f) * 0.5f;
         target_->DrawTextLayout(D2D1::Point2F(indent + kOutlinePanelPaddingDip, textTop),
                                 rowLayout,
-                                (highlighted && highlightTextBrush) ? highlightTextBrush : textBrush);
+                                (highlighted && highlightTextBrush) ? highlightTextBrush : textBrush,
+                                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
         rowLayout->Release();
+    }
+
+    // 侧栏自身的滚动条(方案A):内容总高按条目数换算,与 OutlinePanel 里
+    // ClampScrollOffset 用的口径一致(shell/outline_panel.h::OutlinePanelContentHeightDip)。
+    float contentHeight = kOutlineItemHeightDip * static_cast<float>(overlay_->outlineItemCount);
+    DrawScrollbar(panelWidth, targetHeight, contentHeight, overlay_->outlineScrollY,
+                  scrollbarTrackBrush, scrollbarThumbBrush);
+}
+
+// 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
+// 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧是状态文字
+// (当前文档路径 + 大小)。挤压布局——正文视口高度已经在 window.cpp 里减去
+// 了本栏高度,这里只管画,不参与任何几何计算。图标不再带常驻文字标签
+// (32px 高度画不下两行),文字改成鼠标悬浮时的提示气泡,悬浮态由
+// window.cpp 判定后通过 hoverButtonIndex 传入,本函数只负责画。
+void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
+                              ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
+                              ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
+                              const wchar_t* documentPath, u64 documentSizeBytes,
+                              u32 hoverButtonIndex) {
+    if (!target_ || !bgBrush) return;
+
+    float barTop = targetHeight - kBottomBarHeightDip;
+    D2D1_RECT_F barRect = D2D1::RectF(0.0f, barTop, targetWidth, targetHeight);
+    target_->FillRectangle(barRect, bgBrush);
+
+    float btnW = kBottomBarButtonWidthDip;
+    float iconCenterY = barTop + kBottomBarHeightDip * 0.5f;  // 图标整体垂直居中于栏高度内
+
+    for (u32 i = 0; i < kBottomBarButtonCount; ++i) {
+        float left = btnW * static_cast<float>(i);
+        float centerX = left + btnW * 0.5f;
+        float half = kBottomBarIconSizeDip * 0.5f;
+
+        // 分隔线只画在图标按钮之间,不画到按钮区与状态区的交界——那条线
+        // 不是"两个按钮之间",跨过去会让状态区看起来像多出来的第 6 个按钮。
+        if (i > 0 && dividerBrush) {
+            target_->DrawLine(D2D1::Point2F(left, barTop + 4.0f),
+                              D2D1::Point2F(left, targetHeight - 4.0f), dividerBrush,
+                              1.0f);
+        }
+
+        if (iconBrush) {
+            switch (static_cast<int>(i)) {
+            case 0:  // 放大:放大镜 + "+"
+            case 1: {  // 缩小:放大镜 + "-"
+                float r = half * 0.65f;
+                D2D1_ELLIPSE circle{D2D1::Point2F(centerX - r * 0.3f, iconCenterY - r * 0.3f), r, r};
+                target_->DrawEllipse(circle, iconBrush, kBottomBarIconStrokeWidthDip);
+                target_->DrawLine(
+                    D2D1::Point2F(centerX - r * 0.3f + r * 0.7f, iconCenterY - r * 0.3f + r * 0.7f),
+                    D2D1::Point2F(centerX + half * 0.75f, iconCenterY + half * 0.75f), iconBrush,
+                    kBottomBarIconStrokeWidthDip);
+                float signCx = circle.point.x, signCy = circle.point.y;
+                target_->DrawLine(D2D1::Point2F(signCx - r * 0.45f, signCy),
+                                  D2D1::Point2F(signCx + r * 0.45f, signCy), iconBrush,
+                                  kBottomBarIconStrokeWidthDip);
+                if (i == 0) {
+                    target_->DrawLine(D2D1::Point2F(signCx, signCy - r * 0.45f),
+                                      D2D1::Point2F(signCx, signCy + r * 0.45f), iconBrush,
+                                      kBottomBarIconStrokeWidthDip);
+                }
+                break;
+            }
+            case 2: {  // 主题:太阳(圆 + 四条短射线)
+                float r = half * 0.5f;
+                D2D1_ELLIPSE sun{D2D1::Point2F(centerX, iconCenterY), r, r};
+                target_->DrawEllipse(sun, iconBrush, kBottomBarIconStrokeWidthDip);
+                float rayLen = half * 0.35f;
+                const float kDiag = 0.7071f;
+                D2D1_POINT_2F dirs[4] = {
+                    {1.0f, 0.0f}, {-1.0f, 0.0f}, {kDiag, kDiag}, {-kDiag, kDiag},
+                };
+                for (int d = 0; d < 4; ++d) {
+                    float sx = centerX + dirs[d].x * (r + 1.5f);
+                    float sy = iconCenterY + dirs[d].y * (r + 1.5f);
+                    float ex = centerX + dirs[d].x * (r + 1.5f + rayLen);
+                    float ey = iconCenterY + dirs[d].y * (r + 1.5f + rayLen);
+                    target_->DrawLine(D2D1::Point2F(sx, sy), D2D1::Point2F(ex, ey), iconBrush,
+                                      kBottomBarIconStrokeWidthDip);
+                }
+                break;
+            }
+            case 3: {  // 打开文档:文件夹轮廓
+                float w = half * 1.7f, h = half * 1.2f;
+                D2D1_RECT_F body =
+                    D2D1::RectF(centerX - w * 0.5f, iconCenterY - h * 0.3f,
+                                centerX + w * 0.5f, iconCenterY + h * 0.7f);
+                target_->DrawRectangle(body, iconBrush, kBottomBarIconStrokeWidthDip);
+                D2D1_RECT_F tab = D2D1::RectF(body.left, body.top - h * 0.35f,
+                                               body.left + w * 0.4f, body.top);
+                target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
+                break;
+            }
+            case 4:
+            default: {  // 大纲:三条横线(列表图标)
+                float w = half * 1.6f;
+                float lineTop = iconCenterY - half;
+                for (int line = 0; line < 3; ++line) {
+                    float y = lineTop + kBottomBarIconSizeDip * (0.25f + 0.3f * line);
+                    target_->DrawLine(D2D1::Point2F(centerX - w * 0.5f, y),
+                                      D2D1::Point2F(centerX + w * 0.5f, y), iconBrush,
+                                      kBottomBarIconStrokeWidthDip);
+                }
+                break;
+            }
+            }
+        }
+    }
+
+    // 悬浮提示气泡(2026-09-18 新增,取代常驻文字标签):鼠标落在哪个按钮上
+    // 就在其正上方画一个小文字气泡,移出后(hoverButtonIndex 越界)不画。
+    // 纯 D2D 绘制,不引入 Win32 TOOLTIPS_CLASS 控件——风险更小、改动更集中。
+    if (fonts_ && textBrush && bgBrush && hoverButtonIndex < kBottomBarButtonCount) {
+        const wchar_t* label = kBottomBarTooltipLabels[hoverButtonIndex];
+        u32 labelLen = WideLength(label);
+        IDWriteTextLayout* tipLayout = fonts_->CreateTextLayout(
+            label, labelLen, FontRole::Body, 200.0f, kBottomBarTooltipHeightDip);
+        if (tipLayout) {
+            tipLayout->SetFontSize(kBottomBarTooltipFontSizeDip, DWRITE_TEXT_RANGE{0, labelLen});
+            DWRITE_TEXT_METRICS metrics{};
+            tipLayout->GetMetrics(&metrics);
+            float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
+            float buttonCenterX =
+                kBottomBarButtonWidthDip * (static_cast<float>(hoverButtonIndex) + 0.5f);
+            float bubbleLeft = buttonCenterX - bubbleWidth * 0.5f;
+            float bubbleBottom = barTop - kBottomBarTooltipGapDip;
+            float bubbleTop = bubbleBottom - kBottomBarTooltipHeightDip;
+            D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
+                D2D1::RectF(bubbleLeft, bubbleTop, bubbleLeft + bubbleWidth, bubbleBottom),
+                4.0f, 4.0f);
+            target_->FillRoundedRectangle(bubble, bgBrush);
+            target_->DrawTextLayout(
+                D2D1::Point2F(bubbleLeft + kBottomBarTooltipPaddingDip,
+                              bubbleTop + (kBottomBarTooltipHeightDip - metrics.height) * 0.5f),
+                tipLayout, textBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            tipLayout->Release();
+        }
+    }
+
+    // 右侧状态区:显示当前文档路径 + 大小,单行居中于栏高度内。path 为空
+    // (未打开任何文件)时整个状态区不画任何文字,不留占位文案。
+    if (fonts_ && textBrush && documentPath && documentPath[0] != L'\0') {
+        wchar_t statusText[MAX_PATH + 40];
+        u32 textLen = ComposeBottomBarStatusText(documentPath, documentSizeBytes, statusText,
+                                                  MAX_PATH + 40);
+        float statusAreaLeft = kBottomBarButtonWidthDip * static_cast<float>(kBottomBarButtonCount);
+        float statusAreaWidth = targetWidth - statusAreaLeft - kBottomBarStatusPaddingDip;
+        if (statusAreaWidth > 0.0f) {
+            IDWriteTextLayout* statusLayout = fonts_->CreateTextLayout(
+                statusText, textLen, FontRole::Body, statusAreaWidth, kBottomBarHeightDip);
+            if (statusLayout) {
+                statusLayout->SetFontSize(kBottomBarStatusFontSizeDip, DWRITE_TEXT_RANGE{0, textLen});
+                statusLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+                statusLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextLayout(D2D1::Point2F(statusAreaLeft, barTop), statusLayout, textBrush,
+                                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                statusLayout->Release();
+            }
+        }
     }
 }
 
@@ -807,7 +1099,8 @@ void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidC
     IDWriteTextLayout* labelLayout =
         fonts_->CreateTextLayout(label, li, FontRole::Body, rect.right - rect.left, rect.bottom - rect.top);
     if (!labelLayout) return;
-    target_->DrawTextLayout(D2D1::Point2F(rect.left, rect.top), labelLayout, markerBrush);
+    target_->DrawTextLayout(D2D1::Point2F(rect.left, rect.top), labelLayout, markerBrush,
+                             D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
     labelLayout->Release();
 }
 
@@ -836,7 +1129,8 @@ void Renderer::DrawFootnoteLabel(const BlockGeometry& g, float scrollY, ID2D1Sol
     IDWriteTextLayout* labelLayout =
         fonts_->CreateTextLayout(label, li, FontRole::Body, 64.0f, 24.0f);
     if (!labelLayout) return;
-    target_->DrawTextLayout(D2D1::Point2F(g.indent, g.top - scrollY), labelLayout, textBrush);
+    target_->DrawTextLayout(D2D1::Point2F(g.indent, g.top - scrollY), labelLayout, textBrush,
+                             D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
     labelLayout->Release();
 }
 
@@ -906,7 +1200,8 @@ void Renderer::DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text
     layout->SetParagraphAlignment(iconBottom > rect.top ? DWRITE_PARAGRAPH_ALIGNMENT_NEAR
                                                          : DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     target_->DrawTextLayout(
-        D2D1::Point2F(rect.left + kImagePlaceholderTextPaddingDip, textTop), layout, textBrush);
+        D2D1::Point2F(rect.left + kImagePlaceholderTextPaddingDip, textTop), layout, textBrush,
+        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
     layout->Release();
 }
 
@@ -944,7 +1239,7 @@ void Renderer::DrawDownsampledBadge(const D2D1_RECT_F& imageRect,
                                                    kBadgeCornerRadiusDip, kBadgeCornerRadiusDip);
     target_->FillRoundedRectangle(rounded, badgeBgBrush);  // 半透明底,不遮死图片内容
     target_->DrawTextLayout(D2D1::Point2F(left + kBadgePaddingXDip, top + kBadgePaddingYDip),
-                            layout, badgeTextBrush);
+                            layout, badgeTextBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
     layout->Release();
 }
 
@@ -997,6 +1292,48 @@ void Renderer::DrawImages(const BlockGeometry& g, float scrollY,
     }
 }
 
+void Renderer::DrawSelectionHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
+                                        ID2D1SolidColorBrush* fillBrush) {
+    if (!overlay_ || !overlay_->selectionActive || !fillBrush) return;
+    if (!g.textLayout) return;
+    if (blockIndex < overlay_->selStartBlock || blockIndex > overlay_->selEndBlock) return;
+
+    // DWRITE_TEXT_METRICS 没有直接的"文本总长度"字段,借道 HitTestPoint 打在
+    // 一个远超文本范围的坐标上(必落在最后一个字符的尾随边),取
+    // textPosition + length 反推出整块文本的 UTF-16 长度。
+    u32 blockLen = 0xFFFFFFFFu;
+    {
+        BOOL trailing = FALSE;
+        BOOL inside = FALSE;
+        DWRITE_HIT_TEST_METRICS endMetrics{};
+        if (SUCCEEDED(g.textLayout->HitTestPoint(1.0e6f, 1.0e6f, &trailing, &inside, &endMetrics))) {
+            blockLen = endMetrics.textPosition + endMetrics.length;
+        }
+    }
+
+    // 起止块各自裁到选区在本块内的偏移,中间块整块高亮(见类头注释)。
+    u32 position = (blockIndex == overlay_->selStartBlock) ? overlay_->selStartOffset : 0;
+    u32 end = (blockIndex == overlay_->selEndBlock) ? overlay_->selEndOffset : blockLen;
+    if (end <= position) return;
+    u32 length = end - position;
+
+    DWRITE_HIT_TEST_METRICS hitMetrics[kMaxFindHitMetrics];
+    UINT32 actualCount = 0;
+    HRESULT hr = g.textLayout->HitTestTextRange(position, length, TextDrawLeft(g),
+                                                 TextDrawTop(g) - scrollY, hitMetrics,
+                                                 kMaxFindHitMetrics, &actualCount);
+    if (FAILED(hr)) return;
+
+    UINT32 count = actualCount < kMaxFindHitMetrics ? actualCount : kMaxFindHitMetrics;
+    for (UINT32 k = 0; k < count; ++k) {
+        target_->FillRectangle(
+            D2D1::RectF(hitMetrics[k].left, hitMetrics[k].top,
+                        hitMetrics[k].left + hitMetrics[k].width,
+                        hitMetrics[k].top + hitMetrics[k].height),
+            fillBrush);
+    }
+}
+
 void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, float targetWidth,
                           ID2D1SolidColorBrush* textBrush,
                           ID2D1SolidColorBrush* quoteBrush,
@@ -1013,6 +1350,7 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* badgeTextBrush,
                           ID2D1SolidColorBrush* findHighlightBrush,
                           ID2D1SolidColorBrush* findCurrentBrush,
+                          ID2D1SolidColorBrush* selectionBrush,
                           ID2D1SolidColorBrush* copyIconBrush,
                           ID2D1SolidColorBrush* copyHoverBgBrush,
                           ID2D1SolidColorBrush* copyPaperBrush,
@@ -1076,10 +1414,14 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 
     // 正文/标题/代码块/表格单元格文本:虚拟化范围内才非空,直接用 DrawTextLayout。
     if (g.textLayout && textBrush) {
-        // 查找命中高亮(T38)画在文本**之前**,于是底色在文字下方,文字颜色不受影响。
+        // 拖选高亮(T80)与查找命中高亮(T38)都画在文本**之前**,于是底色在
+        // 文字下方,文字颜色不受影响。选区在下、查找命中在上,查找命中更
+        // 显眼(更常用于"定位"),视觉优先级更高。
+        DrawSelectionHighlights(g, blockIndex, scrollY, selectionBrush);
         DrawFindHighlights(g, blockIndex, scrollY, findHighlightBrush, findCurrentBrush);
         target_->DrawTextLayout(D2D1::Point2F(TextDrawLeft(g), TextDrawTop(g) - scrollY),
-                                  g.textLayout, textBrush);
+                                  g.textLayout, textBrush,
+                                  D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
         // 链接着色(T24):在正文之上叠加一次裁剪重绘,见 DrawLinkOverlays 注释。
         DrawLinkOverlays(g, scrollY, linkBrush);
         // 代码语法着色(T53):同一手法,只在该块有 codeHighlights 时才生效
@@ -1102,7 +1444,9 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 }
 
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
-                            float leftPaddingDip, const ShellOverlay* overlay) {
+                            float leftPaddingDip, const ShellOverlay* overlay,
+                            bool mainScrollbarActive, const wchar_t* documentPath,
+                            u64 documentSizeBytes, u32 bottomBarHoverButtonIndex) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -1123,14 +1467,24 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* badgeTextBrush = nullptr;
     ID2D1SolidColorBrush* findHighlightBrush = nullptr;
     ID2D1SolidColorBrush* findCurrentBrush = nullptr;
+    ID2D1SolidColorBrush* selectionBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarBgBrush = nullptr;
     ID2D1SolidColorBrush* overlayBarTextBrush = nullptr;
     ID2D1SolidColorBrush* outlineHighlightBgBrush = nullptr;
     ID2D1SolidColorBrush* outlineHighlightTextBrush = nullptr;
+    ID2D1SolidColorBrush* outlineOverlayMaskBrush = nullptr;
+    // 大纲侧栏底色改跟正文背景同色(浅色主题白底黑字、深色主题黑底白字),
+    // 不再借用查找条那套固定深色浮出条配色——蒙层已经把侧栏之外的正文
+    // 压暗,侧栏本身用主题背景色天然就能在视觉上分离出来。
+    ID2D1SolidColorBrush* outlinePanelBgBrush = nullptr;
     ID2D1SolidColorBrush* copyIconBrush = nullptr;
     ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
     ID2D1SolidColorBrush* copyPaperBrush = nullptr;
     ID2D1SolidColorBrush* copyDoneBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarTrackIdleBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarTrackActiveBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarThumbIdleBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarThumbActiveBrush = nullptr;
     // T53:代码语法着色的 7 支画笔,下标与 hl/lexer.h::TokenType 取值一一对应。
     ID2D1SolidColorBrush* hlBrushes[7] = {nullptr, nullptr, nullptr, nullptr,
                                             nullptr, nullptr, nullptr};
@@ -1149,14 +1503,21 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->downsampledBadgeText, &badgeTextBrush);
     target_->CreateSolidColorBrush(palette_->findHighlight, &findHighlightBrush);
     target_->CreateSolidColorBrush(palette_->findCurrentHighlight, &findCurrentBrush);
+    target_->CreateSolidColorBrush(palette_->selectionHighlight, &selectionBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarBackground, &overlayBarBgBrush);
     target_->CreateSolidColorBrush(palette_->overlayBarText, &overlayBarTextBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightBackground, &outlineHighlightBgBrush);
     target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
+    target_->CreateSolidColorBrush(palette_->outlineOverlayMaskBackground, &outlineOverlayMaskBrush);
+    target_->CreateSolidColorBrush(palette_->background, &outlinePanelBgBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyIcon, &copyIconBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyHoverBackground, &copyHoverBgBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyPaper, &copyPaperBrush);
     target_->CreateSolidColorBrush(palette_->codeCopyDone, &copyDoneBrush);
+    target_->CreateSolidColorBrush(palette_->scrollbarTrackIdle, &scrollbarTrackIdleBrush);
+    target_->CreateSolidColorBrush(palette_->scrollbarTrackActive, &scrollbarTrackActiveBrush);
+    target_->CreateSolidColorBrush(palette_->scrollbarThumbIdle, &scrollbarThumbIdleBrush);
+    target_->CreateSolidColorBrush(palette_->scrollbarThumbActive, &scrollbarThumbActiveBrush);
     target_->CreateSolidColorBrush(palette_->hlKeyword, &hlBrushes[kTokenKeyword]);
     target_->CreateSolidColorBrush(palette_->hlString, &hlBrushes[kTokenString]);
     target_->CreateSolidColorBrush(palette_->hlNumber, &hlBrushes[kTokenNumber]);
@@ -1166,6 +1527,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->hlOther, &hlBrushes[kTokenOther]);
 
     D2D1_SIZE_F targetSize = target_->GetSize();
+    frameViewportHeight_ = targetSize.height;
     // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
     // 分割线/脚注分隔线的右边界要按这个来算,否则会画到内边距的空白区域里去。
     float contentWidth = targetSize.width - 2.0f * leftPaddingDip;
@@ -1180,13 +1542,26 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 生效——叠加层(查找条/提示条)画之前会恢复成 Identity,不跟着这个平移走。
     target_->SetTransform(D2D1::Matrix3x2F::Translation(leftPaddingDip, 0.0f));
 
+    // T76:视口裁剪。此前这个循环对**全部**块无条件调 DrawBlock —— 屏幕外的
+    // 代码块背景/引用竖线/分割线/表格网格线照样会提交给 D2D(只有正文文字因为
+    // textLayout 被虚拟化淘汰成 nullptr 而侥幸跳过),于是首帧耗时与文档总块数
+    // 成正比而不是与可见块数成正比:10 MB 语料(33299 块)实测首帧绘制段
+    // 1516 ms,占首屏总耗时的 96%。裁剪范围取"可见 ± 1 屏",与 layout 的
+    // UpdateVisibleRange 用同一条边界,既不会误裁掉任何有 textLayout 的块,
+    // 也给块内那几 DIP 的背景/竖线外扩留足了余量。
+    const float cullMargin = targetSize.height;
+    const float cullTop = scrollY - cullMargin;
+    const float cullBottom = scrollY + targetSize.height + cullMargin;
+
     u32 blockCount = layout.BlockCount();
     for (u32 i = 0; i < blockCount; ++i) {
-        DrawBlock(layout.Geometry(i), i, scrollY, contentWidth,
+        const BlockGeometry& g = layout.Geometry(i);
+        if (g.bottom < cullTop || g.top > cullBottom) continue;
+        DrawBlock(g, i, scrollY, contentWidth,
                   textBrush, quoteBrush, codeBgBrush, hrBrush, linkBrush,
                   tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
                   placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
-                  findHighlightBrush, findCurrentBrush,
+                  findHighlightBrush, findCurrentBrush, selectionBrush,
                   copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush,
                   hlBrushes);
     }
@@ -1194,7 +1569,48 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // 叠加层最后画,浮在正文之上:查找条(T37)与窗口内提示(T36)。
+    // 大纲侧栏打开时正文整块被蒙层盖住、也不可滚动(见 window.cpp 的
+    // WM_MOUSEWHEEL/WM_LBUTTONDOWN 对应改动),此时正文滚动条不画——盖着
+    // 蒙层的滑块既看不清楚也不该被当成可交互控件。
+    bool outlineOpen = overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0;
+
+    // 正文滚动条(方案A,替代原生 WS_VSCROLL):内容超过一屏就画,不依赖
+    // overlay_ 是否为空(除了上面这条"侧栏打开时隐藏"的例外)。scrollY/
+    // leftPaddingDip 已经是外壳层减去过 kContentPaddingDip 的"有效滚动偏移",
+    // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
+    // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
+    if (!outlineOpen) {
+        float usableViewportHeight = targetSize.height - 2.0f * leftPaddingDip;
+        ID2D1SolidColorBrush* trackBrush =
+            mainScrollbarActive ? scrollbarTrackActiveBrush : scrollbarTrackIdleBrush;
+        ID2D1SolidColorBrush* thumbBrush =
+            mainScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush;
+        DrawScrollbar(targetSize.width, usableViewportHeight, layout.TotalHeight(),
+                      scrollY + leftPaddingDip, trackBrush, thumbBrush);
+    }
+
+    // 底部操作栏(常驻,不依赖 overlay_ 是否为空——它不是可选叠加层)。画在
+    // 正文/滚动条之后、蒙层与查找条/侧栏之前,这样大纲侧栏打开时蒙层能盖住
+    // 底部栏(裁决:蒙层应完整遮住正文可交互区域,底部栏也不例外)。
+    {
+        ID2D1SolidColorBrush* bottomBarBgBrush = nullptr;
+        ID2D1SolidColorBrush* bottomBarIconBrush = nullptr;
+        ID2D1SolidColorBrush* bottomBarTextBrush = nullptr;
+        ID2D1SolidColorBrush* bottomBarDividerBrush = nullptr;
+        target_->CreateSolidColorBrush(palette_->bottomBarBackground, &bottomBarBgBrush);
+        target_->CreateSolidColorBrush(palette_->bottomBarIcon, &bottomBarIconBrush);
+        target_->CreateSolidColorBrush(palette_->bottomBarText, &bottomBarTextBrush);
+        target_->CreateSolidColorBrush(palette_->bottomBarDivider, &bottomBarDividerBrush);
+        DrawBottomBar(targetSize.width, targetSize.height, bottomBarBgBrush, bottomBarIconBrush,
+                      bottomBarTextBrush, bottomBarDividerBrush, documentPath, documentSizeBytes,
+                      bottomBarHoverButtonIndex);
+        if (bottomBarBgBrush) bottomBarBgBrush->Release();
+        if (bottomBarIconBrush) bottomBarIconBrush->Release();
+        if (bottomBarTextBrush) bottomBarTextBrush->Release();
+        if (bottomBarDividerBrush) bottomBarDividerBrush->Release();
+    }
+
+    // 叠加层最后画,浮在正文/底部栏之上:查找条(T37)与窗口内提示(T36)。
     if (overlay_) {
         float topOffset = 0.0f;
         if (overlay_->findBarVisible) {
@@ -1208,10 +1624,17 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                            WideLength(overlay_->statusMessage), overlayBarBgBrush,
                            overlayBarTextBrush, topOffset);
         }
-        // T63:大纲侧栏,浮在正文左侧上方,与查找条/提示条共用同一套浮出条
-        // 底色/文字色(overlayBar* 槽位),只有当前阅读位置高亮换用新槽位。
-        DrawOutlinePanel(targetSize.height, overlayBarBgBrush, overlayBarTextBrush,
-                         outlineHighlightBgBrush, outlineHighlightTextBrush);
+        // 大纲侧栏打开时先盖一层半透明蒙层(盖住侧栏外的正文区域,聚焦视觉
+        // 到侧栏本身),再画侧栏——侧栏必须最后画,否则会被蒙层盖住。
+        DrawOutlineOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
+        // 大纲侧栏底色/文字色跟随主题(palette_->background/text),与正文
+        // 保持一致(浅色主题白底黑字、深色主题黑底白字),不再借用查找条的
+        // 固定深色浮出条配色;当前阅读位置高亮仍用专门的高亮槽位。
+        bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
+        DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
+                         outlineHighlightBgBrush, outlineHighlightTextBrush,
+                         outlineScrollbarActive ? scrollbarTrackActiveBrush : scrollbarTrackIdleBrush,
+                         outlineScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
     }
 
     if (textBrush) textBrush->Release();
@@ -1229,14 +1652,21 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (badgeTextBrush) badgeTextBrush->Release();
     if (findHighlightBrush) findHighlightBrush->Release();
     if (findCurrentBrush) findCurrentBrush->Release();
+    if (selectionBrush) selectionBrush->Release();
     if (overlayBarBgBrush) overlayBarBgBrush->Release();
     if (overlayBarTextBrush) overlayBarTextBrush->Release();
     if (outlineHighlightBgBrush) outlineHighlightBgBrush->Release();
     if (outlineHighlightTextBrush) outlineHighlightTextBrush->Release();
+    if (outlineOverlayMaskBrush) outlineOverlayMaskBrush->Release();
+    if (outlinePanelBgBrush) outlinePanelBgBrush->Release();
     if (copyIconBrush) copyIconBrush->Release();
     if (copyHoverBgBrush) copyHoverBgBrush->Release();
     if (copyPaperBrush) copyPaperBrush->Release();
     if (copyDoneBrush) copyDoneBrush->Release();
+    if (scrollbarTrackIdleBrush) scrollbarTrackIdleBrush->Release();
+    if (scrollbarTrackActiveBrush) scrollbarTrackActiveBrush->Release();
+    if (scrollbarThumbIdleBrush) scrollbarThumbIdleBrush->Release();
+    if (scrollbarThumbActiveBrush) scrollbarThumbActiveBrush->Release();
     for (u32 i = 0; i < 7; ++i) {
         if (hlBrushes[i]) hlBrushes[i]->Release();
     }

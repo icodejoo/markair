@@ -14,13 +14,19 @@ const wchar_t kCjkYaHeiUi[] = L"Microsoft YaHei UI";
 const wchar_t kCjkYaHei[] = L"Microsoft YaHei";
 const wchar_t kCjkSimSun[] = L"SimSun";
 
-// 正文中文回退链(裁决 #10):Microsoft YaHei UI → Microsoft YaHei → SimSun。
+// 2026-09-18 bug 修复追加:emoji 兜底族名,不属于裁决 #10 原文,只追加在
+// 正文回退链末尾,前面 3 个中文族名的顺序/名字不受影响。
+const wchar_t kEmojiFallback[] = L"Segoe UI Emoji";
+
+// 正文中文回退链(裁决 #10):Microsoft YaHei UI → Microsoft YaHei → SimSun,
+// 末尾追加 Segoe UI Emoji 作 emoji 字形兜底(2026-09-18)。
 // IDWriteFontFallbackBuilder::AddMapping 要求 const WCHAR**(非 const WCHAR* const*),
 // 数组元素本身不加 const 以匹配该签名。
 const wchar_t* kBodyFallbackFamilies[] = {
     kCjkYaHeiUi,
     kCjkYaHei,
     kCjkSimSun,
+    kEmojiFallback,
 };
 
 // 等宽主族(裁决 #10)。

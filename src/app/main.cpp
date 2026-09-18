@@ -14,10 +14,15 @@
 #include <windows.h>
 #include <imm.h>
 #include <d2d1.h>
+#include <psapi.h>
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
+#ifdef _DEBUG
+#include <crtdbg.h>  // T79:CRT调试堆泄漏检测,仅Debug构建使用
+#endif
 
 #include "bench.h"
 #include "../util/arena.h"
@@ -45,6 +50,7 @@
 #pragma comment(lib, "imm32.lib")
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "psapi.lib")
 
 namespace {
 
@@ -303,6 +309,10 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     }
     *host->doc = LoadMarkdownFile(host->fileMap, host->docArena);
 
+    // 底部栏状态区:换文档成功后同步更新大小,直接用 fileMap 映射出的字节数,
+    // 与启动期首次打开同一口径,不必再调一次 GetFileSizeEx。
+    if (host->windowState) host->windowState->currentDocumentSizeBytes = host->fileMap->Data().len;
+
     // ③ 更新"当前文档目录"(相对路径的图片与再下一跳链接都据此解析)与窗口标题。
     ExtractDirectory(fullPath, host->documentDirectory, MAX_PATH);
     SetDisplayTextFromPath(fullPath);
@@ -323,6 +333,93 @@ void OnWindowCreatedBenchHook(void*) { mdvn::bench::MarkWindowCreated(); }
 void OnFirstPresentBenchHook(void*) {
     mdvn::bench::MarkFirstPresent();
     mdvn::bench::EmitReport();
+}
+
+// T76 逐帧埋点的三个薄转发钩子,理由同上:shell 层不直接依赖 app/bench.h。
+void OnFrameBeginBenchHook(void*) { mdvn::bench::MarkFrameBegin(); }
+void OnFrameLayoutDoneBenchHook(void*) { mdvn::bench::MarkFrameLayoutDone(); }
+void OnFrameEndBenchHook(void*) { mdvn::bench::MarkFrameEnd(); }
+
+// T78:内存泄漏排查探针("--bench-loop=<kind>:<count>")每完成一次循环动作
+// 调用一次,把当前 PrivateUsage 以机器可读单行输出到 stderr,供
+// ci/leak_probe.ps1 采集整条序列。不经过 bench.cpp——这里独立取一次
+// PrivateUsage,不干扰 bench 模块自身的首帧五段埋点状态。
+void OnBenchLoopTickHook(void*, int iteration) {
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    unsigned long long privateBytes = 0;
+    if (GetProcessMemoryInfo(GetCurrentProcess(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
+        privateBytes = static_cast<unsigned long long>(pmc.PrivateUsage);
+    }
+    fprintf(stderr, "bench_loop_iter=%d private_bytes=%llu\n", iteration, privateBytes);
+}
+
+// T78:从 argv 里识别 "--bench-loop=<kind>:<count>" 与 "--bench-loop-dir=<path>"
+// 两个探针专用参数的纯扫描,不改动 bench.cpp::ParseArgs 的既有契约(避免影响
+// 它现有的单测)。kind 取值 replace/theme/outline/reload,对应 window.h
+// WindowState::benchLoopKind 的 1/2/3/4;不认识的取值/缺 ':' 时保持 kind=0
+// (探针关闭,行为与不带该参数完全一致)。
+struct BenchLoopCliArgs {
+    int kind;                  // 0=未启用
+    int count;                 // 循环次数
+    const wchar_t* corpusDir;  // kind==1(replace)时使用,其余可为空
+};
+
+BenchLoopCliArgs ParseBenchLoopCliArgs(const mdvn::Vec<wchar_t*>& argv) {
+    BenchLoopCliArgs result{0, 0, nullptr};
+    constexpr wchar_t kLoopPrefix[] = L"--bench-loop=";
+    constexpr size_t kLoopPrefixLen = 13;
+    constexpr wchar_t kDirPrefix[] = L"--bench-loop-dir=";
+    constexpr size_t kDirPrefixLen = 17;
+    for (mdvn::u32 i = 1; i < argv.Size(); ++i) {
+        const wchar_t* arg = argv[i];
+        if (wcsncmp(arg, kDirPrefix, kDirPrefixLen) == 0) {
+            result.corpusDir = arg + kDirPrefixLen;
+            continue;
+        }
+        if (wcsncmp(arg, kLoopPrefix, kLoopPrefixLen) != 0) continue;
+        const wchar_t* rest = arg + kLoopPrefixLen;
+        const wchar_t* colon = wcschr(rest, L':');
+        if (!colon) continue;
+        size_t kindLen = static_cast<size_t>(colon - rest);
+        if (kindLen == 7 && wcsncmp(rest, L"replace", 7) == 0) result.kind = 1;
+        else if (kindLen == 5 && wcsncmp(rest, L"theme", 5) == 0) result.kind = 2;
+        else if (kindLen == 7 && wcsncmp(rest, L"outline", 7) == 0) result.kind = 3;
+        else if (kindLen == 6 && wcsncmp(rest, L"reload", 6) == 0) result.kind = 4;
+        else continue;
+        result.count = _wtoi(colon + 1);
+    }
+    return result;
+}
+
+// T78:探针专用的语料文件路径缓冲——全局 POD 二维数组,零初始化,无副作用
+// 构造(docs/coding-rules.md 第 6 条)。只在 kind==1(replace)且给了
+// --bench-loop-dir 时才会被填充,其余场景恒为空字符串,不产生任何行为。
+constexpr int kBenchLoopMaxFiles = 64;
+wchar_t g_benchLoopFileBufs[kBenchLoopMaxFiles][MAX_PATH];
+const wchar_t* g_benchLoopFilePtrs[kBenchLoopMaxFiles];
+
+// 枚举 dir 下的 *.md 文件(不递归),写进上面两个全局数组,返回枚举到的个数
+// (至多 kBenchLoopMaxFiles)。找不到目录/一份都没有时返回 0。
+int CollectBenchLoopCorpusFiles(const wchar_t* dir) {
+    if (!dir || dir[0] == 0) return 0;
+    wchar_t pattern[MAX_PATH];
+    _snwprintf_s(pattern, MAX_PATH, _TRUNCATE, L"%s\\*.md", dir);
+    WIN32_FIND_DATAW findData{};
+    HANDLE h = FindFirstFileW(pattern, &findData);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int count = 0;
+    do {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (count >= kBenchLoopMaxFiles) break;
+        _snwprintf_s(g_benchLoopFileBufs[count], MAX_PATH, _TRUNCATE, L"%s\\%s", dir,
+                     findData.cFileName);
+        g_benchLoopFilePtrs[count] = g_benchLoopFileBufs[count];
+        ++count;
+    } while (FindNextFileW(h, &findData));
+    FindClose(h);
+    return count;
 }
 
 // T56:窗口矩形去抖到点、或窗口即将销毁前,把当前实时矩形写进 state.ini。
@@ -410,6 +507,16 @@ int HandleAssocCliCommand(const mdvn::bench::ParsedArgs& args) {
 // 进程入口:解析命令行、命名互斥体、初始化各子系统、加载文档、弹出窗口、
 // 跑消息循环。
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
+#ifdef _DEBUG
+    // T79:CRT调试堆——进程退出时(_CrtDumpMemoryLeaks 由CRT在atexit自动调用,
+    // 这里只需打开标志)把未释放的堆块清单打印到调试输出/stderr。严格限制在
+    // Debug配置内,绝不进Release(体积与启动时间指标见02-tech-stack.md)。
+    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    // 泄漏清单默认只走 OutputDebugString,命令行/CI 抓不到——额外重定向到
+    // stderr,这样重定向 exe 输出即可留档。
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+#endif
     // 命令行解析改用不依赖 shell32.dll 的 mdvn::ParseCommandLine(见 cmdline.h
     // 顶部注释)——CommandLineToArgvW 本身是 shell32 的导出符号,在这里被
     // 无条件调用会让 CMakeLists.txt 里的 /DELAYLOAD:shell32.dll 名存实亡。
@@ -420,6 +527,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::Vec<wchar_t*> argv = mdvn::ParseCommandLine(GetCommandLineW(), &cmdlineArena);
     int argc = static_cast<int>(argv.Size());
     mdvn::bench::ParsedArgs benchArgs = mdvn::bench::ParseArgs(argc, argv.Data());
+    // T78:内存泄漏排查探针,独立于上面那套解析,详见 ParseBenchLoopCliArgs 注释。
+    BenchLoopCliArgs benchLoopArgs = ParseBenchLoopCliArgs(argv);
+    int benchLoopFileCount = 0;
+    if (benchLoopArgs.kind == 1) {
+        benchLoopFileCount = CollectBenchLoopCorpusFiles(benchLoopArgs.corpusDir);
+    }
 
     // T59:`--register`/`--unregister` 在创建任何窗口、初始化任何子系统之前
     // 处理并直接返回退出码——包括下面的 DPI 感知/IME 禁用/D2D 工厂等,一律
@@ -582,6 +695,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // T65:历史前进/后退栈,纯数据结构,直接放栈上,不需要 Arena。
     mdvn::History history;
 
+    // T80:鼠标拖选文本的运行期状态,纯数据结构,直接放栈上;剪贴板拼接用
+    // 单独一块 Arena(与 clipboardScratch/findScratch 分开,理由同它们——
+    // 互不抹掉对方正在用的临时缓冲)。
+    mdvn::SelectionState selection;
+    mdvn::Arena selectionScratch;
+    selectionScratch.Init(16 * 1024 * 1024);
+
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
     mdvn::WindowState windowState{
         &fonts, &layout, &doc, &renderer, 0.0f,
@@ -613,12 +733,39 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // (未打开任何文件时保持聚合初始化留下的空字符串,Alt+←/→ 此时天然
     // 无历史可用,不需要特殊处理)。
     windowState.history = &history;
+
+    // T80:接上选择状态与其剪贴板拼接 Arena。
+    windowState.selection = &selection;
+    windowState.selectionScratch = &selectionScratch;
+
+    // T76:逐帧耗时埋点只在 --bench 下挂钩子;正常运行时这三个字段保持
+    // 聚合初始化留下的空指针,PaintOnce 里每帧只多两三次空指针判断。
+    if (benchArgs.benchEnabled) {
+        windowState.onFrameBegin = &OnFrameBeginBenchHook;
+        windowState.onFrameLayoutDone = &OnFrameLayoutDoneBenchHook;
+        windowState.onFrameEnd = &OnFrameEndBenchHook;
+    }
+
+    // T78:内存泄漏排查探针,详见 window.h::WindowState 上对应字段的注释。
+    // 默认(不带 --bench-loop)benchLoopArgs.kind == 0,以下四行原样保持
+    // 聚合初始化留下的零值,不产生任何额外行为。
+    windowState.benchLoopKind = benchLoopArgs.kind;
+    windowState.benchLoopTotal = benchLoopArgs.count;
+    windowState.benchLoopFiles = g_benchLoopFilePtrs;
+    windowState.benchLoopFileCount = benchLoopFileCount;
+    if (benchLoopArgs.kind != 0) {
+        windowState.onBenchLoopTick = &OnBenchLoopTickHook;
+    }
+
     if (fileOpened) {
         size_t i = 0;
         for (; normalizedPath[i] != 0 && i + 1 < mdvn::kHistoryPathCapacity; ++i) {
             windowState.currentDocumentPath[i] = normalizedPath[i];
         }
         windowState.currentDocumentPath[i] = 0;
+        // 底部栏状态区:大小直接用 fileMap 已经映射出的字节数,不必再调一次
+        // GetFileSizeEx——内容已经读到内存里了。
+        windowState.currentDocumentSizeBytes = fileMap.Data().len;
     }
 
     // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
@@ -658,6 +805,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     }
 
     int exitCode = mdvn::RunMessageLoop();
+
+    // T76:窗口关闭后把本次会话的逐帧耗时分布输出到 stderr(非 --bench 时空操作)。
+    mdvn::bench::EmitFrameReport();
 
     // T55:进程正常退出前兜底写一次 state.ini。windowState.theme 是运行期
     // 唯一会被用户实时改动的字段(Ctrl+Shift+T 循环,见 T47);字体族名覆盖

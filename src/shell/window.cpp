@@ -8,6 +8,9 @@
 
 #include "../assets/data_uri.h"
 #include "../render/theme.h"  // kLightPalette/kDarkPalette/kDarkBackgroundRgb
+#include "../util/str.h"      // Utf8ToUtf16(T80 选区复制)
+#include "bottom_bar.h"        // 底部操作栏(新需求):几何/命中测试
+#include "open_dialog.h"       // 底部栏"打开文档"按钮:IFileOpenDialog + 新开进程
 
 namespace mdvn {
 
@@ -42,6 +45,11 @@ constexpr UINT kWindowGeometryDebounceMs = 500;
 // `kOutlineHighlightDebounceMs`(150ms)定义在 outline_panel.h,滚动/键盘
 // 滚动路径只重置这一个定时器,到点才做一次二分 + 局部重绘(裁决 #6)。
 constexpr UINT_PTR kOutlineHighlightTimerId = 3;
+// T78:内存泄漏排查探针专用循环定时器,仅在 benchLoopKind != 0 时启用。
+constexpr UINT_PTR kBenchLoopTimerId = 4;
+// 循环节拍(毫秒):够快跑完 100 次不用等太久,又足够让每次动作(重排/重绘)
+// 真正跑完一轮消息循环,不与自身重叠。
+constexpr UINT kBenchLoopIntervalMs = 30;
 
 // T56:枚举显示器/已有本程序窗口时的固定容量上限,均放在栈上,不做动态分配。
 // 显示器 16 个、已有窗口 32 个,远超真实使用场景(验收要求"连开 5 个窗口"),
@@ -70,9 +78,7 @@ WindowState* StateOf(HWND hwnd) {
     return reinterpret_cast<WindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 }
 
-// T48:切标题栏深浅色 + 原生滚动条深浅色(2026-09-17 真机验收用户反馈补充:
-// 标题栏跟着变了,滚动条没跟着变——WS_VSCROLL 的滑块/滑槽外观完全交给系统
-// 主题绘制,不受 Palette 影响,需要单独告知系统去画哪一套)。按官方口径先试
+// T48:切标题栏深浅色。按官方口径先试
 // DWMWA_USE_IMMERSIVE_DARK_MODE 新值 20,`DwmSetWindowAttribute` 返回非 S_OK
 // (比如运行在不支持该属性的老系统上)再试旧值 19;两次都失败就静默放弃——
 // 标题栏保持浅色,这不是错误态,不弹框、不影响其余功能。窗口创建时
@@ -88,10 +94,6 @@ WindowState* StateOf(HWND hwnd) {
 // (窗口尚未 ShowWindow)理论上不需要这一步,但一起做没有额外成本,统一处理
 // 更简单。
 //
-// 滚动条深浅色走 `SetWindowTheme(hwnd, L"DarkMode_Explorer"/"Explorer", nullptr)`
-// ——这是 Win10 1809+ 起系统滚动条/资源管理器控件识别的子应用名约定(公开 API
-// `SetWindowTheme`,子应用名字符串是系统主题引擎认的惯例值,不是私有 API),
-// `SWP_FRAMECHANGED` 同一次调用会一并让滚动条跟着重绘,不需要额外强制刷新。
 void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
     // 2026-09-17 真机反馈定位记录:commit 0806db8(只有 DwmSetWindowAttribute+
     // 条件性 SWP_FRAMECHANGED)时用户确认标题栏本身工作正常,只有滚动条没有
@@ -132,6 +134,10 @@ void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                       SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
+    // 滚动条改自绘(方案A,2026-09-18)后本调用已无可视效果,但 uxtheme 的
+    // /DELAYLOAD 链接与 bench/CI 的模块加载核对(见 bench.cpp、
+    // ci/verify_release.ps1)都还认这个符号,保留调用避免牵连一次不必要的
+    // 构建系统改动。
     SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
     if (IsWindowVisible(hwnd)) {
         ShowWindow(hwnd, SW_HIDE);
@@ -276,41 +282,21 @@ void OnWindowGeometryMaybeChanged(HWND hwnd, WindowState* state) {
 // ClientWidthDip(T36 的窗口内换文档需要在 app 层拿到同一口径的视口尺寸)。
 // 注意:这是"原始"客户区尺寸,不含内边距收窄——正文换行宽度/滚动范围计算
 // 分别在使用处另外调用 ContentWidthDip / UsableViewportHeightDip 收窄。
-float ViewportHeightOf(HWND hwnd) { return ClientHeightDip(hwnd); }
+// 底部操作栏(新需求)是"挤压"布局:正文视口高度恒定减去底部栏固定高度,
+// 只在窗口创建/resize 时计算一次(与大纲侧栏"运行期动态浮动覆盖"不同,
+// 侧栏开关是运行期事件、正文高度不能因它抖动;底部栏从窗口创建起就恒定
+// 占用底部空间,不存在"运行期突然改变正文高度"的问题)。极窄窗口下钳到 0,
+// 不产生负数视口高度。
+float ViewportHeightOf(HWND hwnd) {
+    float h = ClientHeightDip(hwnd) - kBottomBarHeightDip;
+    return h > 0.0f ? h : 0.0f;
+}
 float ViewportWidthOf(HWND hwnd) { return ContentWidthDip(ClientWidthDip(hwnd)); }
 
 // 滚动范围计算统一用的"可用视口高度"(原始视口高度收窄掉上下内边距),
 // 喂给 ClampScrollOffset/MaxScrollOffset/ApplyScrollCommand 的 viewportHeight 参数
 // 以及 UpdateVisibleRange 的可见区间宽度,滚到底时才会在文档下方留出内边距空白。
 float UsableViewportHeightOf(HWND hwnd) { return UsableViewportHeightDip(ViewportHeightOf(hwnd)); }
-
-// float 滚动范围值夹到 SCROLLINFO 的 int 字段能装下的区间,避免溢出/负数。
-// 文档高度在真实场景里远不会逼近这个上限,这里只是防御性夹取。
-int ClampToScrollInfoRange(float value) {
-    constexpr float kScrollInfoMaxValue = 2000000000.0f;
-    if (value <= 0.0f) return 0;
-    if (value >= kScrollInfoMaxValue) return static_cast<int>(kScrollInfoMaxValue);
-    return static_cast<int>(value + 0.5f);  // 四舍五入,精度损失是滚动条 UI 的固有限制
-}
-
-// 把 WindowState::scrollY 同步到原生垂直滚动条(WS_VSCROLL)。任何改动过
-// scrollY 或者可能改变了总高度/视口尺寸的地方都应该在收尾调用一次,否则会出现
-// "用滚轮/键盘滚动了,滑块位置却没跟着动"这种明显 bug。
-void SyncScrollBar(HWND hwnd, const WindowState* state) {
-    if (!state || !state->layout) return;
-
-    float totalHeight = state->layout->TotalHeight();
-    float usableViewportHeight = UsableViewportHeightOf(hwnd);
-
-    SCROLLINFO si{};
-    si.cbSize = sizeof(SCROLLINFO);
-    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
-    si.nMin = 0;
-    si.nMax = ClampToScrollInfoRange(totalHeight);
-    si.nPage = static_cast<UINT>(ClampToScrollInfoRange(usableViewportHeight));
-    si.nPos = ClampToScrollInfoRange(state->scrollY);
-    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
-}
 
 // T29:在"释放全部 layout 并重排"之前,找到当前视口顶部对应的块下标——
 // 取"top <= scrollY 的块中 top 最大的那个",重排后用同一个块下标的新 top
@@ -345,7 +331,6 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
         (topBlock < state->layout->BlockCount()) ? state->layout->Geometry(topBlock).top : 0.0f;
     state->scrollY =
         ClampScrollOffset(newScrollY, state->layout->TotalHeight(), usableViewportHeight);
-    SyncScrollBar(hwnd, state);
 
     // Relayout 会淘汰全部 IDWriteTextLayout,必须在这里立刻按新几何重建一次,
     // 否则紧接着的这一帧会画成"只有图片、没有文字"。
@@ -357,6 +342,9 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
 // T63:侧栏可视高度(DIP),与正文视口高度取同一个"可用视口高度"——两者
 // 都是"客户区高度减去上下内边距",侧栏本身不额外留白。
 float OutlinePanelViewportHeightOf(HWND hwnd) { return UsableViewportHeightOf(hwnd); }
+
+// 前向声明:`ToggleOutlinePanel` 打开侧栏时要立即调一次(见下方定义与调用点注释)。
+void RecomputeOutlineHighlight(HWND hwnd, WindowState* state);
 
 // T63:`Ctrl+\` 的核心动作——严格的"指针为空即不存在"实现:
 //   - 打开:在 outlineArena 上(惰性 Init,幂等)placement-new 构造一个
@@ -384,6 +372,10 @@ void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
     OutlinePanel* panel = new (mem) OutlinePanel(state->outlineArena);
     if (state->doc) panel->Rebuild(*state->doc);
     state->outline = panel;
+    // 立即算一次当前阅读位置高亮:以前这一步靠"打开侧栏后随便滚一下正文"
+    // 顺带触发(SetScrollY 里的去抖定时器),现在正文在侧栏打开时已经不可滚动
+    // (蒙层不可穿透),必须在这里主动算一次,否则高亮永远不会出现。
+    RecomputeOutlineHighlight(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -418,19 +410,18 @@ void RecomputeOutlineHighlight(HWND hwnd, WindowState* state) {
     // 局部重绘:只失效侧栏那一块矩形,不整窗失效。侧栏固定浮在客户区左上角,
     // 宽度按 DPI 缩放。
     float scale = DipScaleOf(hwnd);
-    RECT rc{0, 0, static_cast<int>(kOutlinePanelWidthDip * scale + 0.5f),
+    RECT rc{0, 0, static_cast<int>(state->outlinePanelWidthDip * scale + 0.5f),
             static_cast<int>((OutlinePanelViewportHeightOf(hwnd) + 2.0f * kContentPaddingDip) *
                              scale + 0.5f)};
     InvalidateRect(hwnd, &rc, FALSE);
 }
 
 // 滚动偏移变化后的统一收尾:任何触发滚动的路径(滚轮/键盘/查找跳转/换文档/
-// 图片解码重排/原生滚动条拖动)都应该走这里,保证:
+// 图片解码重排/自绘滚动条拖动)都应该走这里,保证:
 //   ① scrollY 按当前视口/文档高度重新夹取一次(调用方传入的值未必已经夹过);
-//   ② 原生滚动条(WS_VSCROLL)滑块位置与 scrollY 同步;
-//   ③ 刷新可见范围内的 IDWriteTextLayout / 图片解码位图并请求重绘。
-// 偏移夹取后没有实际变化时跳过②之后的步骤,避免顶部/底部到界后仍反复重绘,
-// 但滚动条仍会同步一次(窗口尺寸/文档高度可能已经变了,即使 scrollY 没变)。
+//   ② 刷新可见范围内的 IDWriteTextLayout / 图片解码位图并请求重绘。
+// 滑块视觉位置由 Renderer::DrawScrollbar 每帧按 state->scrollY 现算,不需要
+// 单独同步一步。偏移夹取后没有实际变化时跳过②,避免顶部/底部到界后仍反复重绘。
 // forceRefresh:换文档这类"scrollY 数值可能凑巧没变、但 layout 已经整个换掉了"
 // 的场景传 true,跳过"没变化就不刷新虚拟化"的短路判断。
 void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = false) {
@@ -442,7 +433,6 @@ void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = f
 
     bool changed = forceRefresh || (clamped != state->scrollY);
     state->scrollY = clamped;
-    SyncScrollBar(hwnd, state);
 
     // 虚拟化刷新只在偏移真正变化时才需要(顶部/底部到界后重复触发没有意义);
     // 但重绘请求总是发出——调用方可能是"当前命中变了但仍在同一屏"这种场景
@@ -514,6 +504,34 @@ void OnCodeCopyButtonClicked(HWND hwnd, WindowState* state, u32 blockIndex) {
     // 因此连续点多个按钮时只有最后一次的反馈态,时长也从最后一次重新算。
     SetTimer(hwnd, kCopyFeedbackTimerId, kCopyFeedbackDurationMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// T80:把一次鼠标事件的屏幕坐标翻译成"文档文本位置"(块下标 + 该块内
+// UTF-16 偏移),供拖选起点/终点使用。与 HitTestAtClientPoint 共用同一套
+// 坐标换算,只是命中判定换成 HitTestTextPosition(支持落在块间隙/文档
+// 边界外时钳到最近块)。
+DocTextHit TextPositionAtClientPoint(HWND hwnd, WindowState* state, int px, int py) {
+    if (!state || !state->layout) return DocTextHit{false, kInvalidIndex, 0};
+    DocPoint p = ClientToDocumentPoint(hwnd, state, px, py);
+    return HitTestTextPosition(*state->layout, p.x, p.y);
+}
+
+// T80:Ctrl+C——把当前选区的纯文本拼好写进剪贴板。选区为空/没有绑定
+// selectionScratch 时静默无效,不弹任何提示(与 T45 复制按钮失败态同一口径)。
+void CopySelectionToClipboard(HWND hwnd, WindowState* state) {
+    if (!state || !state->doc || !state->selection || !state->selectionScratch) return;
+    if (!state->selection->HasSelection()) return;
+
+    SelectionRange range = state->selection->Range();
+    StrSlice text = SelectionPlainTextUtf8(*state->doc, range, state->selectionScratch);
+    if (!text.data || text.len == 0) return;
+
+    // 剪贴板的 CF_UNICODETEXT 就是 UTF-16,复用 T45 已验证过的转换工具。
+    // Utf8ToUtf16 在同一块 selectionScratch 上分配,紧跟在 text 之后增长,
+    // 不会覆盖 text 已经写好的内存(selectionScratch 全程只 Reset 一次)。
+    Utf16Slice wide = Utf8ToUtf16(text, state->selectionScratch);
+    if (!wide.data) return;
+    SetClipboardUnicodeText(hwnd, wide.data, wide.len);
 }
 
 // 按命中结果取回对应的 ImageBox;不是图片命中时返回 nullptr。
@@ -832,7 +850,6 @@ void OnRemoteImageDone(HWND hwnd, WindowState* state, RemoteImageResult* result)
         state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                           *state->fonts, state->residency);
         RelayoutForImagesIfNeeded(hwnd, state);
-        SyncScrollBar(hwnd, state);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
 }
@@ -856,6 +873,8 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     if (!state || !state->renderer) return;
     if (!state->layout || !state->doc || !state->fonts) return;
 
+    if (state->onFrameBegin) state->onFrameBegin(state->callbackUserData);
+
     // 先把渲染目标建起来,再跑虚拟化 —— 图片解码需要绑定渲染目标创建位图,
     // 否则首帧会白解一次却建不出位图(见 Renderer::EnsureTarget 的注释)。
     state->renderer->EnsureTarget(hwnd);
@@ -866,7 +885,6 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     // T33:首次解码出真实尺寸后,若与占位尺寸不同就在这里做一次性重排,
     // 之后同一批图片不会再触发(ImagePlacementChanged 会返回 false)。
     RelayoutForImagesIfNeeded(hwnd, state);
-    SyncScrollBar(hwnd, state);
 
     // T42(bench 专用):首屏解码完之后,若开启了"强制全量解码",再对整份文档
     // 补一次 UpdateVisibleRange,把首屏之外的图片也解码一遍,近似"滚到底"的
@@ -878,6 +896,8 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         RelayoutForImagesIfNeeded(hwnd, state);
     }
 
+    if (state->onFrameLayoutDone) state->onFrameLayoutDone(state->callbackUserData);
+
     // T37/T38:把查找命中集合与查找条/提示条打包成只读视图交给渲染层;
     // 两者都没有时传 nullptr,渲染层零额外开销。
     ShellOverlay overlay{};
@@ -886,7 +906,19 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     const ShellOverlay* overlayPtr = nullptr;
     bool hasCopyButtonState =
         state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
-    if (state->find || state->statusMessage || hasCopyButtonState || state->outline) {
+    bool hasSelection = state->selection && state->selection->HasSelection();
+    if (state->find || state->statusMessage || hasCopyButtonState || state->outline ||
+        hasSelection) {
+        // T80:鼠标拖选高亮,选区为空时保持聚合初始化留下的 false/0,渲染层
+        // 不画任何高亮,零额外开销。
+        if (hasSelection) {
+            SelectionRange range = state->selection->Range();
+            overlay.selectionActive = true;
+            overlay.selStartBlock = range.start.blockIndex;
+            overlay.selStartOffset = range.start.charOffset;
+            overlay.selEndBlock = range.end.blockIndex;
+            overlay.selEndOffset = range.end.charOffset;
+        }
         // T45:复制按钮的悬浮/已复制态同样通过叠加层视图交给渲染层,渲染层
         // 因此不需要认识"外壳层状态"这个概念(与查找高亮同一条通路)。
         overlay.copyButtonHoverBlock = state->copyButtonHover;
@@ -912,6 +944,11 @@ void PaintOnce(HWND hwnd, WindowState* state) {
             overlay.outlineItemCount = items.len;
             overlay.outlineCurrentItem = state->outline->CurrentItem();
             overlay.outlineScrollY = state->outline->ScrollY();
+            overlay.outlinePanelWidthDip = state->outlinePanelWidthDip;
+            // 悬浮或正在拖动都算 Active(见 theme.h 的 Idle/Active 两档透明度)。
+            overlay.outlineScrollbarActive =
+                state->outlineScrollbarHover ||
+                state->scrollbarDragTarget == ScrollbarDragTarget::Outline;
         } else {
             overlay.outlineCurrentItem = kInvalidIndex;
         }
@@ -920,8 +957,19 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
     // 早就在算 `g.top - scrollY`,传一个减去内边距的 scrollY 即等效于内容下移。
     float effectiveScrollY = state->scrollY - kContentPaddingDip;
-    bool presented = state->renderer->RenderFrame(hwnd, *state->layout, effectiveScrollY,
-                                                   kContentPaddingDip, overlayPtr);
+    // 悬浮或正在拖动都算 Active(见 theme.h 的 Idle/Active 两档透明度);
+    // 侧栏打开时正文滚动条本来就不画,这个值被 RenderFrame 忽略。
+    bool mainScrollbarActive =
+        state->mainScrollbarHover || state->scrollbarDragTarget == ScrollbarDragTarget::Main;
+    // 底部栏右侧状态区(2026-09-18 新增):当前文档路径 + 大小,未打开文件时
+    // currentDocumentPath 是空字符串,渲染层据此不画任何文字。悬浮提示气泡
+    // 同批传入:bottomBarHoverButton 转成裸下标,render 层不认识这个枚举。
+    bool presented = state->renderer->RenderFrame(
+        hwnd, *state->layout, effectiveScrollY, kContentPaddingDip, overlayPtr,
+        mainScrollbarActive, state->currentDocumentPath, state->currentDocumentSizeBytes,
+        static_cast<u32>(state->bottomBarHoverButton));
+
+    if (state->onFrameEnd) state->onFrameEnd(state->callbackUserData);
 
     if (presented && !state->firstPresentDone) {
         state->firstPresentDone = true;
@@ -946,11 +994,11 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         state->layout->Relayout(*state->doc, contentWidth, fontScale, state->images);
         // 滚动范围夹取同样要用"可用视口高度"(收窄掉上下内边距),口径与
         // ClampScrollOffset 的其余调用点一致,滚到底才会正确留出底部内边距空白。
-        float usableViewportHeight = UsableViewportHeightDip(static_cast<float>(height) / scale);
+        float rawViewportHeight = static_cast<float>(height) / scale - kBottomBarHeightDip;
+        if (rawViewportHeight < 0.0f) rawViewportHeight = 0.0f;
+        float usableViewportHeight = UsableViewportHeightDip(rawViewportHeight);
         state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
                                            usableViewportHeight);
-        // 窗口尺寸变化必然改变滚动条的 nMax/nPage,即使 scrollY 数值没变也要同步。
-        SyncScrollBar(hwnd, state);
     }
     // T56:尺寸变化(含最大化/还原)去抖后写盘;放在这里而不是只放 WM_MOVE,
     // 因为纯拖边框改尺寸不会触发 WM_MOVE。
@@ -982,7 +1030,6 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
         ClampScrollOffset(newScrollY, state->layout->TotalHeight(), usableViewportHeight);
     state->layout->UpdateVisibleRange(state->scrollY, state->scrollY + usableViewportHeight,
                                       *state->fonts, state->residency);
-    SyncScrollBar(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
     // T57:字号缩放持久化(接过 M1 T29 的挂账)。复用 T56 的
     // onWindowGeometryChanged 钩子而不是新起一套回调——调用方(main.cpp)的
@@ -990,6 +1037,48 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
     // 项走同一条 T55"读-改-写 + 命名互斥体"通道,不绕过它。缩放是离散按键
     // 触发、不连续,不需要像窗口拖拽那样去抖。
     if (state->onWindowGeometryChanged) state->onWindowGeometryChanged(state->callbackUserData);
+}
+
+// 底部操作栏(新需求):5 个按钮各自的动作全部复用现有函数,不另写一套——
+// 放大/缩小复用 T29 的 FontSubsystem::ZoomIn/ZoomOut + ApplyZoomChange(与
+// Ctrl+± 同一路径),主题复用 T47 的 CycleTheme(与 Ctrl+Shift+T 同一路径),
+// 大纲复用 T63 的 ToggleOutlinePanel(与 Ctrl+\ 同一路径)。"打开文档"是唯一
+// 新增行为:弹出 IFileOpenDialog,选中后用 CreateProcessW 新开一个独立
+// mdvn.exe 进程——不调用 openDocumentInPlace,不替换当前正在看的文档。
+void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn) {
+    if (!state) return;
+    switch (btn) {
+    case BottomBarButton::ZoomIn:
+        if (state->fonts) {
+            state->fonts->ZoomIn();
+            ApplyZoomChange(hwnd, state);
+        }
+        return;
+    case BottomBarButton::ZoomOut:
+        if (state->fonts) {
+            state->fonts->ZoomOut();
+            ApplyZoomChange(hwnd, state);
+        }
+        return;
+    case BottomBarButton::Theme:
+        CycleTheme(hwnd, state);
+        return;
+    case BottomBarButton::Outline:
+        ToggleOutlinePanel(hwnd, state);
+        return;
+    case BottomBarButton::OpenDoc: {
+        wchar_t path[MAX_PATH]{};
+        if (!ShowOpenMarkdownDialog(hwnd, path, MAX_PATH)) return;  // 用户取消,静默无行为
+        if (!LaunchNewInstance(path)) {
+            state->statusMessage = L"打开新窗口失败";
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return;
+    }
+    case BottomBarButton::None:
+    default:
+        return;
+    }
 }
 
 // DPI 变化:先应用系统建议的新窗口矩形,再通知渲染器按新 DPI 重建 D2D 资源。
@@ -1054,12 +1143,86 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
 
     case WM_LBUTTONDOWN: {
+        // 底部操作栏(新需求):最高优先级短路——它是持久化、常驻在最上层
+        // (最后一个画,盖在正文/大纲侧栏之上)的控件带,点击落在其区域内时
+        // 一律不再往下走任何正文/侧栏命中测试。
+        if (state) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float clientHeightDip = ClientHeightDip(hwnd);
+            if (IsPointInBottomBar(clientHeightDip, dipY)) {
+                float clientWidthDip = ClientWidthDip(hwnd);
+                BottomBarButton btn = HitTestBottomBar(clientWidthDip, dipX);
+                OnBottomBarButtonClicked(hwnd, state, btn);
+                return 0;
+            }
+        }
+
+        // T63b:大纲侧栏右边缘拖拽调宽度的抓手——优先级最高(高于滚动条/条目
+        // 点击),因为抓手横跨侧栏/蒙层边界,不这样处理会被两边的点击逻辑抢走。
+        if (state && state->outline) {
+            float scale = DipScaleOf(hwnd);
+            if (IsPointInOutlinePanelResizeHandle(GET_X_LPARAM(lparam), scale,
+                                                  state->outlinePanelWidthDip)) {
+                state->outlinePanelResizing = true;
+                state->outlinePanelResizeStartMouseXDip =
+                    static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+                state->outlinePanelResizeStartWidthDip = state->outlinePanelWidthDip;
+                SetCapture(hwnd);
+                return 0;
+            }
+        }
+
+        // 自绘滚动条(方案A):按下即可能开始拖动滑块,优先级仅次于底部操作栏、
+        // 高于侧栏条目点击/正文命中测试——点在滑块上不应该被当成"点了条目/
+        // 文本"。侧栏打开时只判它自己的滚动条(浮在最上层);侧栏关闭时判正文的。
+        if (state) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+
+            if (state->outline &&
+                IsPointInOutlinePanelRect(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), scale,
+                                          state->outlinePanelWidthDip, ClientHeightDip(hwnd))) {
+                float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
+                float contentHeight = OutlinePanelContentHeightDip(state->outline->ItemCount());
+                ScrollbarMetrics m = CalcScrollbarMetrics(state->outlinePanelWidthDip, viewportHeight,
+                                                          contentHeight, state->outline->ScrollY());
+                if (IsPointInScrollbarThumb(m, dipX, dipY)) {
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Outline;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = state->outline->ScrollY();
+                    SetCapture(hwnd);
+                    return 0;
+                }
+            } else if (!state->outline && state->layout) {
+                float viewportHeight = UsableViewportHeightOf(hwnd);
+                float viewportWidth = ClientWidthDip(hwnd);
+                ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
+                                                          state->layout->TotalHeight(), state->scrollY);
+                if (IsPointInScrollbarThumb(m, dipX, dipY)) {
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Main;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = state->scrollY;
+                    SetCapture(hwnd);
+                    return 0;
+                }
+            }
+        }
+
         // T64:大纲侧栏区域与正文互不干扰 —— 侧栏打开且点击落在侧栏区域内时,
         // 短路掉正文的命中测试,不让下面的链接/图片/复制按钮命中再跑一遍,
         // 否则会出现"点侧栏结果打开了底下的链接"。
-        if (state && state->outline &&
-            IsPointInOutlinePanel(GET_X_LPARAM(lparam), DipScaleOf(hwnd), kOutlinePanelWidthDip)) {
-            OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
+        if (state && state->outline) {
+            if (IsPointInOutlinePanel(GET_X_LPARAM(lparam), DipScaleOf(hwnd),
+                                      state->outlinePanelWidthDip)) {
+                OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
+            } else if (IsPointInOutlineOverlayMask(GET_X_LPARAM(lparam), DipScaleOf(hwnd),
+                                                    state->outlinePanelWidthDip)) {
+                // 点击蒙层区域(侧栏之外的正文区域):关闭侧栏,同 Ctrl+\。
+                ToggleOutlinePanel(hwnd, state);
+            }
             return 0;
         }
 
@@ -1083,11 +1246,76 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 OnImageClicked(hwnd, state, *box);
                 return 0;
             }
+
+            // T80:没有命中任何可交互内容——落在正文文本上,开始一次拖选。
+            // Begin() 把锚点/焦点都设成按下位置,天然清掉了上一次的选区
+            // (符合"点击文档任意位置应清除已有选区"的直觉预期);真的没有
+            // 可选文本(如空文档)时 DocTextHit::valid 为 false,不进入拖选。
+            if (state->selection) {
+                DocTextHit textHit =
+                    TextPositionAtClientPoint(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+                if (textHit.valid) {
+                    state->selection->Begin(DocTextPos{textHit.blockIndex, textHit.charOffset});
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     case WM_MOUSEMOVE: {
+        // T63b:正在拖拽侧栏右边缘调宽度——按鼠标横向位移换算新宽度,夹到
+        // 合法区间。整窗重绘,因为宽度变化牵连蒙层/正文可用宽度这些跨区域
+        // 的几何,不值得为此单独算一块局部矩形。
+        if (state && state->outlinePanelResizing && (wparam & MK_LBUTTON)) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dragDelta = dipX - state->outlinePanelResizeStartMouseXDip;
+            state->outlinePanelWidthDip =
+                ClampOutlinePanelWidth(state->outlinePanelResizeStartWidthDip + dragDelta);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        // 自绘滚动条(方案A):正在拖滑块——按鼠标位移换算新的滚动偏移。
+        // 与 T80 文本拖选互斥(按下时二者只会有一个进入,见 WM_LBUTTONDOWN),
+        // 这里提前 return,不再往下走选区更新/悬浮态判定。
+        if (state && state->scrollbarDragTarget != ScrollbarDragTarget::None &&
+            (wparam & MK_LBUTTON)) {
+            float scale = DipScaleOf(hwnd);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dragDelta = dipY - state->scrollbarDragStartMouseYDip;
+
+            if (state->scrollbarDragTarget == ScrollbarDragTarget::Main && state->layout) {
+                float viewportHeight = UsableViewportHeightOf(hwnd);
+                float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
+                                                   viewportHeight, state->layout->TotalHeight());
+                SetScrollY(hwnd, state, newY);
+            } else if (state->scrollbarDragTarget == ScrollbarDragTarget::Outline && state->outline) {
+                float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
+                float contentHeight = OutlinePanelContentHeightDip(state->outline->ItemCount());
+                float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
+                                                   viewportHeight, contentHeight);
+                state->outline->SetScrollY(newY, viewportHeight);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+
+        // T80:左键按住且正在拖选——更新选区终点(与代码块复制按钮悬浮态
+        // 互不冲突,拖选优先,悬浮态判定仍照常跑,方便拖选途中扫过复制按钮
+        // 也能正确恢复默认态)。
+        if (state && state->layout && state->selection && state->selection->IsDragging() &&
+            (wparam & MK_LBUTTON)) {
+            DocTextHit textHit =
+                TextPositionAtClientPoint(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            if (textHit.valid) {
+                state->selection->Update(DocTextPos{textHit.blockIndex, textHit.charOffset});
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
         // T45:只更新代码块复制按钮的悬浮态(变化时才重绘)。链接/图片的手型
         // 光标仍由 WM_SETCURSOR 负责,这里不重复做文本命中。
         if (state && state->layout) {
@@ -1101,16 +1329,93 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             track.hwndTrack = hwnd;
             TrackMouseEvent(&track);
         }
+
+        // 自绘滚动条 Idle/Active 透明度(见 theme.h):只判"鼠标是否落在滚动条
+        // 横向范围内",纵坐标夹在对应视口高度内(排除底部操作栏这类其他控件
+        // 占用的区域)。侧栏打开时只判侧栏自己的,关闭时只判正文的——与两者
+        // 互斥的绘制/拖动逻辑保持同一套"非此即彼"口径。
+        if (state) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+
+            bool newOutlineHover = false;
+            bool newMainHover = false;
+            if (state->outline) {
+                float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
+                newOutlineHover = dipY >= 0.0f && dipY <= viewportHeight &&
+                                   IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX);
+            } else if (state->layout) {
+                float viewportHeight = UsableViewportHeightOf(hwnd);
+                float viewportWidth = ClientWidthDip(hwnd);
+                newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
+                                IsPointInScrollbarColumn(viewportWidth, dipX);
+            }
+            if (newOutlineHover != state->outlineScrollbarHover ||
+                newMainHover != state->mainScrollbarHover) {
+                state->outlineScrollbarHover = newOutlineHover;
+                state->mainScrollbarHover = newMainHover;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+
+            // 底部栏图标按钮悬浮态(2026-09-18 新增,取代常驻文字标签):复用
+            // 已有的 IsPointInBottomBar/HitTestBottomBar 判定,与上面滚动条
+            // 悬浮态同一条"高频消息,只做廉价矩形判定"的口径。命中状态区
+            // (BottomBarButton::None)时同样不显示提示。
+            float clientHeightDip = ClientHeightDip(hwnd);
+            BottomBarButton newBottomBarHover = BottomBarButton::None;
+            if (IsPointInBottomBar(clientHeightDip, dipY)) {
+                newBottomBarHover = HitTestBottomBar(ClientWidthDip(hwnd), dipX);
+            }
+            if (newBottomBarHover != state->bottomBarHoverButton) {
+                state->bottomBarHoverButton = newBottomBarHover;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    case WM_LBUTTONUP: {
+        // T63b:结束侧栏调宽度拖拽。
+        if (state && state->outlinePanelResizing) {
+            state->outlinePanelResizing = false;
+            ReleaseCapture();
+        }
+        // 自绘滚动条(方案A):结束拖动。
+        if (state && state->scrollbarDragTarget != ScrollbarDragTarget::None) {
+            state->scrollbarDragTarget = ScrollbarDragTarget::None;
+            ReleaseCapture();
+        }
+        // T80:结束拖选,选区本身保留(直到下一次点击/拖选覆盖它)。
+        if (state && state->selection && state->selection->IsDragging()) {
+            state->selection->End();
+            ReleaseCapture();
+        }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     case WM_MOUSELEAVE: {
         // T45:鼠标离开客户区 -> 清掉复制按钮悬浮态("已复制"反馈态不受影响,
-        // 它由定时器负责收尾)。
+        // 它由定时器负责收尾)。滚动条悬浮态同理清掉(正在拖动时不受影响——
+        // 拖动靠 SetCapture 持续接收 WM_MOUSEMOVE,光标短暂移出客户区边界
+        // 不代表用户想结束拖动)。
+        bool changed = false;
         if (state && state->copyButtonHover != kInvalidIndex) {
             state->copyButtonHover = kInvalidIndex;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            changed = true;
         }
+        if (state && state->scrollbarDragTarget == ScrollbarDragTarget::None &&
+            (state->mainScrollbarHover || state->outlineScrollbarHover)) {
+            state->mainScrollbarHover = false;
+            state->outlineScrollbarHover = false;
+            changed = true;
+        }
+        // 底部栏图标悬浮提示同理清掉,鼠标移出窗口就不该再挂着提示气泡。
+        if (state && state->bottomBarHoverButton != BottomBarButton::None) {
+            state->bottomBarHoverButton = BottomBarButton::None;
+            changed = true;
+        }
+        if (changed) InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
 
@@ -1137,10 +1442,59 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             RecomputeOutlineHighlight(hwnd, state);
             return 0;
         }
+        // T78:内存泄漏排查探针的循环节拍——每次到点执行一次对应动作,
+        // 复用与真实快捷键完全相同的代码路径(不是重新实现一遍语义)。
+        if (wparam == kBenchLoopTimerId && state && state->benchLoopKind != 0) {
+            switch (state->benchLoopKind) {
+                case 1:  // 就地换文档,复用 T36 openDocumentInPlace
+                    if (state->openDocumentInPlace && state->benchLoopFiles &&
+                        state->benchLoopFileCount > 0) {
+                        const wchar_t* path =
+                            state->benchLoopFiles[state->benchLoopDone % state->benchLoopFileCount];
+                        state->openDocumentInPlace(state->callbackUserData, path);
+                    }
+                    break;
+                case 2:  // 主题循环,同 Ctrl+Shift+T
+                    CycleTheme(hwnd, state);
+                    break;
+                case 3:  // 大纲侧栏开关,同 Ctrl+反斜杠
+                    ToggleOutlinePanel(hwnd, state);
+                    break;
+                case 4:  // F5 重载,同 F5
+                    ReloadCurrentDocument(hwnd, state);
+                    break;
+                default:
+                    break;
+            }
+            ++state->benchLoopDone;
+            if (state->onBenchLoopTick) {
+                state->onBenchLoopTick(state->callbackUserData, state->benchLoopDone);
+            }
+            if (state->benchLoopDone >= state->benchLoopTotal) {
+                KillTimer(hwnd, kBenchLoopTimerId);
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     case WM_SETCURSOR: {
+        // T63b:侧栏调宽度抓手——正在拖拽时,或鼠标悬浮在抓手上时,都给
+        // 左右缩放光标,优先级最高(拖动状态下不管光标当前在哪都要保持)。
+        if (state && state->outlinePanelResizing) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
+            return TRUE;
+        }
+        if (state && state->outline && LOWORD(lparam) == HTCLIENT) {
+            POINT pt{};
+            if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt) &&
+                IsPointInOutlinePanelResizeHandle(pt.x, DipScaleOf(hwnd),
+                                                  state->outlinePanelWidthDip)) {
+                SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
+                return TRUE;
+            }
+        }
         // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标;
         // T45 的代码块复制按钮同理(它就是个按钮,手型光标是最符合直觉的提示)。
         if (state && state->layout && LOWORD(lparam) == HTCLIENT) {
@@ -1180,39 +1534,38 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             ApplyZoomChange(hwnd, state);
             return 0;
         }
-        if (state && state->layout) {
+        // 大纲侧栏打开且鼠标落在其区域内时,滚轮滚动侧栏自身,不滚正文——
+        // WM_MOUSEWHEEL 携带的是屏幕坐标,先 ScreenToClient 换算成客户区坐标。
+        if (state && state->outline) {
+            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (ScreenToClient(hwnd, &pt) &&
+                IsPointInOutlinePanelRect(pt.x, pt.y, DipScaleOf(hwnd), state->outlinePanelWidthDip,
+                                          ClientHeightDip(hwnd))) {
+                OutlinePanel* panel = state->outline;
+                float panelHeight = OutlinePanelViewportHeightOf(hwnd);
+                float contentHeight = OutlinePanelContentHeightDip(panel->ItemCount());
+                float newY = ScrollByWheel(panel->ScrollY(), GET_WHEEL_DELTA_WPARAM(wparam),
+                                           contentHeight, panelHeight);
+                panel->SetScrollY(newY, panelHeight);
+
+                // 局部重绘:只失效侧栏那一块矩形,与 RecomputeOutlineHighlight
+                // 同一套矩形口径,不整窗失效。
+                float scale = DipScaleOf(hwnd);
+                RECT rc{0, 0, static_cast<int>(state->outlinePanelWidthDip * scale + 0.5f),
+                        static_cast<int>((panelHeight + 2.0f * kContentPaddingDip) *
+                                         scale + 0.5f)};
+                InvalidateRect(hwnd, &rc, FALSE);
+                return 0;
+            }
+        }
+
+        // 大纲侧栏打开时,正文被半透明蒙层盖住,不接受滚轮——上面的分支已经
+        // 处理了"滚在侧栏自身范围内"的情况,走到这里说明鼠标落在蒙层区域,
+        // 直接忽略,不能穿透蒙层滚动看不见的正文。
+        if (state && state->layout && !state->outline) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
                                        state->layout->TotalHeight(), UsableViewportHeightOf(hwnd));
             SetScrollY(hwnd, state, newY);
-        }
-        return 0;
-    }
-
-    case WM_VSCROLL: {
-        // 原生垂直滚动条(WS_VSCROLL)拖动/点击箭头/点击滑槽的统一入口。
-        if (state && state->layout) {
-            int code = LOWORD(wparam);
-            if (IsThumbScrollCode(code)) {
-                // MSDN 明确建议:WM_VSCROLL 的 HIWORD(wParam) 只有 16 位,文档高度
-                // 一旦超过 65535 DIP 就会截断,拖动滑块/松手时改用 GetScrollInfo 的
-                // SIF_TRACKPOS 读取完整精度的滑块位置。
-                SCROLLINFO si{};
-                si.cbSize = sizeof(SCROLLINFO);
-                si.fMask = SIF_TRACKPOS;
-                float target = state->scrollY;
-                if (GetScrollInfo(hwnd, SB_VERT, &si)) {
-                    target = static_cast<float>(si.nTrackPos);
-                }
-                SetScrollY(hwnd, state, target);
-            } else {
-                ScrollCommand command;
-                if (ScrollCommandFromScrollBarCode(code, &command)) {
-                    float newY = ApplyScrollCommand(state->scrollY, command,
-                                                    state->layout->TotalHeight(),
-                                                    UsableViewportHeightOf(hwnd));
-                    SetScrollY(hwnd, state, newY);
-                }
-            }
         }
         return 0;
     }
@@ -1244,6 +1597,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // Ctrl+W / Esc:关闭当前窗口(每个文件一个独立窗口,关掉即退出本进程)。
         if (wparam == VK_ESCAPE || (ctrlDown && wparam == 'W')) {
             DestroyWindow(hwnd);
+            return 0;
+        }
+        // T80:Ctrl+C 复制当前选中的正文文本(纯文本,跨块拼接)。查找条打开时
+        // 也允许——两者不冲突,查找条本身没有可选文本,复制的是正文选区。
+        if (ctrlDown && wparam == 'C' && state) {
+            CopySelectionToClipboard(hwnd, state);
             return 0;
         }
         // T37:Ctrl+F 打开查找条。
@@ -1313,6 +1672,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
         // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
         KillTimer(hwnd, kWindowGeometryTimerId);
+        // T78:同理收掉泄漏探针的循环定时器(正常路径下该定时器从未被 Set,
+        // KillTimer 一个不存在的定时器是安全的空操作)。
+        KillTimer(hwnd, kBenchLoopTimerId);
         if (state) {
             UpdateWindowGeometryState(hwnd, state);
             if (state->onWindowGeometryChanged) {
@@ -1386,6 +1748,16 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // "第 0 个块的复制按钮处于悬浮/已复制态"。
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
+    // 底部栏悬浮提示(2026-09-18 新增):零值会被当成"悬浮在第 0 个按钮
+    // (ZoomIn)上",必须显式置为 None,与上面两个 kInvalidIndex 同一条理由。
+    state->bottomBarHoverButton = BottomBarButton::None;
+    // 自绘滚动条(方案A):默认没有任何一个在被拖动,也没有悬浮。
+    state->scrollbarDragTarget = ScrollbarDragTarget::None;
+    state->mainScrollbarHover = false;
+    state->outlineScrollbarHover = false;
+    // T63b:侧栏默认宽度,未拖拽过时就是这个值;默认没有在拖拽调宽。
+    state->outlinePanelWidthDip = kOutlinePanelWidthDip;
+    state->outlinePanelResizing = false;
     // T63:显式确认默认关闭——调用方应已经把这个字段填成 nullptr,这里再赋
     // 一次是防御性写法(与其余"由调用方填好"的字段一致,不额外分配任何东西)。
     state->outline = nullptr;
@@ -1435,9 +1807,10 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     }
 
     // 标准 Windows 标题栏(WS_OVERLAPPEDWINDOW),不自绘(裁决 #9)。
-    // WS_VSCROLL:原生右侧滚动条,外观完全交给系统主题,不自绘。
+    // 滚动条改为自绘(方案A,2026-09-18):不再声明 WS_VSCROLL,正文与大纲
+    // 侧栏统一用 Renderer::DrawScrollbar 画同一套 8px 圆角滑块,见 scrollbar.h。
     HWND hwnd = CreateWindowExW(
-        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW,
         createX, createY, createW, createH,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
@@ -1468,11 +1841,6 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
         }
     }
 
-    // 保险起见显式同步一次滚动条:WM_SIZE 通常会在窗口创建/显示过程中触发并
-    // 顺带同步(见 OnSize),这里再补一次是为了在极端情况下(比如 WM_SIZE 没有
-    // 如预期触发)也不会出现"滚动条还没配置好"的窗口。
-    SyncScrollBar(hwnd, state);
-
     // T56:恢复最大化态——`ShowWindow(SW_SHOWMAXIMIZED)` 会以刚才创建时的
     // 矩形作为还原态(`rcNormalPosition`),再整体最大化,与
     // `WINDOWPLACEMENT::rcNormalPosition` 才是还原态矩形的口径一致。
@@ -1482,6 +1850,13 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // T56:创建完成后把 winX/Y/W/H/winMaximized 更新为窗口当前的实际值
     // (不再是"待恢复值"),供后续移动/缩放/退出时的持久化读取。
     UpdateWindowGeometryState(hwnd, state);
+
+    // T78:内存泄漏排查探针——benchLoopKind != 0 时才启动这个定时器,默认
+    // (不带 --bench-loop)恒为 0,不产生任何额外调用。
+    state->benchLoopDone = 0;
+    if (state->benchLoopKind != 0 && state->benchLoopTotal > 0) {
+        SetTimer(hwnd, kBenchLoopTimerId, kBenchLoopIntervalMs, nullptr);
+    }
     return hwnd;
 }
 

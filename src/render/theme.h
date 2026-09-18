@@ -58,10 +58,12 @@ struct Palette {
     D2D1_COLOR_F codeCopyDone;                // 代码块复制按钮:已复制态(边框+对勾)
     D2D1_COLOR_F findHighlight;               // 查找命中高亮底色
     D2D1_COLOR_F findCurrentHighlight;        // 查找当前命中高亮底色
+    D2D1_COLOR_F selectionHighlight;          // T80:鼠标拖选文本的高亮底色
     D2D1_COLOR_F overlayBarBackground;        // 浮出条(查找条/大纲侧栏共用)底色
     D2D1_COLOR_F overlayBarText;              // 浮出条文字色
     D2D1_COLOR_F outlineHighlightBackground;  // T63:大纲侧栏当前阅读位置条目底色
     D2D1_COLOR_F outlineHighlightText;        // T63:大纲侧栏当前阅读位置条目前景色
+    D2D1_COLOR_F outlineOverlayMaskBackground;  // 大纲侧栏打开时,盖在侧栏外正文区域的半透明蒙层色
     // T53 代码语法着色:与 hl/lexer.h 的 TokenType 七类逐一对应,只在
     // 语言被识别(languageId != kLanguageNone)时才会用到。
     D2D1_COLOR_F hlKeyword;                   // 关键字
@@ -71,6 +73,23 @@ struct Palette {
     D2D1_COLOR_F hlPunct;                     // 标点/操作符
     D2D1_COLOR_F hlBuiltin;                   // 内置类型名/内置标识符/结构化字面量
     D2D1_COLOR_F hlOther;                     // 其他(默认,含普通标识符)
+
+    // 底部操作栏(常驻,新需求):背景/文字/图标/按钮分隔线各占一个槏位,
+    // 悬浮态复用 codeCopyHoverBackground 同一手法(此处不单独开槏位)。
+    D2D1_COLOR_F bottomBarBackground;         // 底部栏底色
+    D2D1_COLOR_F bottomBarIcon;                // 底部栏图标线条色
+    D2D1_COLOR_F bottomBarText;                // 底部栏文字标签色
+    D2D1_COLOR_F bottomBarDivider;              // 底部栏按钮之间的竖分隔线
+
+    // 自绘滚动条(方案A,替代正文原生 WS_VSCROLL):正文与大纲侧栏共用同一组
+    // 槽位。都是"主题反色半透明"——浅色主题用半透明黑、深色主题用半透明白,
+    // 与 outlineOverlayMaskBackground 同一设计意图,track 比 thumb 更淡一档。
+    // Idle/Active 两套是同一颜色的两档透明度:鼠标不在滚动条区域(也没在拖动)
+    // 时用 Idle(更淡,减少常驻视觉噪音),鼠标进入或正在拖动时切到 Active。
+    D2D1_COLOR_F scrollbarTrackIdle;             // 轨道底色:默认态(更淡)
+    D2D1_COLOR_F scrollbarTrackActive;           // 轨道底色:悬浮/拖动态
+    D2D1_COLOR_F scrollbarThumbIdle;             // 滑块底色:默认态(更淡)
+    D2D1_COLOR_F scrollbarThumbActive;           // 滑块底色:悬浮/拖动态
 };
 
 /**
@@ -99,10 +118,13 @@ inline constexpr Palette kLightPalette{
     /* codeCopyDone               */ MakeColor(0x22863Au),
     /* findHighlight              */ MakeColor(0xFFE066u, 0.55f),
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
+    /* selectionHighlight         */ MakeColor(0x0366D6u, 0.28f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
     /* outlineHighlightBackground */ MakeColor(0x0366D6u, 0.16f),
     /* outlineHighlightText       */ MakeColor(0x0366D6u),
+    // 浅色主题背景接近白色,蒙层取背景的反色(黑)压暗正文,半透明。
+    /* outlineOverlayMaskBackground */ MakeColor(0x000000u, 0.35f),
     /* hlKeyword                  */ MakeColor(0xD73A49u),
     /* hlString                   */ MakeColor(0x032F62u),
     /* hlNumber                   */ MakeColor(0x005CC5u),
@@ -110,6 +132,14 @@ inline constexpr Palette kLightPalette{
     /* hlPunct                    */ MakeColor(0x24292Eu),
     /* hlBuiltin                  */ MakeColor(0x6F42C1u),
     /* hlOther                    */ MakeColor(0x000000u),
+    /* bottomBarBackground        */ MakeColor(0xF6F8FAu),
+    /* bottomBarIcon              */ MakeColor(0x24292Fu),
+    /* bottomBarText              */ MakeColor(0x24292Fu),
+    /* bottomBarDivider           */ MakeColor(0xD0D7DEu),
+    /* scrollbarTrackIdle         */ MakeColor(0x000000u, 0.05f),
+    /* scrollbarTrackActive       */ MakeColor(0x000000u, 0.10f),
+    /* scrollbarThumbIdle         */ MakeColor(0x000000u, 0.15f),
+    /* scrollbarThumbActive       */ MakeColor(0x000000u, 0.30f),
 };
 
 /**
@@ -147,10 +177,15 @@ inline constexpr Palette kDarkPalette{
     /* codeCopyDone               */ MakeColor(0x3FB950u),
     /* findHighlight              */ MakeColor(0xFFE066u, 0.55f),
     /* findCurrentHighlight       */ MakeColor(0xFF8C42u, 0.55f),
+    /* selectionHighlight         */ MakeColor(0x58A6FFu, 0.32f),
     /* overlayBarBackground       */ MakeColor(0x24292Fu, 0.92f),
     /* overlayBarText             */ MakeColor(0xFFFFFFu, 0.95f),
     /* outlineHighlightBackground */ MakeColor(0x58A6FFu, 0.18f),
     /* outlineHighlightText       */ MakeColor(0x58A6FFu),
+    // 深色主题背景本身接近黑色,蒙层取背景的反色(近白)才能压暗/柔化正文,
+    // 与浅色主题用黑色蒙层同一设计意图("往主题背景的反方向遮"),不是随手
+    // 换个数值。
+    /* outlineOverlayMaskBackground */ MakeColor(0xFFFFFFu, 0.28f),
     /* hlKeyword                  */ MakeColor(0xFF7B72u),
     /* hlString                   */ MakeColor(0xA5D6FFu),
     /* hlNumber                   */ MakeColor(0x79C0FFu),
@@ -158,6 +193,14 @@ inline constexpr Palette kDarkPalette{
     /* hlPunct                    */ MakeColor(0xC9D1D9u),
     /* hlBuiltin                  */ MakeColor(0xD2A8FFu),
     /* hlOther                    */ MakeColor(0xC9D1D9u),
+    /* bottomBarBackground        */ MakeColor(0x161B22u),
+    /* bottomBarIcon              */ MakeColor(0xC9D1D9u),
+    /* bottomBarText              */ MakeColor(0xC9D1D9u),
+    /* bottomBarDivider           */ MakeColor(0x30363Du),
+    /* scrollbarTrackIdle         */ MakeColor(0xFFFFFFu, 0.06f),
+    /* scrollbarTrackActive       */ MakeColor(0xFFFFFFu, 0.12f),
+    /* scrollbarThumbIdle         */ MakeColor(0xFFFFFFu, 0.17f),
+    /* scrollbarThumbActive       */ MakeColor(0xFFFFFFu, 0.34f),
 };
 
 /**

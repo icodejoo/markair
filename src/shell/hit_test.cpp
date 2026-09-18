@@ -140,10 +140,96 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
     return HitResult{HitKind::Link, blockIndex, targetIdx, kInvalidIndex};
 }
 
+DocTextHit HitTestTextPosition(const BlockLayoutEngine& layout, float docX, float docY) {
+    u32 blockCount = layout.BlockCount();
+
+    // 先按几何直接命中一个内容块(与 HitTestDocument 同一条纯几何判定)。
+    u32 blockIndex = FindContentBlockAt(blockCount > 0 ? &layout.Geometry(0) : nullptr,
+                                        blockCount, docX, docY);
+
+    // 落在块间隙/文档上下边界外:找竖直方向最近的一个有文本的内容块,
+    // 点在其上方就钳到开头,在其下方就钳到末尾——这样拖选可以从文档任意
+    // 空白处开始/结束,行为贴近浏览器。
+    if (blockIndex == kInvalidIndex) {
+        u32 nearest = kInvalidIndex;
+        float nearestDist = 0.0f;
+        bool nearestAbove = false;  // docY 是否落在 nearest 块的上方
+        for (u32 i = 0; i < blockCount; ++i) {
+            const BlockGeometry& g = layout.Geometry(i);
+            if (!g.textLayout) continue;
+            float dist;
+            bool above;
+            if (docY < g.top) {
+                dist = g.top - docY;
+                above = true;
+            } else if (docY >= g.bottom) {
+                dist = docY - g.bottom;
+                above = false;
+            } else {
+                dist = 0.0f;
+                above = false;
+            }
+            if (nearest == kInvalidIndex || dist < nearestDist) {
+                nearest = i;
+                nearestDist = dist;
+                nearestAbove = above;
+            }
+        }
+        if (nearest == kInvalidIndex) return DocTextHit{false, kInvalidIndex, 0};
+        const BlockGeometry& g = layout.Geometry(nearest);
+        u32 endOffset = 0;
+        if (!nearestAbove) {
+            // DWRITE_TEXT_METRICS 没有直接的"文本总长度"字段,借道
+            // HitTestPoint 打在远超文本范围的坐标上(必落在最后一个字符的
+            // 尾随边),取 textPosition + length 反推出整块文本的 UTF-16 长度。
+            BOOL trailing = FALSE;
+            BOOL inside = FALSE;
+            DWRITE_HIT_TEST_METRICS endMetrics{};
+            if (SUCCEEDED(g.textLayout->HitTestPoint(1.0e6f, 1.0e6f, &trailing, &inside,
+                                                       &endMetrics))) {
+                endOffset = endMetrics.textPosition + endMetrics.length;
+            }
+        }
+        return DocTextHit{true, nearest, nearestAbove ? 0u : endOffset};
+    }
+
+    const BlockGeometry& g = layout.Geometry(blockIndex);
+    if (!g.textLayout) return DocTextHit{false, kInvalidIndex, 0};
+
+    BOOL isTrailingHit = FALSE;
+    BOOL isInside = FALSE;
+    DWRITE_HIT_TEST_METRICS metrics{};
+    HRESULT hr = g.textLayout->HitTestPoint(docX - g.indent - g.listMarkerPad, docY - g.top,
+                                             &isTrailingHit, &isInside, &metrics);
+    if (FAILED(hr)) return DocTextHit{false, kInvalidIndex, 0};
+
+    u32 offset = metrics.textPosition + (isTrailingHit ? 1u : 0u);
+    return DocTextHit{true, blockIndex, offset};
+}
+
 bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip) {
     float scale = dipScale > 0.0f ? dipScale : 1.0f;
     float x = static_cast<float>(clientX) / scale;
     return x >= 0.0f && x < panelWidthDip;
+}
+
+bool IsPointInOutlineOverlayMask(int clientX, float dipScale, float panelWidthDip) {
+    return !IsPointInOutlinePanel(clientX, dipScale, panelWidthDip);
+}
+
+bool IsPointInOutlinePanelRect(int clientX, int clientY, float dipScale, float panelWidthDip,
+                                float clientHeightDip) {
+    if (!IsPointInOutlinePanel(clientX, dipScale, panelWidthDip)) return false;
+    float scale = dipScale > 0.0f ? dipScale : 1.0f;
+    float y = static_cast<float>(clientY) / scale;
+    return y >= 0.0f && y < clientHeightDip;
+}
+
+bool IsPointInOutlinePanelResizeHandle(int clientX, float dipScale, float panelWidthDip) {
+    float scale = dipScale > 0.0f ? dipScale : 1.0f;
+    float x = static_cast<float>(clientX) / scale;
+    float half = kOutlinePanelResizeHandleWidthDip * 0.5f;
+    return x >= panelWidthDip - half && x <= panelWidthDip + half;
 }
 
 bool ShouldUseHandCursor(const HitResult& hit) {

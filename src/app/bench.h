@@ -62,6 +62,33 @@ void MarkWindowCreated();
 // 记录"首次 Present/EndDraw 成功返回"时间点;重复调用只在第一次生效。
 void MarkFirstPresent();
 
+// ---------------------------------------------------------------------------
+// T76:逐帧重绘耗时埋点(裁决 #2 的"方案 B",只在 --bench 下生效)。
+//
+// PresentMon 测到的是 DWM 合成上屏的节奏,混杂了"mdvn 自己的重绘"与"DWM
+// 合成延迟 + 输入事件到达节奏"三部分;要判断"软件渲染够不够快",必须单独
+// 把 mdvn 自己那一段测出来。下面三个 Mark 就是干这个的:
+//   MarkFrameBegin      -> 一次 WM_PAINT 重绘开始
+//   MarkFrameLayoutDone -> 虚拟化/滚动条同步做完、即将调 D2D 绘制
+//   MarkFrameEnd        -> D2D EndDraw 返回
+// 未 Enable() 时三者都只做一次布尔判断即返回,Release 默认路径零开销。
+// ---------------------------------------------------------------------------
+
+// 记录一帧重绘的开始时刻。
+void MarkFrameBegin();
+// 记录一帧里"虚拟化 + 滚动条同步"阶段结束、D2D 绘制即将开始的时刻。
+void MarkFrameLayoutDone();
+// 记录一帧 D2D EndDraw 返回的时刻,并把本帧耗时存入内部样本环。
+void MarkFrameEnd();
+
+/**
+ * 把逐帧耗时样本的分布(样本数 / P50 / P95 / P99 / 最大值,总耗时与其中的
+ * D2D 绘制耗时各一组,外加首帧的两个值)以单行 KV 格式输出到 stderr。
+ * 仅在 Enable() 被调用过之后才产生任何效果/输出。
+ * @example mdvn::bench::EmitFrameReport();
+ */
+void EmitFrameReport();
+
 /**
  * 纯函数:给定 QueryPerformanceCounter 的频率、五个计数值与 PrivateUsage
  * 字节数,格式化成一行机器可读的 KV 文本(以 '\n' 结尾)。不依赖任何全局

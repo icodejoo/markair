@@ -2,19 +2,29 @@
 // 侧栏自身滚动裁剪、以及高亮定位二分查找的纯函数用例(含 300 条标题的
 // 二分/线性对拍)。全部走纯函数/纯类,不依赖真实 HWND/D2D。
 #include "mdvn_test.h"
+#include "../src/shell/hit_test.h"
 #include "../src/shell/outline_panel.h"
+#include "../src/shell/scroll.h"
 #include "../src/doc/model.h"
 #include "../src/doc/parser.h"
+#include "../src/layout/layout.h"
 #include "../src/util/arena.h"
 #include "../src/util/str.h"
 
 using mdvn::Arena;
+using mdvn::BlockLayoutEngine;
+using mdvn::ClampOutlinePanelWidth;
 using mdvn::Document;
 using mdvn::FindCurrentOutlineItem;
 using mdvn::FindOutlineItemAtY;
+using mdvn::IsPointInOutlineOverlayMask;
+using mdvn::IsPointInOutlinePanelRect;
+using mdvn::IsPointInOutlinePanelResizeHandle;
 using mdvn::kInvalidIndex;
 using mdvn::kOutlineIndentStepDip;
 using mdvn::kOutlineItemHeightDip;
+using mdvn::kOutlinePanelMaxWidthDip;
+using mdvn::kOutlinePanelMinWidthDip;
 using mdvn::OutlineItem;
 using mdvn::OutlineItemIndentDip;
 using mdvn::OutlineItemTopDip;
@@ -275,4 +285,108 @@ MDVN_TEST(OutlineClick_EmptyPanelMissesEverything) {
 // 环绕/负下标之类的未定义行为。
 MDVN_TEST(OutlineClick_NegativeEffectiveYMissesEverything) {
     MDVN_CHECK_EQ(FindOutlineItemAtY(5, -10.0f, 0.0f), kInvalidIndex);
+}
+
+// 侧栏自身滚轮滚动(window.cpp WM_MOUSEWHEEL 接线):window.cpp 直接复用
+// mdvn::ScrollByWheel(与正文滚动同一套纯函数)算出新偏移,再喂给
+// OutlinePanel::SetScrollY 夹取——这里用真实 20 条标题的 Document 驱动
+// Rebuild,验证"滚一刻度按预期步进 + 上下限钳制正确"。
+MDVN_TEST(OutlinePanelWheel_ScrollStepAndClampMatchScrollByWheel) {
+    Arena docArena;
+    docArena.Init(1 * 1024 * 1024);
+    char src[20 * 8 + 8];
+    mdvn::u32 pos = 0;
+    for (int i = 0; i < 20; ++i) {
+        src[pos++] = '#';
+        src[pos++] = ' ';
+        src[pos++] = 'H';
+        src[pos++] = '\n';
+        src[pos++] = '\n';
+    }
+    mdvn::Document doc = mdvn::ParseMarkdown(mdvn::StrSlice{src, pos}, &docArena);
+
+    Arena arena;
+    arena.Init(1 * 1024 * 1024);
+    OutlinePanel panel(&arena);
+    MDVN_CHECK_EQ(panel.Rebuild(doc), 20u);
+
+    float panelHeight = 200.0f;  // 明显小于 20 * 28 = 560,确保有滚动余量
+    float contentHeight = OutlinePanelContentHeightDip(panel.ItemCount());
+    MDVN_CHECK(contentHeight > panelHeight);
+
+    // 向下滚一刻度(负 wheelDelta):新偏移 = 0 + 3行 * 20DIP = 60。
+    float y1 = mdvn::ScrollByWheel(panel.ScrollY(), -mdvn::kWheelDeltaUnit, contentHeight, panelHeight);
+    panel.SetScrollY(y1, panelHeight);
+    MDVN_CHECK(panel.ScrollY() == 60.0f);
+
+    // 再向上滚一刻度,应回到 0。
+    float y2 = mdvn::ScrollByWheel(panel.ScrollY(), mdvn::kWheelDeltaUnit, contentHeight, panelHeight);
+    panel.SetScrollY(y2, panelHeight);
+    MDVN_CHECK(panel.ScrollY() == 0.0f);
+
+    // 上边界:已经在 0,再向上滚一刻度不应变成负值(夹到 0)。
+    float y3 = mdvn::ScrollByWheel(panel.ScrollY(), mdvn::kWheelDeltaUnit, contentHeight, panelHeight);
+    panel.SetScrollY(y3, panelHeight);
+    MDVN_CHECK(panel.ScrollY() == 0.0f);
+
+    // 下边界:连续向下滚很多刻度,不应超过 contentHeight - panelHeight。
+    float maxScroll = contentHeight - panelHeight;
+    float y = panel.ScrollY();
+    for (int i = 0; i < 50; ++i) {
+        y = mdvn::ScrollByWheel(panel.ScrollY(), -mdvn::kWheelDeltaUnit, contentHeight, panelHeight);
+        panel.SetScrollY(y, panelHeight);
+    }
+    MDVN_CHECK(panel.ScrollY() == maxScroll);
+}
+
+// 验收项:蒙层/侧栏自身滚动这套新逻辑不触发 BlockLayoutEngine::Relayout——
+// 与 T49 主题切换测试同一手法,拿 RelayoutCallCount() 做计数桩断言。这里
+// 反复"打开侧栏(Rebuild)+ 滚动侧栏自身(SetScrollY)+ 蒙层/侧栏矩形命中判定"
+// 多轮,验证全程 Relayout 调用次数保持不变(硬约束:蒙层/侧栏滚动是纯重绘
+// 操作,不改变任何几何)。
+MDVN_TEST(OutlinePanel_MaskAndSelfScrollNeverTriggerRelayout) {
+    Arena docArena;
+    docArena.Init(1 * 1024 * 1024);
+    const char* src = "# H1\n\n# H2\n\n# H3\n\nBody text.\n";
+    mdvn::u32 len = static_cast<mdvn::u32>(strlen(src));
+    Document doc = mdvn::ParseMarkdown(mdvn::StrSlice{src, len}, &docArena);
+
+    BlockLayoutEngine layout;
+    MDVN_CHECK(layout.Relayout(doc, 760.0f));
+    mdvn::u32 baselineCount = layout.RelayoutCallCount();
+    MDVN_CHECK_EQ(baselineCount, 1u);
+
+    Arena arena;
+    arena.Init(1 * 1024 * 1024);
+    OutlinePanel panel(&arena);
+
+    for (int round = 0; round < 5; ++round) {
+        // 打开侧栏:提取大纲(不触碰 layout)。
+        panel.Rebuild(doc);
+        // 侧栏自身滚动:纯数字计算 + 夹取,不触碰 layout。
+        panel.SetScrollY(50.0f * static_cast<float>(round), 200.0f);
+        // 蒙层/侧栏矩形命中判定:纯几何判断,不触碰 layout。
+        MDVN_CHECK(!IsPointInOutlineOverlayMask(100, 1.0f, 220.0f));
+        MDVN_CHECK(IsPointInOutlineOverlayMask(300, 1.0f, 220.0f));
+        MDVN_CHECK(IsPointInOutlinePanelRect(100, 300, 1.0f, 220.0f, 600.0f));
+        // 关闭侧栏(模拟 window.cpp 指针置空,这里没有指针,直接进入下一轮)。
+    }
+
+    MDVN_CHECK_EQ(layout.RelayoutCallCount(), baselineCount);
+}
+
+// T63b:侧栏拖拽调宽度——夹取区间与抓手命中测试。
+MDVN_TEST(OutlinePanel_ClampWidthToLegalRange) {
+    MDVN_CHECK_EQ(ClampOutlinePanelWidth(50.0f), kOutlinePanelMinWidthDip);
+    MDVN_CHECK_EQ(ClampOutlinePanelWidth(9999.0f), kOutlinePanelMaxWidthDip);
+    MDVN_CHECK_EQ(ClampOutlinePanelWidth(300.0f), 300.0f);
+}
+
+MDVN_TEST(OutlinePanel_ResizeHandleStraddlesBoundary) {
+    float panelWidth = 220.0f;
+    MDVN_CHECK(IsPointInOutlinePanelResizeHandle(220, 1.0f, panelWidth));  // 正中边界
+    MDVN_CHECK(IsPointInOutlinePanelResizeHandle(217, 1.0f, panelWidth));  // 边界内侧
+    MDVN_CHECK(IsPointInOutlinePanelResizeHandle(223, 1.0f, panelWidth));  // 边界外侧
+    MDVN_CHECK(!IsPointInOutlinePanelResizeHandle(100, 1.0f, panelWidth));  // 远离边界
+    MDVN_CHECK(!IsPointInOutlinePanelResizeHandle(300, 1.0f, panelWidth));  // 远离边界
 }

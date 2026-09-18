@@ -4,6 +4,27 @@
 #
 # 说明：本 workflow 未在本机实际跑通（本机没有 GitHub Actions runner），
 # 只做过 YAML 语法/字段结构的人工核对，实际生效情况需在真实 push/PR 时观察。
+#
+# ——— M3 T83：CI 上"记录不门禁"的项与原因（对齐 ci\check_budget.ps1 头部注释）———
+# GitHub Actions 的 windows-latest 是无 GPU 虚拟机、性能波动大，以下几项在 CI 上
+# 跑的是同一套脚本，但**已知会比本机结果更不稳定**，不通过就意味着要重跑/人工复核，
+# 不代表代码退化：
+#   ① 暖启动首屏（01§4 第1行）：check_budget.ps1 默认口径已经用"上限值 120ms"
+#      而不是"目标值 60ms"做硬性判据（见脚本头部"本机门禁 vs CI 门禁"一节），
+#      这条在 CI 虚拟机上依然可能偶发超过 120ms——如果发生，先看是不是 CI
+#      runner 当次分配的物理核心被邻居虚拟机抢占，不要直接当成代码回归。
+#   ② 滚动帧率（01§4 第6行）：门禁走的是"口径①"（mdvn 自身重绘耗时的
+#      frame_total_p50_ms 换算 FPS），不依赖 GPU/DWM/ETW，理论上比 PresentMon
+#      口径对 CI 虚拟机更友好，但仍可能因为 CPU 争抢而偏高——同样先怀疑环境。
+#   ③ BENCH-D（10MB 文档）首屏（01§4 第7行）：同①，虚拟机 CPU 单核性能通常
+#      弱于本机，目标值 1.5s 的余量（本机实测 ~90ms）理论上够用，但没有在真实
+#      GitHub Actions runner 上跑过，需观察首次真实 push/PR 的结果。
+#   ④ BENCH-C（高亮最坏情况语料）：01/04 都没有为它定线，check_budget.ps1
+#      本身就只记录不设门禁（不是 CI 特例，本机跑也一样不设门禁）。
+# 不采用的方案：**不会**为了让 CI 变绿而统一放宽阈值——那样会让门禁失去意义
+# （08-m3-tasks.md T83 明文禁止）。真正需要区分本机/CI 两套阈值时，用
+# check_budget.ps1 的 -Strict 开关（当前只影响暖启动与 leak_probe 两项的
+# 判据严格度，见脚本内注释），而不是在这个 workflow 文件里维护第二套数字。
 name: CI
 
 on:
@@ -35,11 +56,12 @@ jobs:
       # cmake -S . -B build -G "Visual Studio 17 2022" -A x64 与
       # cmake --build build --config Release，因此这里不单独拆分构建步骤。
       #
-      # M1 T44：脚本内部新增的 [5/6] BENCH-B 图片密集内存门禁（≤80MB）与
-      # [6/6] ci\run_fuzz.ps1 畸形语料门禁（非零退出即失败）都会在这一步
-      # 一并跑起来，CI 侧不需要新增独立 job/step——check_budget.ps1 已经是
-      # 唯一入口，拆分反而会让"任一项失败即整体失败"这条语义在两处维护。
-      - name: 运行性能门禁脚本（构建 + 单测 + 阈值判断，含 M1 BENCH-B 内存与 fuzz 门禁）
+      # check_budget.ps1 现在是覆盖 01§4 全部 8 行硬指标 + M1/M2 既有门禁的
+      # 单一入口（M3 T83），CI 侧不新增独立 job/step——拆分反而会让"任一项
+      # 失败即整体失败"这条语义在两处维护。不加 -Strict：CI 上暖启动用上限值
+      # 判据、leak_probe 的已知"一次性预热"降级为提示，理由见本文件顶部注释
+      # 与 ci\check_budget.ps1 脚本头部注释。
+      - name: 运行性能门禁脚本（构建 + 单测 + 01§4 全部硬指标门禁）
         shell: powershell
         run: |
           .\ci\check_budget.ps1 -N 20

@@ -1,0 +1,2 @@
+arena_smoke_test_ok=1 ptr_a=00001260CBF90000 ptr_b=00001260CBF90010 ptr_c=00001260CBF91010 ptr_d_after_reset=00001260CBF90000
+md4c_smoke_test_rc=0

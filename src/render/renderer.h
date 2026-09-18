@@ -17,6 +17,11 @@ namespace mdvn {
 
 class Renderer;
 
+// 底部栏按钮总数,数值必须与 shell/bottom_bar.h 的 kBottomBarButtonCount
+// 保持一致(render 不反向 include shell 头文件,同一条既有约束)。这里单独
+// 起名是因为 renderer.cpp 内部也有一份同名的文件作用域常量,避免撞名。
+constexpr u32 kBottomBarButtonCountRender = 5;
+
 /**
  * 外壳层叠加层视图(T36/T37/T38):查找命中高亮 + 顶部查找条 + 窗口内提示文字。
  *
@@ -44,12 +49,31 @@ struct ShellOverlay {
     u32 copyButtonHoverBlock;      // 鼠标当前悬浮的复制按钮所属块
     u32 copyButtonCopiedBlock;     // 处于"已复制"反馈态的复制按钮所属块
 
+    // T80 鼠标拖选文本高亮:selectionActive 为 false 时以下四个字段无意义、
+    // 不画任何高亮(与查找高亮同一套"没有就不画"口径)。选区可能跨越当前
+    // 不可见的块,DrawSelectionHighlights 只画落在"可见 ± 1 屏"内、持有
+    // textLayout 的那部分,不会为此额外实例化任何块的 layout。
+    bool selectionActive;   // 是否存在非空选区(拖动了至少一个字符)
+    u32 selStartBlock;      // 选区起点所在块下标
+    u32 selStartOffset;     // 选区起点在该块文本里的 UTF-16 偏移
+    u32 selEndBlock;        // 选区终点所在块下标
+    u32 selEndOffset;       // 选区终点在该块文本里的 UTF-16 偏移
+
     // T63 大纲侧栏:全部为空/为 0 时不画侧栏,零额外开销(与侧栏关闭时
     // window.cpp 根本不构造 OutlinePanel 是同一套"不存在即不画"口径)。
     const OutlineItem* outlineItems;   // 大纲条目数组(按块下标升序),可为 nullptr
     u32 outlineItemCount;              // 条目总数
     u32 outlineCurrentItem;            // 当前高亮条目下标;kInvalidIndex 表示无
     float outlineScrollY;              // 侧栏自身滚动偏移(DIP)
+    // 自绘滚动条(方案A)悬浮/拖动态:鼠标落在侧栏滚动条区域内、或正在拖动
+    // 它时为 true,渲染层据此在 Idle/Active 两档透明度间切换(见 theme.h)。
+    bool outlineScrollbarActive;
+    // T63b:侧栏当前宽度(DIP,已经是拖拽调整后的实际值)。render 层不知道
+    // "拖拽调宽"这个外壳层概念,只接收这一个数字,与 leftPaddingDip 同一套
+    // "shell 算好了才传给 render"的约定。为 0 时(侧栏关闭,聚合初始化零值)
+    // 不会被读取——DrawOutlinePanel/DrawOutlineOverlayMask 只在
+    // `outlineItems` 非空时才会被调用。
+    float outlinePanelWidthDip;
 };
 
 /**
@@ -247,13 +271,25 @@ public:
      * @param overlay 可选的叠加层视图(T37/T38 的查找高亮与查找条、T36 的窗口内
      *                提示);传 nullptr 表示不画任何叠加层,零额外开销。只在本次
      *                调用期间被引用,函数返回后不再持有。
+     * @param mainScrollbarActive 正文自绘滚动条(方案A)是否处于悬浮/拖动态——
+     *                鼠标落在其区域内或正在拖动滑块时为 true,决定画 Idle 还是
+     *                Active 档透明度(见 theme.h);大纲侧栏打开时正文滚动条本来
+     *                就不画,这个参数被忽略。
      * @return 本帧是否真正完成了一次成功的 `EndDraw`(渲染目标创建失败或
      *         `EndDraw` 返回失败 HRESULT 时为 false),供调用方判断"首帧是否
      *         已真正显示"(T14 性能埋点用)。
-     * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay);
+     * @param documentPath 当前文档完整路径,画进底部栏右侧状态区;为
+     *              nullptr/空串表示未打开文件,状态区不画任何文字。
+     * @param documentSizeBytes 当前文档字节数,随 documentPath 一起画进状态区。
+     * @param bottomBarHoverButtonIndex 鼠标当前悬浮的底部栏按钮下标(0~4);
+     *              >= kBottomBarButtonCountRender 表示未悬浮任何按钮。
+     * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay, true);
      */
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
-                      float leftPaddingDip, const ShellOverlay* overlay = nullptr);
+                      float leftPaddingDip, const ShellOverlay* overlay = nullptr,
+                      bool mainScrollbarActive = false, const wchar_t* documentPath = nullptr,
+                      u64 documentSizeBytes = 0,
+                      u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender);
 
     /**
      * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
@@ -291,6 +327,7 @@ private:
                     ID2D1SolidColorBrush* badgeTextBrush,
                     ID2D1SolidColorBrush* findHighlightBrush,
                     ID2D1SolidColorBrush* findCurrentBrush,
+                    ID2D1SolidColorBrush* selectionBrush,
                     ID2D1SolidColorBrush* copyIconBrush,
                     ID2D1SolidColorBrush* copyHoverBgBrush,
                     ID2D1SolidColorBrush* copyPaperBrush,
@@ -373,11 +410,24 @@ private:
                              ID2D1SolidColorBrush* fillBrush,
                              ID2D1SolidColorBrush* currentFillBrush);
 
+    // 画一个块内的鼠标拖选高亮(T80):与 DrawFindHighlights 同一手法——
+    // HitTestTextRange 拿矩形,画在文本下方。只处理选区与本块相交的那一段
+    // (选区跨块时,起止块各自裁到块内偏移,中间块整块高亮)。
+    void DrawSelectionHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
+                                  ID2D1SolidColorBrush* fillBrush);
+
     // 画顶部浮出的查找条(T37)与窗口内提示(T36 的"路径不存在"),
     // 两者共用同一套"顶部圆角条 + 小号文字"的画法,不新增菜单栏/工具栏(§9)。
     void DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLen,
                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                          float topOffset);
+
+    // 画大纲侧栏打开时盖在侧栏外正文区域的半透明蒙层:只盖侧栏矩形之外的
+    // 区域(侧栏本身随后单独画,不会被这层蒙层盖住),与 DrawOutlinePanel
+    // 共用同一个"侧栏是否打开"的判断依据(overlay_->outlineItems 非空),
+    // 侧栏关闭时不产生任何额外绘制。
+    void DrawOutlineOverlayMask(float targetWidth, float targetHeight,
+                                ID2D1SolidColorBrush* maskBrush);
 
     // 画大纲侧栏(T63):悬浮在正文左侧上方的一条固定宽度面板,与
     // DrawOverlayBar 同一套"浮出条"底色/风格,只是画成整块矩形 + 逐行文字。
@@ -385,7 +435,35 @@ private:
     void DrawOutlinePanel(float targetHeight,
                           ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                           ID2D1SolidColorBrush* highlightBgBrush,
-                          ID2D1SolidColorBrush* highlightTextBrush);
+                          ID2D1SolidColorBrush* highlightTextBrush,
+                          ID2D1SolidColorBrush* scrollbarTrackBrush,
+                          ID2D1SolidColorBrush* scrollbarThumbBrush);
+
+    // 画底部操作栏(2026-09-18 改版):左侧 5 个固定宽度图标按钮(纯 D2D 几何
+    // 线条,不带常驻文字标签),按钮间用竖分隔线区分;右侧状态区画当前文档
+    // 路径 + 大小(documentPath 为空/空串时不画任何文字)。不参与任何布局
+    // 重排,几何常量与 shell/bottom_bar.h 的命中测试同一套口径(数值常量
+    // 各自复制一份,render 不反向 include shell 头文件,与大纲侧栏同一约束)。
+    // @param documentPath 当前文档完整路径,为 nullptr/空串表示未打开文件。
+    // @param documentSizeBytes 当前文档字节数,documentPath 为空时不参与格式化。
+    // @param hoverButtonIndex 鼠标当前悬浮的按钮下标(0~4);>= 按钮总数
+    //        (含 shell 侧 BottomBarButton::None 的数值)表示未悬浮任何按钮,
+    //        不画提示气泡——render 层不认识 BottomBarButton 这个 shell 概念,
+    //        只接收一个下标数字,保持单向依赖。
+    void DrawBottomBar(float targetWidth, float targetHeight,
+                        ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
+                        ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
+                        const wchar_t* documentPath = nullptr, u64 documentSizeBytes = 0,
+                        u32 hoverButtonIndex = kBottomBarButtonCountRender);
+
+    // 自绘滚动条(方案A):轨道(常驻,标示可滚动范围)+ 滑块,圆角矩形,
+    // 正文与大纲侧栏共用本函数,区别只是调用方传入的
+    // viewportWidth/viewportHeight/totalHeight/scrollY 不同。内容不超过一屏
+    // (shell/scrollbar.h::CalcScrollbarMetrics 判定)时两者都不画,零额外开销。
+    // 必须在 Identity 变换下调用——不能跟着正文的 leftPaddingDip 平移,否则
+    // 位置会整体偏移。
+    void DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight, float scrollY,
+                        ID2D1SolidColorBrush* trackBrush, ID2D1SolidColorBrush* thumbBrush);
 
     ID2D1Factory* factory_;              // 不拥有,生命周期由调用方保证
     FontSubsystem* fonts_;                // 不拥有,可为空;供 T28 脚注标签与 T33 占位文案使用
@@ -393,6 +471,10 @@ private:
     ID2D1HwndRenderTarget* target_;       // 懒创建,可在 D2DERR_RECREATE_TARGET 后重建
     float dpi_;                           // 渲染目标 DPI,0 表示跟随系统默认
     const ShellOverlay* overlay_;         // 仅在一次 RenderFrame 期间有效的叠加层视图,不拥有
+    // T76:本帧客户区高度(DIP),RenderFrame 开头写入。链接/语法着色的逐 run
+    // 重绘据此把滚出屏幕的 run 直接跳过——它们画了也看不见,却每个都要整份
+    // layout 重画一次(见 DrawLinkOverlays/DrawCodeHighlights 的注释)。
+    float frameViewportHeight_;
     const Palette* palette_;              // 当前调色板(T46),不拥有;默认指向 kLightPalette
 
     // T63 大纲侧栏标题文本的临时拼接/UTF-16 转换缓冲。惰性 Init——侧栏从未

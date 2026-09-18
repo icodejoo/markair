@@ -18,7 +18,9 @@ using mdvn::HitKind;
 using mdvn::HitResult;
 using mdvn::ImageBox;
 using mdvn::IsContentBlockType;
+using mdvn::IsPointInOutlineOverlayMask;
 using mdvn::IsPointInOutlinePanel;
+using mdvn::IsPointInOutlinePanelRect;
 using mdvn::kInvalidIndex;
 using mdvn::LayoutRect;
 using mdvn::LinkBox;
@@ -188,6 +190,39 @@ MDVN_TEST(HitTest_OutlinePanelRegionByXOnly) {
 
     // 负坐标不算侧栏内(理论上不会发生,防御性验证)。
     MDVN_CHECK(!IsPointInOutlinePanel(-1, 1.0f, 220.0f));
+}
+
+// 蒙层区域判定:与 IsPointInOutlinePanel 互补——不在侧栏内就在蒙层内。
+MDVN_TEST(HitTest_OutlineOverlayMaskIsComplementOfPanel) {
+    MDVN_CHECK(!IsPointInOutlineOverlayMask(0, 1.0f, 220.0f));
+    MDVN_CHECK(!IsPointInOutlineOverlayMask(219, 1.0f, 220.0f));
+    MDVN_CHECK(IsPointInOutlineOverlayMask(220, 1.0f, 220.0f));
+    MDVN_CHECK(IsPointInOutlineOverlayMask(500, 1.0f, 220.0f));
+
+    // 2x DPI 缩放下同样互补。
+    MDVN_CHECK(!IsPointInOutlineOverlayMask(439, 2.0f, 220.0f));
+    MDVN_CHECK(IsPointInOutlineOverlayMask(440, 2.0f, 220.0f));
+
+    // 负坐标:不在侧栏内(IsPointInOutlinePanel 返回 false),因此判定为蒙层。
+    MDVN_CHECK(IsPointInOutlineOverlayMask(-1, 1.0f, 220.0f));
+}
+
+// 侧栏矩形判定(供 WM_MOUSEWHEEL 使用):横坐标沿用 IsPointInOutlinePanel
+// 的口径,纵坐标额外要求落在 [0, clientHeightDip) 内。
+MDVN_TEST(HitTest_OutlinePanelRectChecksBothAxes) {
+    // 横坐标在侧栏范围内,纵坐标也在客户区高度范围内 -> 命中。
+    MDVN_CHECK(IsPointInOutlinePanelRect(100, 300, 1.0f, 220.0f, 600.0f));
+    // 横坐标在侧栏范围内,但纵坐标越出客户区高度 -> 不命中。
+    MDVN_CHECK(!IsPointInOutlinePanelRect(100, 600, 1.0f, 220.0f, 600.0f));
+    MDVN_CHECK(!IsPointInOutlinePanelRect(100, 999, 1.0f, 220.0f, 600.0f));
+    // 纵坐标为负 -> 不命中。
+    MDVN_CHECK(!IsPointInOutlinePanelRect(100, -1, 1.0f, 220.0f, 600.0f));
+    // 横坐标越出侧栏范围时,纵坐标合法与否都不命中。
+    MDVN_CHECK(!IsPointInOutlinePanelRect(300, 300, 1.0f, 220.0f, 600.0f));
+    // DPI 缩放同时影响横纵两个方向的换算。
+    MDVN_CHECK(IsPointInOutlinePanelRect(439, 1199, 2.0f, 220.0f, 600.0f));
+    MDVN_CHECK(!IsPointInOutlinePanelRect(440, 1199, 2.0f, 220.0f, 600.0f));
+    MDVN_CHECK(!IsPointInOutlinePanelRect(439, 1200, 2.0f, 220.0f, 600.0f));
 }
 
 // 用例(T64,验收项):鼠标落在侧栏区域内的坐标不应命中正文任何元素——

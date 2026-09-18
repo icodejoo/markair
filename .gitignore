@@ -37,6 +37,18 @@ Thumbs.db
 /bench_test_err.txt
 /bench_test_out.txt
 /bench/results_*.csv
+/bench/env_*.txt
 
 # 人工回归测试产生的截图（不进版本控制）
 /bench/screenshots/
+
+# T73/M3裁决#8②：10MB语料由 make_bench_d.ps1 确定性生成，不进版本控制，
+# 只提交生成脚本本身；复跑前先执行一次 bench\make_bench_d.ps1 即可。
+/bench/BENCH-D.md
+
+# 外部测量工具二进制（VMMap/RAMMap/PresentMon，T71 手动下载，不进版本控制）
+/tools/
+
+# T72：PresentMon 逐帧原始 CSV，体量大且不可跨机复现，不进版本控制；
+# 复跑方法见 bench/M3-RENDER-FPS.md，产出物按需重新生成。
+/bench/render_fps/

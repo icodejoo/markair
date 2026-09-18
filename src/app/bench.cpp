@@ -34,6 +34,44 @@ int64_t NowCounter() {
     return c.QuadPart;
 }
 
+// T76 逐帧埋点:样本环容量。10 秒滚动最多产生几百帧,4096 足够容纳整轮测量;
+// 满了之后停止采样(不覆盖),保证分布统计对应的是一段连续时间窗口。
+constexpr uint32_t kFrameSampleCap = 4096;
+
+// 每帧两个耗时(毫秒):total = 整个 PaintOnce;draw = 其中的 D2D 绘制段。
+// POD 全局数组,零初始化,无构造函数副作用(docs/coding-rules.md 第 6 条)。
+float g_frameTotalMs[kFrameSampleCap] = {};
+float g_frameDrawMs[kFrameSampleCap] = {};
+uint32_t g_frameCount = 0;
+
+int64_t g_tFrameBegin = 0;
+int64_t g_tFrameLayoutDone = 0;
+
+// QPC 频率,首次取样时惰性读取一次。
+int64_t g_qpcFreq = 0;
+
+// 对 [0, n) 区间的 float 数组做插入排序(样本量在千级,且只在退出前排一次,
+// 不值得为它引入更复杂的排序;禁 std::sort 之外的考量见 coding-rules)。
+void SortFloats(float* a, uint32_t n) {
+    for (uint32_t i = 1; i < n; ++i) {
+        float key = a[i];
+        uint32_t j = i;
+        while (j > 0 && a[j - 1] > key) {
+            a[j] = a[j - 1];
+            --j;
+        }
+        a[j] = key;
+    }
+}
+
+// 取已排序数组的百分位值(最近秩法);n 为 0 时返回 0。
+float Percentile(const float* sorted, uint32_t n, double p) {
+    if (n == 0) return 0.0f;
+    uint32_t idx = static_cast<uint32_t>(p * static_cast<double>(n));
+    if (idx >= n) idx = n - 1;
+    return sorted[idx];
+}
+
 }  // namespace
 
 ParsedArgs ParseArgs(int argc, wchar_t* const* argv) {
@@ -78,6 +116,61 @@ void MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
+}
+
+void MarkFrameBegin() {
+    if (!g_enabled || g_frameCount >= kFrameSampleCap) return;
+    if (g_qpcFreq == 0) {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        g_qpcFreq = f.QuadPart > 0 ? f.QuadPart : 1;
+    }
+    g_tFrameBegin = NowCounter();
+    g_tFrameLayoutDone = g_tFrameBegin;
+}
+
+void MarkFrameLayoutDone() {
+    if (!g_enabled || g_frameCount >= kFrameSampleCap) return;
+    g_tFrameLayoutDone = NowCounter();
+}
+
+void MarkFrameEnd() {
+    if (!g_enabled || g_frameCount >= kFrameSampleCap) return;
+    const double toMs = 1000.0 / static_cast<double>(g_qpcFreq);
+    int64_t end = NowCounter();
+    g_frameTotalMs[g_frameCount] = static_cast<float>(static_cast<double>(end - g_tFrameBegin) * toMs);
+    g_frameDrawMs[g_frameCount] =
+        static_cast<float>(static_cast<double>(end - g_tFrameLayoutDone) * toMs);
+    ++g_frameCount;
+}
+
+void EmitFrameReport() {
+    if (!g_enabled) return;
+
+    float first0 = g_frameCount > 0 ? g_frameTotalMs[0] : 0.0f;
+    float firstDraw0 = g_frameCount > 0 ? g_frameDrawMs[0] : 0.0f;
+
+    // 排序会打乱原顺序,首帧值先取走再排。
+    SortFloats(g_frameTotalMs, g_frameCount);
+    SortFloats(g_frameDrawMs, g_frameCount);
+
+    char line[512];
+    _snprintf_s(line, sizeof(line), _TRUNCATE,
+                "frames_n=%u frame_total_p50_ms=%.3f frame_total_p95_ms=%.3f "
+                "frame_total_p99_ms=%.3f frame_total_max_ms=%.3f "
+                "frame_draw_p50_ms=%.3f frame_draw_p95_ms=%.3f frame_draw_p99_ms=%.3f "
+                "frame_draw_max_ms=%.3f first_frame_total_ms=%.3f first_frame_draw_ms=%.3f\n",
+                g_frameCount,
+                Percentile(g_frameTotalMs, g_frameCount, 0.50),
+                Percentile(g_frameTotalMs, g_frameCount, 0.95),
+                Percentile(g_frameTotalMs, g_frameCount, 0.99),
+                g_frameCount > 0 ? g_frameTotalMs[g_frameCount - 1] : 0.0f,
+                Percentile(g_frameDrawMs, g_frameCount, 0.50),
+                Percentile(g_frameDrawMs, g_frameCount, 0.95),
+                Percentile(g_frameDrawMs, g_frameCount, 0.99),
+                g_frameCount > 0 ? g_frameDrawMs[g_frameCount - 1] : 0.0f,
+                first0, firstDraw0);
+    fputs(line, stderr);
 }
 
 size_t FormatReportFromValues(int64_t freq,
@@ -130,6 +223,19 @@ void EmitReport() {
     FormatReportFromValues(freq.QuadPart, g_tProcessStart, g_tParseDone, g_tLayoutDone,
                             g_tWindowCreated, g_tFirstPresent, privateBytes, line, sizeof(line));
     fputs(line, stderr);
+
+    // T74:在"首次 Present 已完成"这一时刻(而不是外部工具事后快照的任意
+    // 时刻)精确复核 /DELAYLOAD 的四个 DLL 是否已经出现在模块列表里——
+    // GetModuleHandleW 只查已加载模块表,不触发加载,零副作用。这四个
+    // 布尔值直接回答"延迟加载是否真的推迟到了首帧之后"这个问题,比外部
+    // 用 Get-Process.Modules 做时间点不确定的事后快照更精确。
+    fprintf(stderr,
+            "module_winhttp_loaded_at_first_present=%d module_shell32_loaded_at_first_present=%d "
+            "module_dwmapi_loaded_at_first_present=%d module_uxtheme_loaded_at_first_present=%d\n",
+            GetModuleHandleW(L"winhttp.dll") != nullptr ? 1 : 0,
+            GetModuleHandleW(L"shell32.dll") != nullptr ? 1 : 0,
+            GetModuleHandleW(L"dwmapi.dll") != nullptr ? 1 : 0,
+            GetModuleHandleW(L"uxtheme.dll") != nullptr ? 1 : 0);
 }
 
 }  // namespace mdvn::bench

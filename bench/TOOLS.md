@@ -3,17 +3,21 @@
 本文档记录 M0 性能测量所依赖的外部工具及其版本号，保证测量结果可复现。
 按 `05-m0-tasks.md` 要求，所有工具需在开工前装好并在此记录版本号。
 
-## 检测结果（2026-09-16，本机）
+## 检测结果（2026-09-18 更新，T71）
 
-在 PATH 与常见安装目录（`Program Files`、`Program Files (x86)`）中检测，
-以下工具**均未安装**：
+用户已在 M3 裁决记录 #1 中裁定要装。本机没有 winget，改用 Sysinternals 官方
+直链 + Intel PresentMon GitHub release 手动下载，均已装入仓库 `tools/`
+目录（该目录已加入 `.gitignore`，二进制不进 git）：
 
-| 工具 | 当前状态 | 用途 |
-|---|---|---|
-| VMMap | 未安装 | 精确测量 Private Working Set / Private Bytes / Mapped File 分项，验证字体资源落在 Mapped File 而非 Private |
-| RAMMap | 未安装 | `RAMMap64.exe -Et` 清空 Empty Standby List，用于模拟冷启动条件 |
-| Process Monitor | 未安装 | 辅助排查文件/注册表 I/O，冷启动分析时定位实际磁盘读取路径 |
-| PresentMon | 未安装 | 捕获 Present 帧时间序列，评估滚动时的 99 分位帧时间 |
+| 工具 | 当前状态 | 安装路径 | 用途 |
+|---|---|---|---|
+| VMMap | **已安装**（绿色版） | `tools\VMMap\vmmap64.exe` | 精确测量 Private Working Set / Private Bytes / Mapped File 分项，验证字体资源落在 Mapped File 而非 Private |
+| RAMMap | **已安装**（绿色版） | `tools\RAMMap\RAMMap64.exe` | `RAMMap64.exe -Et` 清空 Empty Standby List，用于模拟冷启动条件 |
+| Process Monitor | 未安装 | — | 本次未下载（M3 裁决记录 #1 只要求 VMMap/RAMMap/PresentMon 三项，Process Monitor 04 测量方法表未直接依赖，暂缓） |
+| PresentMon | **已安装** | `tools\PresentMon.exe` | 捕获 Present 帧时间序列，评估滚动时的 99 分位帧时间；⚠️ mdvn 走软件渲染无 DXGI 交换链，能否抓到帧数据待 T72 可行性探测确认 |
+
+三者均已用 `-h` / `--help` 实跑验证，二进制未损坏、可正常执行（详见
+`bench/M3-METHOD.md` 附的实测输出）。
 
 `bench/run_bench.ps1` 已针对 RAMMap 缺失做了优雅降级：检测不到时打印警告并跳过
 清 standby list 步骤，继续测量，不会报错退出（此时的"冷启动"数据不是真正冷启动）。
@@ -42,10 +46,10 @@
 
 | 工具 | 版本号 | 安装日期 | 记录人 |
 |---|---|---|---|
-| VMMap | _待填写_ | _待填写_ | _待填写_ |
-| RAMMap | _待填写_ | _待填写_ | _待填写_ |
-| Process Monitor | _待填写_ | _待填写_ | _待填写_ |
-| PresentMon | _待填写_ | _待填写_ | _待填写_ |
+| VMMap | 3.4 | 2026-09-18 | T71 |
+| RAMMap | 1.63 | 2026-09-18 | T71 |
+| Process Monitor | 未安装 | — | — |
+| PresentMon | 2.5.1 | 2026-09-18 | T71 |
 
 > 填写方式：工具都是免安装的单文件可执行程序，右键属性 -> 详细信息 -> 产品版本，
 > 或运行 `(Get-Item <exe路径>).VersionInfo.ProductVersion` 获取版本号后填入上表。

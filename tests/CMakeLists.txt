@@ -19,6 +19,7 @@ add_executable(mdvn_tests
     test_renderer.cpp
     test_scroll.cpp
     test_scroll_v2.cpp
+    test_scrollbar.cpp
     test_bench.cpp
     test_image.cpp
     test_data_uri.cpp
@@ -35,10 +36,16 @@ add_executable(mdvn_tests
     test_cmdline.cpp
     test_assoc.cpp
     test_corpus_smoke.cpp
+    test_benchd_smoke.cpp
+    test_bench_abc_smoke.cpp
     test_fuzz_smoke.cpp
     test_outline.cpp
     test_outline_panel.cpp
     test_history.cpp
+    test_licensing.cpp
+    test_selection.cpp
+    test_bottom_bar.cpp
+    test_open_dialog.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp
@@ -72,6 +79,8 @@ add_executable(mdvn_tests
     ../src/shell/assoc.cpp
     ../src/shell/outline_panel.cpp
     ../src/shell/history.cpp
+    ../src/shell/selection.cpp
+    ../src/shell/open_dialog.cpp
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
@@ -92,6 +101,11 @@ target_compile_definitions(mdvn_tests PRIVATE
 # "ctest 工作目录不是仓库根目录"问题,烘焙一份绝对路径。
 target_compile_definitions(mdvn_tests PRIVATE
     MDVN_BENCH_DIR="${CMAKE_SOURCE_DIR}/bench")
+
+# T81:test_licensing.cpp 需要仓库根目录的绝对路径,读取根 LICENSE /
+# THIRD-PARTY-NOTICES.md / third_party/md4c/VERSION.txt 做一致性校验。
+target_compile_definitions(mdvn_tests PRIVATE
+    MDVN_REPO_ROOT_DIR="${CMAKE_SOURCE_DIR}")
 
 # test_model.cpp 通过 parser.cpp 间接依赖 md4c 的 md_parse；
 # test_font.cpp 通过 font.cpp 依赖 DirectWrite。
