@@ -33,6 +33,7 @@ add_executable(mdvn_tests
     test_languages.cpp
     test_lexer.cpp
     test_cmdline.cpp
+    test_assoc.cpp
     test_corpus_smoke.cpp
     test_fuzz_smoke.cpp
     ../src/app/bench.cpp
@@ -64,6 +65,7 @@ add_executable(mdvn_tests
     ../src/shell/hit_test.cpp
     ../src/shell/find.cpp
     ../src/shell/clipboard.cpp
+    ../src/shell/assoc.cpp
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
