@@ -89,6 +89,18 @@
     （BENCH-B 每轮都要全量解码 50 张 PNG，比 BENCH-A 慢，轮数比 -N 少，
     足以估计 P95 即可，不追求和 BENCH-A 同样的统计功效）。
 
+.PARAMETER HighlightExeSizeThresholdBytes
+    （T54 新增）高亮功能（T50~T53：围栏语言标记、词法器、高亮着色接入布局与
+    渲染）引入后的 exe 体积硬性门禁，单位字节。默认 394240，即本次实测的
+    "合入 T50~T53 之前"基线 312320 字节 + 80KB（81920 字节）= 04 的 M2 验收
+    标准硬线"exe 体积增量 <= 80KB"。测量口径与依据见 bench/M2-HIGHLIGHT.md：
+    该基线是本次在同一台机器上用 `git worktree` 单独 clean build 出 T49（合入
+    T50 之前最后一个提交）的 mdvn.exe 实测得到的，不是直接套用 ci\check_budget.ps1
+    脚本头部注释里更早的 296448 字节（那是 T44 收尾时的快照，T45~T49 又引入了
+    新代码，已经不是"合入 T50~T53 之前"这一刻的真实体积）。
+    本阈值只与合入 T50~T53 之后的当前体积做硬性比较，不影响上面
+    ExeSizeSoftLimitMB 这道更宽松的安全网。
+
 .PARAMETER SkipFuzz
     （T44 新增）跳过 ci\run_fuzz.ps1 这一步。仅用于本地调试其它门禁项时
     节省时间，CI 环境下不应加这个开关。
@@ -113,6 +125,7 @@ param(
     [double]$ExeSizeSoftLimitMB = 8,
     [double]$BenchBPrivateBytesThresholdMB = 80,
     [int]$NBenchB = 5,
+    [double]$HighlightExeSizeThresholdBytes = 394240,
     [switch]$SkipFuzz,
     [int]$FuzzTimeoutSeconds = -1
 )
@@ -228,6 +241,17 @@ Write-Host "本脚本额外加了一道宽松安全网阈值 $ExeSizeSoftLimitMB
 
 if ($exeSizeMB -gt $ExeSizeSoftLimitMB) {
     $failures += "exe 体积超过宽松安全网阈值：$([Math]::Round($exeSizeMB, 4)) MB > $ExeSizeSoftLimitMB MB（注意：这不是文档规定的官方门槛，是本脚本额外加的安全网）。"
+}
+
+# ------------------------- 第 3.5 步：高亮体积硬性门禁（T54） -------------------------
+# 04 的 M2 验收标准硬线："exe 体积增量 <= 80KB"（相对合入 T50~T53 之前）。
+# 这里直接用绝对字节数阈值判断（阈值本身 = 该基线 + 80KB，见参数说明与
+# bench/M2-HIGHLIGHT.md），而不是每次都重新 clean build 一份基线来算差值——
+# 后者在 CI 里代价太大，绝对阈值是等价且便宜得多的判据。
+Write-Host ""
+Write-Host "高亮体积硬性门禁（T54）：mdvn.exe 体积 $exeSizeBytes 字节（阈值 $HighlightExeSizeThresholdBytes 字节，= 合入 T50~T53 前基线 + 80KB）"
+if ($exeSizeBytes -gt $HighlightExeSizeThresholdBytes) {
+    $failures += "exe 体积超过高亮体积硬性门禁：$exeSizeBytes 字节 > $HighlightExeSizeThresholdBytes 字节（04 的 M2 验收标准硬线：体积增量 <= 80KB）。"
 }
 
 # ------------------------- 第五步：BENCH-B 图片密集场景内存门禁（T44） -------------------------
