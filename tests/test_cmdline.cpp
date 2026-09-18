@@ -3,12 +3,15 @@
 // (https://learn.microsoft.com/cpp/cpp/main-function-command-line-args)。
 #include "mdvn_test.h"
 #include "../src/util/cmdline.h"
+#include "../src/app/bench.h"
 
 #include <cstring>
 
 using mdvn::Arena;
 using mdvn::ParseCommandLine;
 using mdvn::Vec;
+using mdvn::bench::ParseArgs;
+using mdvn::bench::ParsedArgs;
 
 namespace {
 
@@ -144,4 +147,54 @@ MDVN_TEST(CmdLine_ProgramNameItselfQuoted) {
     MDVN_CHECK(argv.Size() == 2);
     MDVN_CHECK(wcscmp(argv[0], L"C:\\Program Files\\mdvn\\mdvn.exe") == 0);
     MDVN_CHECK(wcscmp(argv[1], L"C:\\a.md") == 0);
+}
+
+// T59:--register 单独出现,识别出 registerRequested,不影响 unregisterRequested。
+MDVN_TEST(CmdLine_RegisterFlagRecognized) {
+    wchar_t* argv[] = {const_cast<wchar_t*>(L"mdvn.exe"), const_cast<wchar_t*>(L"--register")};
+    ParsedArgs a = ParseArgs(2, argv);
+    MDVN_CHECK(a.registerRequested);
+    MDVN_CHECK(!a.unregisterRequested);
+    MDVN_CHECK(a.filePath == nullptr);
+}
+
+// T59:--unregister 单独出现,识别出 unregisterRequested。
+MDVN_TEST(CmdLine_UnregisterFlagRecognized) {
+    wchar_t* argv[] = {const_cast<wchar_t*>(L"mdvn.exe"), const_cast<wchar_t*>(L"--unregister")};
+    ParsedArgs a = ParseArgs(2, argv);
+    MDVN_CHECK(!a.registerRequested);
+    MDVN_CHECK(a.unregisterRequested);
+    MDVN_CHECK(a.filePath == nullptr);
+}
+
+// T59:--register 与 --unregister 同时出现——ParseArgs 本身只做纯粹的标志
+// 识别,两者都被置位,真正的"报错并返回退出码 1"由调用方(main.cpp)判断,
+// 这里只验证 ParseArgs 没有偷偷丢弃任何一个标志。
+MDVN_TEST(CmdLine_RegisterAndUnregisterBothPresent) {
+    wchar_t* argv[] = {const_cast<wchar_t*>(L"mdvn.exe"), const_cast<wchar_t*>(L"--register"),
+                        const_cast<wchar_t*>(L"--unregister")};
+    ParsedArgs a = ParseArgs(3, argv);
+    MDVN_CHECK(a.registerRequested);
+    MDVN_CHECK(a.unregisterRequested);
+}
+
+// T59:--register 与文件路径同时出现——ParseArgs 仍会识别出 filePath(纯函数
+// 层面不丢信息),但 main.cpp 的约定是"忽略路径,只执行注册",这条约定在
+// main.cpp 里通过"识别到 register/unregister 就直接 return,不再读 filePath"
+// 实现,不需要 ParseArgs 本身抹掉 filePath。
+MDVN_TEST(CmdLine_RegisterFlagWithFilePathStillParsesBoth) {
+    wchar_t* argv[] = {const_cast<wchar_t*>(L"mdvn.exe"), const_cast<wchar_t*>(L"--register"),
+                        const_cast<wchar_t*>(L"C:\\a.md")};
+    ParsedArgs a = ParseArgs(3, argv);
+    MDVN_CHECK(a.registerRequested);
+    MDVN_CHECK(wcscmp(a.filePath, L"C:\\a.md") == 0);
+}
+
+// T59:--unregister 与文件路径同时出现,同上,只验证识别不丢标志/路径。
+MDVN_TEST(CmdLine_UnregisterFlagWithFilePathStillParsesBoth) {
+    wchar_t* argv[] = {const_cast<wchar_t*>(L"mdvn.exe"), const_cast<wchar_t*>(L"C:\\a.md"),
+                        const_cast<wchar_t*>(L"--unregister")};
+    ParsedArgs a = ParseArgs(3, argv);
+    MDVN_CHECK(a.unregisterRequested);
+    MDVN_CHECK(wcscmp(a.filePath, L"C:\\a.md") == 0);
 }

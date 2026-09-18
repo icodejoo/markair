@@ -36,6 +36,7 @@
 #include "../shell/theme_state.h"
 #include "../assets/cache.h"
 #include "../assets/remote.h"
+#include "../shell/assoc.h"
 #include "../shell/find.h"
 #include "../shell/navigate.h"
 #include "../shell/window.h"
@@ -336,6 +337,67 @@ void OnWindowGeometryChangedHook(void* userData) {
     mdvn::SaveAppSettings(*host->settings);
 }
 
+// T59:把一行文本输出到父进程的控制台(mdvn 是 WIN32 子系统程序,没有自己的
+// 控制台)。`AttachConsole(ATTACH_PARENT_PROCESS)` 只在 kernel32 里,不拉起
+// 任何额外模块;附加失败(例如父进程本身没有控制台,双击打开的场景)时静默
+// 放弃,不影响退出码本身。用完立即 `FreeConsole`,不让本进程之后一直挂在
+// 父控制台上。
+void EmitConsoleLine(const wchar_t* text) {
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != nullptr && out != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteConsoleW(out, text, static_cast<DWORD>(wcslen(text)), &written, nullptr);
+    }
+    FreeConsole();
+}
+
+// T59:`--register`/`--unregister` 的实际处理体。必须在 wWinMain 里"创建任何
+// 窗口、初始化任何子系统之前"调用——这是一次性动作,不该顺带弹窗。
+// 两个开关一次性处理 kAssociatedExtensions 里的全部五个扩展名,不提供
+// "只关联某个扩展名"的子选项。
+// @return 0 成功,1 失败(含"两个开关同时出现"这一歧义场景)。
+int HandleAssocCliCommand(const mdvn::bench::ParsedArgs& args) {
+    if (args.registerRequested && args.unregisterRequested) {
+        EmitConsoleLine(L"mdvn: --register 与 --unregister 不能同时使用\r\n");
+        return 1;
+    }
+
+    wchar_t exePath[MAX_PATH]{};
+    DWORD exePathLen = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (exePathLen == 0 || exePathLen >= MAX_PATH) {
+        EmitConsoleLine(L"mdvn: 无法获取程序路径,操作已取消\r\n");
+        return 1;
+    }
+
+    if (args.registerRequested) {
+        bool ok = mdvn::RegisterFileAssociations(exePath, L"mdvn Markdown 文档");
+        EmitConsoleLine(ok ? L"mdvn: 已注册文件关联,涉及以下扩展名:\r\n"
+                           : L"mdvn: 文件关联注册失败\r\n");
+        if (ok) {
+            for (mdvn::u32 i = 0; i < mdvn::kAssociatedExtensionCount; ++i) {
+                wchar_t line[64];
+                swprintf_s(line, L"  %s\r\n", mdvn::kAssociatedExtensions[i]);
+                EmitConsoleLine(line);
+            }
+        }
+        return ok ? 0 : 1;
+    }
+
+    // args.unregisterRequested 为 true(前面已排除"两者同时出现"的情况)。
+    bool ok = mdvn::UnregisterFileAssociations();
+    EmitConsoleLine(ok ? L"mdvn: 已卸载文件关联,涉及以下扩展名:\r\n"
+                       : L"mdvn: 文件关联卸载失败\r\n");
+    if (ok) {
+        for (mdvn::u32 i = 0; i < mdvn::kAssociatedExtensionCount; ++i) {
+            wchar_t line[64];
+            swprintf_s(line, L"  %s\r\n", mdvn::kAssociatedExtensions[i]);
+            EmitConsoleLine(line);
+        }
+    }
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 // 进程入口:解析命令行、命名互斥体、初始化各子系统、加载文档、弹出窗口、
@@ -351,6 +413,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     mdvn::Vec<wchar_t*> argv = mdvn::ParseCommandLine(GetCommandLineW(), &cmdlineArena);
     int argc = static_cast<int>(argv.Size());
     mdvn::bench::ParsedArgs benchArgs = mdvn::bench::ParseArgs(argc, argv.Data());
+
+    // T59:`--register`/`--unregister` 在创建任何窗口、初始化任何子系统之前
+    // 处理并直接返回退出码——包括下面的 DPI 感知/IME 禁用/D2D 工厂等,一律
+    // 不执行。与文件路径同时出现时忽略路径,只执行注册/卸载(这里直接
+    // return,benchArgs.filePath 自然不会被用到)。
+    if (benchArgs.registerRequested || benchArgs.unregisterRequested) {
+        return HandleAssocCliCommand(benchArgs);
+    }
+
     if (benchArgs.benchEnabled) mdvn::bench::Enable();
     // "进程入口"埋点尽量早地记录;命令行解析本身极轻,可忽略的测量误差。
     mdvn::bench::MarkProcessStart();

@@ -37,10 +37,14 @@ int64_t NowCounter() {
 }  // namespace
 
 ParsedArgs ParseArgs(int argc, wchar_t* const* argv) {
-    ParsedArgs result{false, nullptr};
+    ParsedArgs result{false, nullptr, false, false};
     for (int i = 1; i < argc; ++i) {
         if (wcscmp(argv[i], L"--bench") == 0) {
             result.benchEnabled = true;
+        } else if (wcscmp(argv[i], L"--register") == 0) {
+            result.registerRequested = true;
+        } else if (wcscmp(argv[i], L"--unregister") == 0) {
+            result.unregisterRequested = true;
         } else if (result.filePath == nullptr) {
             result.filePath = argv[i];
         }

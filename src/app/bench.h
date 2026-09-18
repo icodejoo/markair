@@ -20,16 +20,22 @@ namespace mdvn::bench {
  */
 struct ParsedArgs {
     bool benchEnabled;        // 是否出现 "--bench" 标志
-    const wchar_t* filePath;  // 第一个非 "--bench" 的参数;没有则为 nullptr
+    const wchar_t* filePath;  // 第一个非 "--bench"/"--register"/"--unregister" 的参数;没有则为 nullptr
+    // T59:文件关联注册/卸载的 CLI 开关。两者互斥,是否同时出现留给调用方
+    // (main.cpp)判断并报错——ParseArgs 只做纯粹的标志识别,不产生任何副作用。
+    bool registerRequested;    // 是否出现 "--register" 标志
+    bool unregisterRequested;  // 是否出现 "--unregister" 标志
 };
 
 /**
- * 从 argv 里识别 "--bench" 标志与目标文件路径的纯函数,不依赖任何全局状态,
- * 可脱离 Win32/QueryPerformanceCounter 单独做单元测试。
+ * 从 argv 里识别 "--bench"/"--register"/"--unregister" 标志与目标文件路径的
+ * 纯函数,不依赖任何全局状态,可脱离 Win32/QueryPerformanceCounter 单独做
+ * 单元测试。
  * @param argc 参数个数(含 argv[0] 程序名)。
  * @param argv 参数数组,通常来自 CommandLineToArgvW。
- * @return benchEnabled 表示是否出现过 "--bench";filePath 是第一个非
- *         "--bench" 的参数(先出现的优先),没有则为 nullptr。
+ * @return benchEnabled 表示是否出现过 "--bench";registerRequested/
+ *         unregisterRequested 分别表示是否出现过 "--register"/"--unregister";
+ *         filePath 是第一个非这三个标志的参数(先出现的优先),没有则为 nullptr。
  * @example
  *   // argv = {L"mdvn.exe", L"--bench", L"C:\\a.md"}
  *   mdvn::bench::ParsedArgs a = mdvn::bench::ParseArgs(3, argv);
