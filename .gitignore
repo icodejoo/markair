@@ -36,3 +36,4 @@ Thumbs.db
 # 本地测试运行产生的临时日志
 /bench_test_err.txt
 /bench_test_out.txt
+/bench/results_*.csv

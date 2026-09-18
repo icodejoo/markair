@@ -14,7 +14,15 @@
 //                        默认 system,非法值回落 system
 // 明确**不含** `image_cache_mb`(随 T32 二次裁决作废)与 `zoom`(裁决 #4,留给 M2)。
 //
-// 本文件只做**读取**,写盘(`SaveAppSettings`)是 T55 的范围。
+// T55 起本文件同时具备**写盘**能力(`SaveAppSettings`):写出格式与本文件
+// 的解析口径完全对称,UTF-8 无 BOM;保留未识别的原有键;先写 `.tmp` 再
+// `MoveFileExW` 原子替换;写盘失败一律静默降级(不弹窗、不写日志)。
+// 并发策略是裁决 #7 定死的"读-改-写 + 命名互斥体":复用与 `src/app/main.cpp`
+// "同文件重复打开前置已有窗口"那套完全相同的技术手段(命名 Mutex +
+// `WaitForSingleObject` 超时 + `ReleaseMutex`),但用固定的独立名字
+// `kStateIniMutexName`(state.ini 是全局唯一一份,不能按文件路径区分),
+// 因此没有直接复用 main.cpp 里那个按路径哈希取名的具体函数——两者是同一
+// 机制的两个独立实例,而不是又发明了一套新的并发原语。
 #pragma once
 
 #include "../shell/theme_state.h"
@@ -27,7 +35,25 @@ namespace mdvn {
 constexpr u32 kMaxFontFamilyChars = 64;
 
 // 单次读取 state.ini 的字节上限(架构 §6 "启动期一次性读完、单次 < 1KB")。
-constexpr u32 kMaxIniBytes = 1024;
+//
+// T55 核算:M1 现有键(4 个字体族名,每个最多 kMaxFontFamilyChars-1=63 个
+// UTF-16 code unit,UTF-8 最坏情形每单元 3 字节 -> 单键值最多 ~189 字节)
+// 加 load_remote_images/theme,合计已接近 900 字节;M2 后续会再加入
+// theme(已含)/zoom/win_x/win_y/win_w/win_h/win_maximized 共 6 个短数值键
+// (每个不超过 20 字节),额外约 120 字节。原 1024 字节上限对"读+保留未识别
+// 旧键+写回"这条链路(读原文时可能还叠加老版本遗留的若干行)裕量太薄,
+// 故上调到 2048——键总数仍 < 15、单次读仍是几百字节到 1~2KB 量级,不影响
+// "启动期一次性读完"的架构约束,只是把裕量留够。
+constexpr u32 kMaxIniBytes = 2048;
+
+// state.ini 写盘用的命名互斥体名字(裁决 #7:读-改-写 + 命名互斥体)。
+// 与 src/app/main.cpp 里"同文件重复打开前置已有窗口"用的是同一套技术手段
+// (CreateMutexW + WaitForSingleObject 超时 + ReleaseMutex),只是这里的名字
+// 固定不按路径哈希区分——state.ini 全局只有一份,不需要按文件区分互斥体。
+constexpr wchar_t kStateIniMutexName[] = L"mdvn_state_ini_write_mutex";
+
+// 命名互斥体等待超时(毫秒)。绝不无限等:超时即放弃本次写盘并静默返回。
+constexpr DWORD kStateIniMutexTimeoutMs = 2000;
 
 /**
  * 运行期配置:`state.ini` 里 M1 全部键的解析结果。
@@ -81,5 +107,27 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out);
  *   remoteLoader.Init(hwnd, settings.loadRemoteImages);
  */
 bool LoadAppSettings(AppSettings* out);
+
+/**
+ * 把配置写到 `%LOCALAPPDATA%\mdvn\state.ini`(裁决 #7:读-改-写 + 命名互斥体)。
+ *
+ * 内部流程:取固定名字的命名互斥体(超时 `kStateIniMutexTimeoutMs`,超时即
+ * 放弃、静默返回)→ 重读磁盘上的当前文件 → 只把"本进程自上次
+ * `LoadAppSettings`/`SaveAppSettings` 以来真正改动过的键"合入,其余键(含
+ * 未识别的旧键、别的进程并发写入的键)原样保留 → 写 `state.ini.tmp` →
+ * `MoveFileExW` 原子替换为 `state.ini`。目录只有两级,用 `CreateDirectoryW`
+ * 逐级手写创建,不引入 `SHCreateDirectoryExW`(避免在保存这一刻额外拉起
+ * shell32.dll)。任何一步失败(只读目录、磁盘满、互斥体超时、路径非法)都
+ * 一律静默降级,不弹窗、不写日志。
+ *
+ * @param settings 待写入的配置(通常是本进程当前内存态)。
+ * @return 成功写盘返回 true;任何失败(含静默降级)返回 false。
+ * @example
+ *   mdvn::AppSettings settings;
+ *   mdvn::LoadAppSettings(&settings);
+ *   settings.theme = mdvn::ThemeSetting::Dark;
+ *   mdvn::SaveAppSettings(settings);
+ */
+bool SaveAppSettings(const AppSettings& settings);
 
 }  // namespace mdvn

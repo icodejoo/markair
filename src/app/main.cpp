@@ -504,6 +504,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     int exitCode = mdvn::RunMessageLoop();
 
+    // T55:进程正常退出前兜底写一次 state.ini。windowState.theme 是运行期
+    // 唯一会被用户实时改动的字段(Ctrl+Shift+T 循环,见 T47);字体族名覆盖
+    // M1/M2 都还是启动期只读、运行期不可改,直接沿用启动时读到的 settings 值。
+    // 写盘内部走"读-改-写 + 命名互斥体",失败(超时/只读目录等)一律静默。
+    settings.theme = windowState.themeSetting;
+    mdvn::SaveAppSettings(settings);
+
     // T36b:正常退出前统一删除本次会话创建过的全部临时文件(裁决:不追踪外部
     // 查看器进程是否退出,异常终止的残留交给 %TEMP% 的系统级清理兜底)。
     tempFiles.CleanupAll();

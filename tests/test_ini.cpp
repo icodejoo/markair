@@ -1,7 +1,13 @@
 // T39 覆盖测试:`state.ini` 的 KV 解析(缺失文件 / 非法值 / 超范围钳制 /
 // 注释行 / 尾随空白)。解析层是纯函数,不碰文件系统。
+// T55 追加:`SaveAppSettings` 写盘覆盖(round-trip、未识别键保留、并发合并、
+// 互斥体超时、非法路径),需要真实碰 `%LOCALAPPDATA%\mdvn\state.ini`。
 #include "mdvn_test.h"
 #include "../src/util/ini.h"
+#include "../src/shell/theme_state.h"
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 
 #include <cstring>
 #include <cwchar>
@@ -10,7 +16,9 @@ using mdvn::AppSettings;
 using mdvn::DefaultAppSettings;
 using mdvn::LoadAppSettings;
 using mdvn::ParseIniSettings;
+using mdvn::SaveAppSettings;
 using mdvn::StrSlice;
+using mdvn::ThemeSetting;
 using mdvn::u32;
 
 namespace {
@@ -22,6 +30,66 @@ u32 ParseFresh(const char* text, AppSettings* out) {
     DefaultAppSettings(out);
     return ParseIniSettings(Lit(text), out);
 }
+
+// T55:写盘测试需要真实的 state.ini 路径,拼法与 ini.cpp 内部一致
+// (`%LOCALAPPDATA%\mdvn\state.ini`),仅供测试直接读写磁盘做断言用。
+bool BuildRealStateIniPath(wchar_t* out, size_t cap) {
+    wchar_t localAppData[MAX_PATH]{};
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    if (wcslen(localAppData) + 20 >= cap) return false;
+    wcscpy_s(out, cap, localAppData);
+    wcscat_s(out, cap, L"\\mdvn\\state.ini");
+    return true;
+}
+
+// 把磁盘上 state.ini 的原始字节整段读出来(测试用,不走 kMaxIniBytes 上限
+// 之外的健壮性处理,文件不存在就返回空字符串)。
+void ReadWholeFile(const wchar_t* path, char* buf, size_t cap) {
+    buf[0] = 0;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    DWORD read = 0;
+    ReadFile(file, buf, static_cast<DWORD>(cap - 1), &read, nullptr);
+    CloseHandle(file);
+    buf[read] = 0;
+}
+
+// 备份/还原真实 state.ini,让写盘测试不破坏开发者本机已有的配置,也不让
+// 测试之间互相污染。RAII 风格,但不依赖异常(项目禁异常),析构里静默还原。
+struct StateIniBackup {
+    wchar_t path[MAX_PATH]{};
+    bool hadFile = false;
+    char content[mdvn::kMaxIniBytes]{};
+    size_t contentLen = 0;
+
+    StateIniBackup() {
+        if (!BuildRealStateIniPath(path, MAX_PATH)) return;
+        HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return;
+        DWORD read = 0;
+        ReadFile(file, content, static_cast<DWORD>(sizeof(content)), &read, nullptr);
+        CloseHandle(file);
+        hadFile = true;
+        contentLen = read;
+    }
+
+    ~StateIniBackup() {
+        if (path[0] == 0) return;
+        if (!hadFile) {
+            DeleteFileW(path);
+            return;
+        }
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return;
+        DWORD written = 0;
+        WriteFile(file, content, static_cast<DWORD>(contentLen), &written, nullptr);
+        CloseHandle(file);
+    }
+};
 
 }  // namespace
 
@@ -150,4 +218,143 @@ MDVN_TEST(Ini_MalformedLinesAreSafe) {
     ParseIniSettings(StrSlice{buf, static_cast<u32>(n)}, &s);
     MDVN_CHECK(wcslen(s.fontBodyPrimary) < mdvn::kMaxFontFamilyChars);
     MDVN_CHECK(s.fontBodyPrimary[0] == L'X');
+}
+
+// ---------------------------------------------------------------------------
+// T55:SaveAppSettings 写盘覆盖。每个用例都用 StateIniBackup 备份/还原真实
+// state.ini,不污染开发者本机配置,也不依赖测试执行顺序。
+// ---------------------------------------------------------------------------
+
+// 用例(round-trip):写出后再读回,字段完全等值。
+MDVN_TEST(Ini_SaveThenLoadRoundTrips) {
+    StateIniBackup backup;
+    DeleteFileW(backup.path);  // 从干净状态起,避免受开发者本机既有配置干扰
+
+    AppSettings loaded;
+    LoadAppSettings(&loaded);  // 文件已删除,建立"磁盘为空"的基线
+
+    loaded.loadRemoteImages = true;
+    loaded.theme = ThemeSetting::Dark;
+    wcscpy_s(loaded.fontBodyPrimary, mdvn::kMaxFontFamilyChars, L"Consolas");
+    wcscpy_s(loaded.fontMonoFallback, mdvn::kMaxFontFamilyChars, L"微软雅黑");
+
+    MDVN_CHECK(SaveAppSettings(loaded));
+
+    AppSettings readBack;
+    MDVN_CHECK(LoadAppSettings(&readBack));
+    MDVN_CHECK(readBack.loadRemoteImages);
+    MDVN_CHECK(readBack.theme == ThemeSetting::Dark);
+    MDVN_CHECK(wcscmp(readBack.fontBodyPrimary, L"Consolas") == 0);
+    MDVN_CHECK(wcscmp(readBack.fontMonoFallback, L"微软雅黑") == 0);
+}
+
+// 用例(未识别键保留):老版本/手改的键在写盘后必须原样留在文件里。
+MDVN_TEST(Ini_SaveKeepsUnrecognizedKeys) {
+    StateIniBackup backup;
+
+    // 手写一份包含未知键(future_flag)与一个已知键的原始文件。
+    const char* seed = "future_flag=42\nload_remote_images=0\n";
+    HANDLE file = CreateFileW(backup.path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+    MDVN_CHECK(file != INVALID_HANDLE_VALUE);
+    DWORD written = 0;
+    WriteFile(file, seed, static_cast<DWORD>(strlen(seed)), &written, nullptr);
+    CloseHandle(file);
+
+    AppSettings s;
+    LoadAppSettings(&s);  // 建立基线:loadRemoteImages=false(与文件一致)
+    s.loadRemoteImages = true;  // 本进程真正改动的字段
+
+    MDVN_CHECK(SaveAppSettings(s));
+
+    char content[mdvn::kMaxIniBytes];
+    ReadWholeFile(backup.path, content, sizeof(content));
+    MDVN_CHECK(strstr(content, "future_flag=42") != nullptr);  // 未知键原样保留
+    MDVN_CHECK(strstr(content, "load_remote_images=1") != nullptr);  // 已知键被更新
+}
+
+// 用例(并发合并):模拟"本进程读盘之后,另一个进程改了别的键",两边改动
+// 合并后都要在最终文件里。
+MDVN_TEST(Ini_SaveMergesConcurrentExternalEdit) {
+    StateIniBackup backup;
+    DeleteFileW(backup.path);
+
+    AppSettings s;
+    LoadAppSettings(&s);  // 基线:全部默认值,文件不存在
+
+    // 模拟"另一个进程"在本进程读盘之后,直接改了 load_remote_images。
+    const char* externalEdit = "load_remote_images=1\n";
+    HANDLE file = CreateFileW(backup.path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+    MDVN_CHECK(file != INVALID_HANDLE_VALUE);
+    DWORD written = 0;
+    WriteFile(file, externalEdit, static_cast<DWORD>(strlen(externalEdit)), &written, nullptr);
+    CloseHandle(file);
+
+    // 本进程只改了 theme,loadRemoteImages 在内存里仍是加载时的旧默认值。
+    s.theme = ThemeSetting::Dark;
+    MDVN_CHECK(SaveAppSettings(s));
+
+    AppSettings mergedResult;
+    MDVN_CHECK(LoadAppSettings(&mergedResult));
+    MDVN_CHECK(mergedResult.loadRemoteImages);            // "别的进程"的改动保留
+    MDVN_CHECK(mergedResult.theme == ThemeSetting::Dark);  // 本进程的改动也生效
+}
+
+// 用例(互斥体超时):另一个线程持有同名互斥体不放,SaveAppSettings 必须在
+// 超时后放弃、不崩溃、不写出半截文件(也不留下 .tmp 残留)。
+namespace {
+DWORD WINAPI HoldMutexThenReleaseThreadProc(LPVOID) {
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, mdvn::kStateIniMutexName);  // 立即持有
+    if (mutex) {
+        Sleep(mdvn::kStateIniMutexTimeoutMs + 500);  // 比 SaveAppSettings 的超时更久
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+    }
+    return 0;
+}
+}  // namespace
+
+MDVN_TEST(Ini_SaveGivesUpSilentlyOnMutexTimeout) {
+    StateIniBackup backup;
+    DeleteFileW(backup.path);
+
+    HANDLE thread = CreateThread(nullptr, 0, HoldMutexThenReleaseThreadProc, nullptr, 0, nullptr);
+    MDVN_CHECK(thread != nullptr);
+    Sleep(100);  // 让后台线程先真正拿到互斥体
+
+    AppSettings s;
+    DefaultAppSettings(&s);
+    s.loadRemoteImages = true;
+    bool saved = SaveAppSettings(s);  // 预期在 ~2s 后超时返回 false,不崩溃
+    MDVN_CHECK(!saved);
+
+    // 文件本不存在,超时放弃后也不应凭空出现;临时文件同样不应残留。
+    MDVN_CHECK(GetFileAttributesW(backup.path) == INVALID_FILE_ATTRIBUTES);
+    wchar_t tmpPath[MAX_PATH]{};
+    wcscpy_s(tmpPath, backup.path);
+    wcscat_s(tmpPath, L".tmp");
+    MDVN_CHECK(GetFileAttributesW(tmpPath) == INVALID_FILE_ATTRIBUTES);
+
+    if (thread) {
+        WaitForSingleObject(thread, INFINITE);  // 等后台线程释放互斥体、彻底收尾
+        CloseHandle(thread);
+    }
+}
+
+// 用例(非法路径):`%LOCALAPPDATA%` 取不到时,SaveAppSettings 必须静默失败,
+// 不崩溃、不抛异常。
+MDVN_TEST(Ini_SaveHandlesMissingLocalAppDataGracefully) {
+    wchar_t original[MAX_PATH]{};
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", original, MAX_PATH);
+    bool hadOriginal = n > 0 && n < MAX_PATH;
+
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);  // 移除环境变量,模拟非法/取不到路径
+
+    AppSettings s;
+    DefaultAppSettings(&s);
+    bool saved = SaveAppSettings(s);
+    MDVN_CHECK(!saved);
+
+    if (hadOriginal) SetEnvironmentVariableW(L"LOCALAPPDATA", original);
 }
