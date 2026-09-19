@@ -1158,7 +1158,9 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
     }
 
     case LinkAction::OpenMarkdown: {
-        // ② 相对/绝对 .md 路径:规范化后在当前窗口内替换文档(裁决 #6)。
+        // ② 相对/绝对 .md 路径:规范化后用 CreateProcessW 新开一个独立
+        // markair.exe 进程,不替换当前窗口正在看的文档——与 TriggerOpenDocument
+        // 打开文件的行为保持一致。
         wchar_t fullPath[MAX_PATH * 2]{};
         if (!ResolveMarkdownPath(href, state->documentDirectory, fullPath, MAX_PATH * 2) ||
             !MarkdownFileExists(fullPath)) {
@@ -1167,33 +1169,8 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return;
         }
-        if (!state->openDocumentInPlace) return;
-
-        // T65:先记下"跳转前"的路径/scrollY——一旦 openDocumentInPlace 成功,
-        // state->currentDocumentPath 就会被下面覆盖,必须提前存一份副本。
-        wchar_t oldPath[kHistoryPathCapacity];
-        CopyTruncatedPath(oldPath, kHistoryPathCapacity, state->currentDocumentPath);
-        float oldScrollY = state->scrollY;
-
-        bool ok = state->openDocumentInPlace(state->callbackUserData, fullPath);
-        state->statusMessage = ok ? nullptr : L"打开文档失败";
-        if (ok) {
-            // 只有真正切换成功才记这一笔导航,并清空前进栈(裁决:F5 之类的
-            // "重新打开同一文档但不算导航"不会走到这里,因为那条路径完全
-            // 不调用 PushNavigation,见 history.h 顶部注释)。
-            if (state->history) state->history->PushNavigation(oldPath, oldScrollY);
-            CopyTruncatedPath(state->currentDocumentPath, kHistoryPathCapacity, fullPath);
-            // 新文档从头开始看;旧文档的查找结果指向的是旧的块下标,必须一并作废。
-            CloseFindUi(hwnd, state);
-            // T45:复制按钮的悬浮/已复制态同样是按旧文档的块下标记的,换文档后
-            // 那个下标在新文档里可能是别的块,必须一并作废。
-            state->copyButtonHover = kInvalidIndex;
-            state->copyButtonCopied = kInvalidIndex;
-            KillTimer(hwnd, kCopyFeedbackTimerId);
-            // forceRefresh=true:新文档的 layout 已整个换掉,即使数值上恰好还是
-            // 0.0f 也必须重新跑一次 UpdateVisibleRange,不能被"没变化"短路掉。
-            SetScrollY(hwnd, state, 0.0f, /*forceRefresh=*/true);
-            return;
+        if (!LaunchNewInstance(fullPath)) {
+            state->statusMessage = L"打开新窗口失败";
         }
         InvalidateRect(hwnd, nullptr, FALSE);
         return;
