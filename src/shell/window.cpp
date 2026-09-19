@@ -785,7 +785,8 @@ void OnHistoryItemClicked(HWND hwnd, WindowState* state, u32 item) {
 
     const wchar_t* path = state->recentFiles->entries[item].path;
     if (MarkdownFileExists(path)) {
-        if (!LaunchNewInstance(path)) {
+        // 进程内新开窗口(不再 CreateProcessW 开独立进程),见 window.h::openNewWindow。
+        if (!state->openNewWindow || !state->openNewWindow(state->callbackUserData, path)) {
             state->statusMessage = L"打开新窗口失败";
             InvalidateRect(hwnd, nullptr, FALSE);
         }
@@ -1158,9 +1159,9 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
     }
 
     case LinkAction::OpenMarkdown: {
-        // ② 相对/绝对 .md 路径:规范化后用 CreateProcessW 新开一个独立
-        // markair.exe 进程,不替换当前窗口正在看的文档——与 TriggerOpenDocument
-        // 打开文件的行为保持一致。
+        // ② 相对/绝对 .md 路径:规范化后进程内新开一个顶层窗口(不再
+        // CreateProcessW 开独立进程,见 window.h::openNewWindow),不替换
+        // 当前窗口正在看的文档——与 TriggerOpenDocument 打开文件的行为保持一致。
         wchar_t fullPath[MAX_PATH * 2]{};
         if (!ResolveMarkdownPath(href, state->documentDirectory, fullPath, MAX_PATH * 2) ||
             !MarkdownFileExists(fullPath)) {
@@ -1169,7 +1170,7 @@ void OnLinkClicked(HWND hwnd, WindowState* state, u32 linkTargetIdx) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return;
         }
-        if (!LaunchNewInstance(fullPath)) {
+        if (!state->openNewWindow || !state->openNewWindow(state->callbackUserData, fullPath)) {
             state->statusMessage = L"打开新窗口失败";
         }
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -1555,7 +1556,8 @@ void TriggerOpenDocument(HWND hwnd, WindowState* state) {
     if (!state) return;
     wchar_t path[MAX_PATH]{};
     if (!ShowOpenMarkdownDialog(hwnd, path, MAX_PATH)) return;  // 用户取消,静默无行为
-    if (!LaunchNewInstance(path)) {
+    // 进程内新开窗口(不再 CreateProcessW 开独立进程),见 window.h::openNewWindow。
+    if (!state->openNewWindow || !state->openNewWindow(state->callbackUserData, path)) {
         state->statusMessage = L"打开新窗口失败";
         InvalidateRect(hwnd, nullptr, FALSE);
     }
@@ -2649,7 +2651,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 SaveRecentFiles(*state->recentFiles);
             }
         }
-        PostQuitMessage(0);
+        // 进程内多窗口改造:不再"每窗口销毁即退出进程",而是交给
+        // onWindowClosed 递减进程内窗口计数,归零时才由它 PostQuitMessage。
+        if (state && state->onWindowClosed) {
+            state->onWindowClosed(state->callbackUserData);
+        } else {
+            PostQuitMessage(0);
+        }
         return 0;
 
     default:

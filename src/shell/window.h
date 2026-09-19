@@ -101,6 +101,28 @@ struct WindowState {
      */
     bool (*openDocumentInPlace)(void* userData, const wchar_t* fullPath);
 
+    /**
+     * 进程内新开一个顶层窗口打开 `fullPath`(取代旧版 `CreateProcessW` 新开
+     * 独立进程的做法——多开文档窗口不再线性翻倍内存)。若同一文件已有窗口
+     * 打开，实现方应前置该窗口而不是重复创建。由 app 层实现，外壳层只在
+     * "打开文件"按钮/菜单与点击 `.md` 链接这两类场景调用。
+     * 为空表示不支持(纯渲染场景/单测)。
+     *
+     * @param userData 即 `callbackUserData`。
+     * @param fullPath 目标文件路径(可为相对路径，由实现方规范化)。
+     * @return 新窗口创建成功，或已前置一个同文件的既有窗口，返回 true；
+     *         两者都失败返回 false(外壳层据此显示窗口内提示)。
+     */
+    bool (*openNewWindow)(void* userData, const wchar_t* fullPath);
+
+    /**
+     * 本窗口即将销毁(`WM_DESTROY` 末尾)时调用一次，用于递减进程内窗口计数、
+     * 释放本窗口专属的堆上资源；由实现方决定计数归零时是否 `PostQuitMessage`。
+     * 为空表示不需要该收尾(例如纯渲染场景/单测)。
+     * @param userData 即 `callbackUserData`。
+     */
+    void (*onWindowClosed)(void* userData);
+
     // 以下三个字段是给调用方(main.cpp/T14 性能埋点)预留的通用回调钩子,
     // 外壳层本身不关心它们的用途,只在对应时机原样调用;均可为空指针,
     // 为空时不产生任何额外调用开销。这样保持 shell 层不直接依赖 bench 模块。

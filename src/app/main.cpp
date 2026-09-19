@@ -46,6 +46,7 @@
 #include "../shell/find.h"
 #include "../shell/navigate.h"
 #include "../shell/window.h"
+#include "shared_resources.h"
 #include "../../third_party/md4c/md4c.h"
 
 #pragma comment(lib, "imm32.lib")
@@ -265,7 +266,16 @@ struct DocumentHost {
     // T71(bench 确定性修复):--bench 模式下为 true,窗口矩形变更回调据此
     // 跳过写盘——bench 本就不该污染开发者本机真实的 state.ini。
     bool benchMode;
+
+    // 进程内多窗口改造:非空表示本窗口的全部状态(Arena/Document/布局/……)
+    // 都挂在一个堆上分配的 WindowBundle 里,窗口销毁时需要 delete 它;
+    // 为空表示这是 wWinMain 里那份栈上的"第一窗口"状态,不需要(也不能)delete。
+    void* ownerBundle;
 };
+
+// 进程内当前存活的顶层窗口数——最后一个窗口销毁时才 PostQuitMessage,
+// 取代旧版"每个窗口独立一个进程,窗口一关进程就退出"的模型。
+int g_openWindowCount = 0;
 
 // T36 ②的实际执行体。返回 false 表示新文档打不开(此时窗口里是一份空文档,
 // 外壳层会显示窗口内提示,不弹 MessageBox)。
@@ -445,6 +455,35 @@ void OnWindowGeometryChangedHook(void* userData) {
     markair::SaveAppSettings(*host->settings);
 }
 
+// 前置声明,供下面 OnWindowClosedHook/OnOpenNewWindowHook 使用
+// (WindowBundle 与 CreateDocumentWindow 的定义见本文件后半段)。
+HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath);
+void DeleteWindowBundle(void* bundle);
+
+/**
+ * 窗口即将销毁时的收尾钩子(挂到 WindowState::onWindowClosed):递减进程内
+ * 窗口计数,归零时才 PostQuitMessage(0)——取代旧版"每窗口一进程,关窗口即
+ * 退出进程"的模型。若本窗口状态挂在堆上分配的 WindowBundle 里,一并
+ * delete 掉;首个窗口(状态在 wWinMain 栈上)则不 delete。
+ *
+ * @param userData 指向本窗口的 DocumentHost。
+ */
+void OnWindowClosedHook(void* userData) {
+    DocumentHost* host = static_cast<DocumentHost*>(userData);
+    void* bundle = host ? host->ownerBundle : nullptr;
+    if (--g_openWindowCount <= 0) PostQuitMessage(0);
+    if (bundle) DeleteWindowBundle(bundle);
+}
+
+/**
+ * 挂到 WindowState::openNewWindow:进程内新开一个顶层窗口打开 `fullPath`
+ * (取代旧版 `LaunchNewInstance` 的 `CreateProcessW`)。若同一文件已有窗口
+ * 打开则前置它,不重复创建。
+ *
+ * @return 新窗口创建成功,或已前置一个同文件的既有窗口,返回 true。
+ */
+bool OnOpenNewWindowHook(void*, const wchar_t* fullPath);
+
 // T59:把一行文本输出到父进程的控制台(markair 是 WIN32 子系统程序,没有自己的
 // 控制台)。`AttachConsole(ATTACH_PARENT_PROCESS)` 只在 kernel32 里,不拉起
 // 任何额外模块;附加失败(例如父进程本身没有控制台,双击打开的场景)时静默
@@ -504,6 +543,202 @@ int HandleAssocCliCommand(const markair::bench::ParsedArgs& args) {
         }
     }
     return ok ? 0 : 1;
+}
+
+// 进程内多窗口改造:除首个窗口(仍走 wWinMain 原有的栈上初始化路径)外,
+// 后续每一次"打开文件"/点击 .md 链接/点击历史记录项,都通过 CreateDocumentWindow
+// 在同一进程内新建一个顶层窗口,而不是 CreateProcessW 拉起一个新的 markair.exe。
+// 窗口专属状态(Arena/Document/布局引擎/……)全部装进一份堆上分配的
+// WindowBundle,随窗口销毁时由 DeleteWindowBundle 一并释放(见 OnWindowClosedHook)。
+// FontSubsystem 不放在这里——它是进程内共享单例(见 shared_resources.h)。
+struct WindowBundle {
+    markair::Arena docArena;
+    markair::FileMap fileMap;
+    markair::Document doc;
+    markair::Arena imageArena;
+    markair::Arena imageScratch;
+    markair::ImageCache imageCache;
+    wchar_t documentDirectory[MAX_PATH];
+    markair::BlockLayoutEngine layout;
+    markair::Renderer renderer;
+    markair::ImageResidencyManager residency;
+    markair::RemoteImageLoader remoteLoader;
+    markair::Arena tempArena;
+    markair::TempFileRegistry tempFiles;
+    markair::Arena findArena;
+    markair::Arena findScratch;
+    markair::FindSession find;
+    markair::Arena clipboardScratch;
+    markair::Arena outlineArena;
+    markair::History history;
+    markair::SelectionState selection;
+    markair::Arena selectionScratch;
+    markair::AppSettings settings;
+    markair::WindowState windowState;
+    DocumentHost documentHost;
+
+    WindowBundle()
+        : doc(&docArena), tempFiles(&tempArena), find(&findArena, &findScratch) {
+        documentDirectory[0] = 0;
+        windowState = markair::WindowState{};
+        documentHost = DocumentHost{};
+    }
+};
+
+// 供 OnWindowClosedHook 转发调用:释放一份不再需要的 WindowBundle。
+void DeleteWindowBundle(void* bundle) {
+    delete static_cast<WindowBundle*>(bundle);
+}
+
+// 进程内新开一个顶层窗口打开 `normalizedPath`(已规范化的绝对路径)。
+// 镜像 wWinMain 里首个窗口的初始化流程,但状态全部落在堆上的 WindowBundle
+// 而非栈上,且字体子系统改用进程内共享单例(见 shared_resources.h)。
+// bench 相关字段一律按"未启用"处理——bench 模式只测量首个窗口的启动路径。
+HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
+    WindowBundle* bundle = new WindowBundle();
+
+    markair::LoadAppSettings(&bundle->settings);
+    bool systemIsDark = markair::DetectSystemIsDark();
+
+    markair::FontSubsystem& fonts = markair::SharedFontSubsystem();
+    // 共享单例的 Init 只应发生一次——正常情况下首个窗口(wWinMain)早已完成;
+    // 这里的判空只是防御性兜底(理论上不会命中)。
+    if (!fonts.Factory()) {
+        fonts.SetFamilyOverrides(bundle->settings.fontBodyPrimary, bundle->settings.fontBodyFallback,
+                                 bundle->settings.fontMonoPrimary, bundle->settings.fontMonoFallback);
+        fonts.Init();
+        fonts.SetScale(bundle->settings.zoom);
+    }
+
+    bundle->docArena.Init(4 * 1024 * 1024);
+    bool fileOpened = markair::FileMapError::None == bundle->fileMap.Open(normalizedPath);
+    bundle->doc = fileOpened ? LoadMarkdownFile(&bundle->fileMap, &bundle->docArena)
+                             : markair::ParseMarkdown(markair::StrSlice{"", 0}, &bundle->docArena);
+    if (fileOpened) SetDisplayTextFromPath(normalizedPath);
+
+    bundle->imageArena.Init(32 * 1024 * 1024);
+    bundle->imageScratch.Init(32 * 1024 * 1024);
+    bundle->imageCache.Init(&bundle->imageArena);
+
+    if (fileOpened) ExtractDirectory(normalizedPath, bundle->documentDirectory, MAX_PATH);
+
+    bundle->layout.Relayout(bundle->doc, 760.0f, fonts.Scale(), &bundle->imageCache);
+
+    bundle->renderer.Init(g_d2dFactory, &fonts, &bundle->imageCache);
+    if (markair::ResolveEffectiveTheme(bundle->settings.theme, systemIsDark)) {
+        bundle->renderer.SetPalette(&markair::kDarkPalette);
+    }
+
+    bundle->residency.Init(&bundle->renderer, &bundle->imageCache, &bundle->imageScratch,
+                            bundle->documentDirectory);
+
+    bundle->tempArena.Init(1 * 1024 * 1024);
+    bundle->findArena.Init(16 * 1024 * 1024);
+    bundle->findScratch.Init(16 * 1024 * 1024);
+    bundle->clipboardScratch.Init(16 * 1024 * 1024);
+    bundle->selectionScratch.Init(16 * 1024 * 1024);
+
+    bundle->windowState = markair::WindowState{
+        &fonts, &bundle->layout, &bundle->doc, &bundle->renderer, 0.0f,
+        &bundle->imageCache, &bundle->residency, &bundle->remoteLoader, &bundle->tempFiles,
+        &bundle->imageScratch, bundle->documentDirectory,
+        &bundle->find, nullptr,
+        nullptr, &bundle->outlineArena,
+        &OpenDocumentInPlace,
+        &OnOpenNewWindowHook, &OnWindowClosedHook,
+        nullptr, nullptr, nullptr, false,
+        false,
+        &bundle->clipboardScratch, 0, 0,
+        bundle->settings.theme, systemIsDark,
+        bundle->settings.winX, bundle->settings.winY, bundle->settings.winW,
+        bundle->settings.winH, bundle->settings.winMaximized,
+        nullptr};
+    bundle->windowState.showWelcomeScreen = !fileOpened;
+    bundle->windowState.history = &bundle->history;
+    bundle->windowState.selection = &bundle->selection;
+    bundle->windowState.selectionScratch = &bundle->selectionScratch;
+    bundle->windowState.recentFiles = &g_recentFiles;
+
+    bool needsRecentFilesSave = false;
+    if (fileOpened) {
+        size_t i = 0;
+        for (; normalizedPath[i] != 0 && i + 1 < markair::kHistoryPathCapacity; ++i) {
+            bundle->windowState.currentDocumentPath[i] = normalizedPath[i];
+        }
+        bundle->windowState.currentDocumentPath[i] = 0;
+        bundle->windowState.currentDocumentSizeBytes = bundle->fileMap.Data().len;
+        markair::AddRecentFile(bundle->windowState.recentFiles, normalizedPath);
+        needsRecentFilesSave = true;
+    }
+
+    if (!markair::RegisterMainWindowClass(
+            instance, markair::ResolveEffectiveTheme(bundle->settings.theme, systemIsDark))) {
+        delete bundle;
+        return nullptr;
+    }
+    HWND hwnd = markair::CreateMainWindow(instance, g_displayText, &bundle->windowState);
+    if (!hwnd) {
+        delete bundle;
+        return nullptr;
+    }
+    if (needsRecentFilesSave) {
+        markair::RequestRecentFilesSave(hwnd, &bundle->windowState);
+    }
+
+    bundle->remoteLoader.Init(hwnd, bundle->settings.loadRemoteImages);
+
+    bundle->documentHost = DocumentHost{hwnd,
+                                        &bundle->fileMap,
+                                        &bundle->docArena,
+                                        &bundle->doc,
+                                        &bundle->layout,
+                                        &fonts,
+                                        &bundle->imageCache,
+                                        &bundle->imageArena,
+                                        bundle->documentDirectory,
+                                        &bundle->windowState,
+                                        &bundle->settings,
+                                        false,
+                                        bundle};
+    bundle->windowState.callbackUserData = &bundle->documentHost;
+    bundle->windowState.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
+
+    SetPropW(hwnd, kPathHashPropName,
+             reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(HashPathCaseInsensitive(normalizedPath))));
+
+    ++g_openWindowCount;
+    return hwnd;
+}
+
+/**
+ * 进程内"打开或前置文档窗口"的统一入口:多个触发点共用(打开文件按钮/菜单、
+ * 点击 .md 链接、点击历史记录项)。若同一文件已有窗口则前置它,否则新建一个
+ * 窗口(不新起进程,共享同一份 FontSubsystem/D2D 工厂)。
+ *
+ * @return 前置了既有窗口,或新建窗口成功,返回 true;两者都失败返回 false。
+ */
+bool OpenOrFocusDocumentWindow(HINSTANCE instance, const wchar_t* filePath) {
+    if (!filePath || filePath[0] == 0) return false;
+
+    wchar_t normalizedPath[MAX_PATH]{};
+    DWORD fullPathLen = GetFullPathNameW(filePath, MAX_PATH, normalizedPath, nullptr);
+    if (fullPathLen == 0 || fullPathLen >= MAX_PATH) {
+        wcsncpy_s(normalizedPath, MAX_PATH, filePath, _TRUNCATE);
+    }
+
+    FindWindowContext ctx{HashPathCaseInsensitive(normalizedPath), nullptr};
+    EnumWindows(FindWindowByHashProc, reinterpret_cast<LPARAM>(&ctx));
+    if (ctx.found != nullptr) {
+        if (IsIconic(ctx.found)) ShowWindow(ctx.found, SW_RESTORE);
+        SetForegroundWindow(ctx.found);
+        return true;
+    }
+
+    return CreateDocumentWindow(instance, normalizedPath) != nullptr;
+}
+
+bool OnOpenNewWindowHook(void*, const wchar_t* fullPath) {
+    return OpenOrFocusDocumentWindow(GetModuleHandleW(nullptr), fullPath);
 }
 
 }  // namespace
@@ -628,9 +863,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         settings.winMaximized = false;
     }
 
-    // 字体子系统本体放在栈上(非全局对象),不违反"禁止有副作用的全局
-    // 构造函数"约束。族名覆盖必须在 Init 之前生效。
-    markair::FontSubsystem fonts;
+    // 进程内多窗口改造:字体子系统改为进程内共享单例(见 shared_resources.h)——
+    // 所有窗口共用同一份 DirectWrite Factory/文本格式/中文回退链,不再每窗口
+    // (原来是每进程,等价于每窗口)各自初始化一份。缩放状态因此也随之变成
+    // 全局:多窗口场景下缩放会对全部已开窗口生效,这是本次改造评估并接受的
+    // 行为变化(见任务说明),不是遗留缺陷。族名覆盖必须在 Init 之前生效。
+    markair::FontSubsystem& fonts = markair::SharedFontSubsystem();
     fonts.SetFamilyOverrides(settings.fontBodyPrimary, settings.fontBodyFallback,
                              settings.fontMonoPrimary, settings.fontMonoFallback);
     fonts.Init();
@@ -746,6 +984,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // 尚未 Init,不产生任何分配。
         nullptr, &outlineArena,
         &OpenDocumentInPlace,
+        // 进程内多窗口改造:首个窗口同样接上"打开新窗口"/"窗口销毁"两个钩子,
+        // 与后续由 CreateDocumentWindow 创建的窗口共用同一套行为。
+        &OnOpenNewWindowHook, &OnWindowClosedHook,
         &OnWindowCreatedBenchHook, &OnFirstPresentBenchHook, nullptr, false,
         // T42:只在 --bench 且目标语料是 BENCH-B 时开启"首屏之外强制全量解码"
         // (T44 修复,见 BenchTargetWantsFullDecode 注释);正常运行(双击打开
@@ -899,9 +1140,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     DocumentHost documentHost{hwnd,        &fileMap,     &docArena,   &doc,
                               &layout,     &fonts,       &imageCache, &imageArena,
                               documentDirectory,
-                              &windowState, &settings, benchArgs.benchEnabled};
+                              &windowState, &settings, benchArgs.benchEnabled,
+                              // 首个窗口的状态全在本函数栈上,不是堆上分配的
+                              // WindowBundle,窗口销毁时不需要(也不能)delete。
+                              nullptr};
     windowState.callbackUserData = &documentHost;
     windowState.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
+    // 进程内窗口计数:最后一个窗口关闭时才 PostQuitMessage(见 OnWindowClosedHook)。
+    ++g_openWindowCount;
 
     // 把路径哈希写进窗口属性,供其它进程的 TryFocusExistingWindowForHash
     // 找到本窗口(系统会在窗口销毁时自动清理属性,不需要手动 RemoveProp)。

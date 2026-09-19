@@ -2,6 +2,7 @@
 add_executable(markair WIN32
     app/main.cpp
     app/bench.cpp
+    app/shared_resources.cpp
     util/arena.cpp
     util/cmdline.cpp
     util/str.cpp
