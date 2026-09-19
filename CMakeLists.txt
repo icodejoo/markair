@@ -55,8 +55,14 @@ set(MDVN_RELEASE_COMPILE_OPTIONS
 )
 
 # Release 链接期优化：剔除未引用符号、合并等价函数、跨模块优化。
+# /OPT:ICF=3(2026-09-19 体积调研追加):多轮迭代折叠等价函数,比默认单轮
+# /OPT:ICF 多省几 KB；代价是不同函数可能共享同一地址，本项目不比较函数
+# 指针，无副作用。/EMITTOOLVERSIONINFO:NO:去掉链接器写进 exe 的工具版本
+# 记录节，省几百字节到几 KB，零风险。/FILEALIGN:512:PE 文件对齐从默认
+# 512(已是最小值)——显式声明留痕，实际已是默认值，不改变输出，仅避免
+# 未来 CMake/工具链默认值漂移。
 set(MDVN_RELEASE_LINK_OPTIONS
-    /OPT:REF /OPT:ICF /LTCG
+    /OPT:REF /OPT:ICF=3 /LTCG /EMITTOOLVERSIONINFO:NO /FILEALIGN:512
 )
 
 # 延迟加载的系统 DLL（T34 验收项）：网络图片用的 WinHTTP 只在真正发起请求时
@@ -135,6 +141,12 @@ add_library(plutovg STATIC
 )
 target_include_directories(plutovg PUBLIC third_party/lunasvg/plutovg/include)
 target_compile_definitions(plutovg PUBLIC PLUTOVG_BUILD_STATIC)
+# stb_image(plutovg-surface.c 内嵌)按格式关闭未用到的解码器,纯宏开关,不动
+# vendor 源码本体:mdvn 的 SVG `<image>` 场景只保留 PNG/JPEG 两种最常见的
+# 内嵌位图格式,BMP/PSD/TGA/GIF/HDR/PIC/PNM 全部关掉(2026-09-19 体积调研)。
+target_compile_definitions(plutovg PRIVATE
+    STBI_NO_BMP STBI_NO_PSD STBI_NO_TGA STBI_NO_GIF
+    STBI_NO_HDR STBI_NO_PIC STBI_NO_PNM STBI_NO_LINEAR STBI_NO_FAILURE_STRINGS)
 target_compile_options(plutovg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100
     $<$<CONFIG:Release>:${MDVN_RELEASE_COMPILE_OPTIONS}>)
 
