@@ -111,6 +111,23 @@ jobs:
         run: |
           .\ci\check_budget.ps1 -N 20
 
+      # 2026-09-19 内存调研第一条建议:排查 private_bytes 超标前先知道
+      # "钱花哪了"，不盲改代码。纯诊断,不设门禁,cdb.exe(Windows SDK 可选
+      # 组件)在 runner 上不一定存在——脚本内部会优雅跳过并提示，本步骤
+      # 永远不影响 job 成败(if: always()，即便上面门禁失败也想看内存构成)。
+      #
+      # 2026-09-19 memory investigation's first recommendation: know where
+      # the money went before blindly changing code. Pure diagnostics, no
+      # gate; cdb.exe (an optional Windows SDK component) may not exist on
+      # the runner — the script itself skips gracefully with a notice. This
+      # step never affects job success/failure (if: always(), so we still
+      # want the memory breakdown even when the budget gate above failed).
+      - name: 内存构成诊断(cdb !address -summary,纯记录) / Memory breakdown diagnostic
+        if: always()
+        shell: pwsh
+        run: |
+          .\ci\memory_breakdown.ps1
+
       # 只在门禁通过后才把 build 目录存回缓存(if: success()),理由见上面
       # 恢复步骤的注释。
       #
