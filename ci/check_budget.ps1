@@ -10,7 +10,8 @@
     3. 暖启动首屏门禁（BENCH-A，01 §4 第 1 行）；
     4. 冷启动首屏门禁（BENCH-A + RAMMap 清 standby，01 §4 第 2 行）；
     5. exe 体积硬线门禁（01 §4 第 5 行，1.5MB，取代旧的 8MB 宽松安全网）；
-    6. 高亮体积增量硬线门禁（T54，394240 字节，与上一条并存，见裁决 #8①）；
+    6. 高亮体积增量硬线门禁（T54，800000 字节，2026-09-19 因 SVG 支持上调，
+       与上一条并存，见裁决 #8①）；
     7. 常驻内存门禁：BENCH-A ≤15MB（01 §4 第 3 行）+ 空文档 ≤8MB（01 §4 第 4 行）；
     8. BENCH-B 图片密集场景内存门禁（M1 既有，不回退）；
     9. BENCH-D 10MB 超大文档打开时间门禁（01 §4 第 7 行）；
@@ -99,10 +100,27 @@
 
 .PARAMETER HighlightExeSizeThresholdBytes
     （T54 新增，T83 明确保留，见裁决 #8①）高亮功能引入后的 exe 体积硬性
-    门禁，单位字节。默认 394240。出处：bench/M2-HIGHLIGHT.md（T50~T53 合入
-    前基线 312320 字节 + 04 的 M2 验收硬线"体积增量 <= 80KB"）。与上一条
-    ExeSizeHardLimitMB 性质不同（一个是全局 01 §4 硬指标、一个是 M2 具体
-    承诺），两者都保留，互不替代。
+    门禁，单位字节。默认 800000（2026-09-19 用户裁决上调，理由见下）。
+    原始出处：bench/M2-HIGHLIGHT.md（T50~T53 合入前基线 312320 字节 + 04 的
+    M2 验收硬线"体积增量 <= 80KB" = 394240）。
+
+    2026-09-19 上调理由：SVG 图片支持(lunasvg+plutovg)把 exe 从 312320
+    字节的 M2 基线拉到 ~720896 字节(加 /Gy /OPT:REF /OPT:ICF /LTCG 后的
+    实测值)；新阈值留了约 80KB 余量(与原 M2"体积增量 <=80KB"裕量同一
+    量级)，而不是贴着实测值设，避免后续字体/编译器版本细微波动就假红。
+    评估过手写 stub 裁掉 plutovg 里未用到
+    的 stb_truetype(字体)/stb_image(位图)代码(~1.2MB 目标文件)，但验证后
+    发现这条路子对项目真正门禁的指标(PrivateBytesProxyThresholdMB，即
+    运行时 private_bytes)**没有帮助**——Windows 下 exe 的 .text 代码段是
+    从文件本身映射的共享只读页，不计入 GetProcessMemoryInfo 的
+    PrivateUsage(即 private_bytes 口径)，不管这段代码有没有被执行到都
+    不会体现在运行时内存里；裁掉它只会缩小磁盘/分发体积，不会降内存。
+    权衡下来：为了一个不影响内存的指标去手改 vendored 第三方源码(引入
+    隐藏行为差异的风险)不划算，改为上调这条纯磁盘体积门禁，保留 lunasvg
+    完整的 font/image 元素支持。真正的内存门禁
+    (PrivateBytesProxyThresholdMB)不受此调整影响，继续按原口径把关。
+    与上一条 ExeSizeHardLimitMB 性质不同（一个是全局 01 §4 硬指标、一个是
+    M2 具体承诺），两者都保留，互不替代。
 
 .PARAMETER PrivateBytesProxyThresholdMB
     BENCH-A（无图/首屏场景）private_bytes（PrivateUsage，CI 自动化代理
@@ -224,7 +242,7 @@ param(
     [int]$NCold = 5,
 
     [double]$ExeSizeHardLimitMB = 1.5,
-    [double]$HighlightExeSizeThresholdBytes = 394240,
+    [double]$HighlightExeSizeThresholdBytes = 800000,
 
     [double]$PrivateBytesProxyThresholdMB = 19.7,
     [double]$EmptyDocPrivateBytesProxyThresholdMB = 9.5,

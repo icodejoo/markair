@@ -110,6 +110,16 @@ target_compile_options(md4c PRIVATE /W3 /wd4204 /wd4706)
 # 离线栅格化成 RGBA 再进现有 ImageCache/ID2D1Bitmap 管线，不新增 D3D 设备，
 # 不改动「默认软件渲染」架构裁决）。上游代码在 /W4 下有警告，单独关闭，不修改
 # third_party 源码去掩盖；STATIC 构建需要 *_BUILD_STATIC 宏关掉 dllexport。
+#
+# Release 也要套 MDVN_RELEASE_COMPILE_OPTIONS（2026-09-19 CI 实测追加）：
+# 这两个 target 最初漏加了 /O1 /GL /Gy /Gw，导致 Release 构建时 plutovg 里
+# 未被实际调用的代码(stb_image/stb_image_write 的 PNG/JPEG 编解码、
+# stb_truetype 字形栅格化——mdvn 只用 lunasvg 画 shape/path 类 SVG，不需要
+# `<image>` 元素内嵌位图与 `<text>` 字体渲染这两块)没有 /Gy 逐函数拆分,
+# 最终链接时 /OPT:REF 也就没法按函数粒度剔除,整份未用代码原样留在 exe 里，
+# 实测把体积从 ~312KB 顶到 ~817KB，超过 M2 体积硬性门禁(基线+80KB)。补上
+# 这两行后交给现有的 /OPT:REF /OPT:ICF /LTCG 链接期裁剪去处理，不手改
+# vendored 源码本体。
 add_library(plutovg STATIC
     third_party/lunasvg/plutovg/source/plutovg-blend.c
     third_party/lunasvg/plutovg/source/plutovg-canvas.c
@@ -125,7 +135,8 @@ add_library(plutovg STATIC
 )
 target_include_directories(plutovg PUBLIC third_party/lunasvg/plutovg/include)
 target_compile_definitions(plutovg PUBLIC PLUTOVG_BUILD_STATIC)
-target_compile_options(plutovg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100)
+target_compile_options(plutovg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100
+    $<$<CONFIG:Release>:${MDVN_RELEASE_COMPILE_OPTIONS}>)
 
 add_library(lunasvg STATIC
     third_party/lunasvg/source/graphics.cpp
@@ -143,7 +154,8 @@ target_include_directories(lunasvg PUBLIC third_party/lunasvg/include
                                     PRIVATE third_party/lunasvg/source)
 target_compile_definitions(lunasvg PUBLIC LUNASVG_BUILD_STATIC)
 target_link_libraries(lunasvg PUBLIC plutovg)
-target_compile_options(lunasvg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100)
+target_compile_options(lunasvg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100
+    $<$<CONFIG:Release>:${MDVN_RELEASE_COMPILE_OPTIONS}>)
 
 add_subdirectory(src)
 add_subdirectory(tests)
