@@ -344,6 +344,15 @@ $ErrorActionPreference = "Continue"
 & $testsExePath
 $testsExitCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
+# 用完立即清零:$LASTEXITCODE 只在真正调用原生 exe 时才会被刷新,像
+# run_bench.ps1 这类纯 PowerShell 脚本(内部用 Start-Process -PassThru
+# 异步拉起 mdvn.exe,不是同步调用,不会刷新 $LASTEXITCODE)执行完之后,
+# 后面 "if ($LASTEXITCODE -ne 0) { throw ... }" 这类判断读到的其实是这里
+# 单测失败时残留的旧值——2026-09-19 CI 实测踩过:单测 1 条失败,退出码 1
+# 一路残留到 15 步之外的 run_bench.ps1 检查点,报出一条与 run_bench.ps1
+# 本身完全无关的"run_bench.ps1 执行失败，退出码 1"，掩盖了真正的单测
+# 失败原因。
+$LASTEXITCODE = 0
 if ($testsExitCode -ne 0) {
     $failures += "单元测试失败，mdvn_tests.exe 退出码为 $testsExitCode（应为 0）。"
 } else {

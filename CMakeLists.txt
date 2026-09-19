@@ -22,12 +22,23 @@ foreach(_lang CXX C)
     string(REPLACE "/EHsc" "" CMAKE_${_lang}_FLAGS "${CMAKE_${_lang}_FLAGS}")
 endforeach()
 
-# 主代码统一使用的编译期硬性约束：禁异常、禁 RTTI、最高警告级别。
-# third_party（如 md4c）单独设置选项，不受此变量影响。
+# 主代码统一使用的编译期硬性约束：禁异常、禁 RTTI、最高警告级别、源码/执行
+# 字符集固定 UTF-8。third_party（如 md4c）单独设置选项，不受此变量影响。
+#
+# /utf-8（2026-09-19 追加，修 GitHub Actions CI 实测失败）：本仓库源码含
+# 大量中文字符串字面量（如 tests/test_ini.cpp 里 L"微软雅黑"）。MSVC 默认
+# 按"当前系统 ANSI 代码页"解释源码里的窄/宽字符字面量，而不是按源文件的
+# 实际 UTF-8 编码——开发者本机（zh-CN 代码页 936/GBK 或已启用系统级
+# UTF-8）恰好能凑对，但 GitHub Actions windows-latest runner 默认是英文
+# 代码页(1252)，同一份 UTF-8 源码在那边编译出来的宽字符字面量字节值就
+# 不对了，实测表现为 wcscmp 断言失败（值与"运行时按 UTF-8 显式解码 ini
+# 文件字节"得到的结果对不上）。/utf-8 强制"源码字符集"与"执行字符集"
+# 都按 UTF-8 解释，与源文件实际编码一致，消除这个机器相关的差异。
 set(MDVN_COMMON_COMPILE_OPTIONS
     /W4       # 主代码要求零警告
     /EHs-c-   # 禁用 C++ 异常
     /GR-      # 禁用 RTTI
+    /utf-8    # 源码/执行字符集固定 UTF-8,不依赖编译机的系统代码页
 )
 
 # Release 专属的体积/速度优化选项：内存占用优先于运行速度（用户裁决），
