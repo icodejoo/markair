@@ -136,10 +136,25 @@
     仍是 01 §4 定义的 15MB，本机可用 VMMap 人工复核（步骤见 M3-MEMORY.md）。
 
 .PARAMETER EmptyDocPrivateBytesProxyThresholdMB
-    空文档/刚启动 private_bytes 代理指标阈值，单位 MB。默认 9.31。推算依据
-    同上：01 §4 第 4 行权威目标 ≤8MB；T75 实测代理指标中位数 ≈8.80~8.97MB，
-    VMMap 权威值 `Private WS` 只有 6.87MB，差值 ≈1.31MB；换算得
-    8 + 1.31 ≈ 9.31（MB）。见 bench/M3-MEMORY.md 第 3 节。
+    空文档/刚启动 private_bytes 代理指标阈值，单位 MB。默认 10.2
+    （2026-09-19 用户裁决上调，理由见下）。原始推算依据：01 §4 第 4 行
+    权威目标 ≤8MB；T75 实测代理指标中位数 ≈8.80~8.97MB，VMMap 权威值
+    `Private WS` 只有 6.87MB，差值 ≈1.31MB；换算得 8 + 1.31 ≈ 9.31（MB），
+    之后又手改到 9.5。见 bench/M3-MEMORY.md 第 3 节。
+
+    2026-09-19 上调理由：这个门禁是本次会话里第一次真正跑到底(此前一直
+    卡在别的 CI 基础设施问题上,从未被验证过),CI 上连续两次实测 9.77MB/
+    9.824MB，本机(同一份代码、同样 N=20)怎么测都在 14.4MB 上下[口径不同,
+    见下],且 SVG 接入前后本机 A/B 对照 private_bytes 几乎没变化(14.44MB
+    ->14.42MB)。CI 上 dumpbin 显示的 MSVC 工具集是 14.29,本机是 14.44——
+    怀疑是工具链版本差异导致的编译产物基线漂移,不是代码引入的真实内存
+    回归。深挖过 Win32+D2D 常见内存优化手段(延迟创建渲染目标、图片/
+    TextLayout 虚拟化、TextFormat 复用、按窗口摘 IME 防第三方 TSF 注入、
+    避免 PushLayer 等)——mdvn 代码库里能落地的都已经落地,没有找到新的
+    可优化点，遂上调阈值而不是继续盲找。
+    [口径提醒]"本机14.4MB"和这里的9.5/10.2MB门禁不是同一把尺子——本机
+    数字来自本地临时对照测量脚本，未套用 CI 这套代理指标的既定换算公式，
+    两者不可直接比较，仅用于判断"改动前后有没有相对变化"。
 
 .PARAMETER NEmpty
     空文档内存测量轮数，透传给 run_bench.ps1 -Target EMPTY。默认与 -N 一致
@@ -245,7 +260,7 @@ param(
     [double]$HighlightExeSizeThresholdBytes = 800000,
 
     [double]$PrivateBytesProxyThresholdMB = 19.7,
-    [double]$EmptyDocPrivateBytesProxyThresholdMB = 9.5,
+    [double]$EmptyDocPrivateBytesProxyThresholdMB = 10.2,
     [int]$NEmpty = 5,
 
     [double]$BenchBPrivateBytesThresholdMB = 80,

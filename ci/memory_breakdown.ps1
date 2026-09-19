@@ -61,9 +61,10 @@ if (-not (Test-Path $BenchFile)) {
     exit 0
 }
 
-# 定位 cdb.exe：先试 vswhere 关联的 Windows SDK Debugging Tools 常见安装
-# 路径（不像 dumpbin 那样有 vswhere 直接支持，这里按已知安装路径枚举，
-# 找不到就说明本机/CI runner 没装这个可选组件——直接跳过，不算失败）。
+# 定位 cdb.exe：先试传统 Windows SDK "Debugging Tools for Windows" 安装
+# 路径，再试 WinDbg Preview(MSIX 包，`winget install Microsoft.WinDbg`
+# 装的就是它，同样内置 cdb.exe，本机 2026-09-19 验证过可用)的安装目录
+# ——都找不到就说明本机/CI runner 没装这个可选组件，直接跳过，不算失败。
 function Find-Cdb {
     $candidates = @(
         "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe",
@@ -73,6 +74,25 @@ function Find-Cdb {
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return $c }
+    }
+
+    # WinDbg Preview 是按版本号命名子目录的 MSIX 包，路径里的版本号会变,
+    # 先按包名通配符缩小到具体子目录(WindowsApps 下每个已装应用一个顶层
+    # 目录,不递归),再直接拼 amd64\cdb.exe 的确定路径——不对整个 WindowsApps
+    # 做 -Recurse 全盘扫描:里面每个 MSIX 包目录都有独立 ACL,大范围递归
+    # 既慢又会因权限不足产生大量噪音(即便 -ErrorAction SilentlyContinue
+    # 吞掉了异常,枚举本身仍要遍历所有包目录)。
+    $windbgRoot = "$env:ProgramFiles\WindowsApps"
+    if (Test-Path $windbgRoot) {
+        # 同一个 WinDbg Preview 版本会有多条包目录(如 "_neutral_" 资源包、
+        # "_x64_" 实际二进制包)，只有 "_x64_" 那条下面才有 amd64\cdb.exe，
+        # 不能只取第一条就判定"找不到"——逐条试,第一条真正命中的才返回。
+        $pkgDirs = Get-ChildItem -Path $windbgRoot -Directory -Filter "Microsoft.WinDbg_*" `
+            -ErrorAction SilentlyContinue
+        foreach ($pkgDir in $pkgDirs) {
+            $candidate = Join-Path $pkgDir.FullName "amd64\cdb.exe"
+            if (Test-Path $candidate) { return $candidate }
+        }
     }
     return $null
 }
