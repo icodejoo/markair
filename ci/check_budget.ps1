@@ -301,8 +301,29 @@ function Get-LatestCsv([string]$afterFile) {
 $needBuild = $ForceRebuild -or (-not (Test-Path $exePath)) -or (-not (Test-Path $testsExePath))
 if ($needBuild) {
     Write-Host "[1/15] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
+    # 防御:GitHub Actions 缓存(restore-keys 前缀回退)可能恢复出一份用旧
+    # 生成器("Visual Studio 17 2022")配置过的 $buildDir(比如切到 Ninja
+    # Multi-Config 之前的缓存条目)。若只判 Test-Path 就直接跳过 cmake 配置,
+    # 会拿着不匹配当前生成器的 CMakeCache.txt 去 --build,轻则报错、重则用
+    # 陈旧目标静默通过——整个目录删了重配,比条件判断"是否要重新配"更简单
+    # 可靠。
+    $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+    if ((Test-Path $cacheFile) -and
+        -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
+        Write-Host "[1/15] 检测到 $buildDir 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
+        Remove-Item -Recurse -Force $buildDir
+    }
     if (-not (Test-Path $buildDir)) {
-        cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
+        # 不写死 VS 版本号生成器("Visual Studio 17 2022"):GitHub Actions
+        # windows-latest 镜像的 VS 版本会不定期升级(如 2026-09-19 观测到已是
+        # VS 18),硬编码 17 会在镜像升级后直接报"could not find any instance
+        # of Visual Studio"。改用 "Ninja Multi-Config"——不依赖任何 VS 生成器
+        # 命名/版本探测,只需要 cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经
+        # 配置好),产出的多配置目录结构(build\src\Release\...)与原 VS 生成器
+        # 完全一致,不影响下游脚本按 $BuildConfig 子目录取产物的路径假设。
+        # 本机实测过(2026-09-19):同一份源码配置+构建 mdvn.exe 成功,
+        # 产物落在 build\src\Release\mdvn.exe,与切换前路径一致。
+        cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
         if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
     }
     cmake --build $buildDir --config $BuildConfig

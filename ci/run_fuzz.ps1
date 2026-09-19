@@ -71,8 +71,18 @@ Write-Host "语料目录：$fuzzDir（$fuzzFileCount 份 *.md）"
 $needBuild = $ForceRebuild -or (-not (Test-Path $testsExePath))
 if ($needBuild) {
     Write-Host "[1/2] 未找到 mdvn_tests.exe 或指定强制重建，开始构建（$BuildConfig）..."
+    # 防御:恢复出的陈旧缓存 $buildDir 可能是用其他生成器配置的,理由同
+    # ci\check_budget.ps1 同一处改动。
+    $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+    if ((Test-Path $cacheFile) -and
+        -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
+        Write-Host "[1/2] 检测到 $buildDir 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
+        Remove-Item -Recurse -Force $buildDir
+    }
     if (-not (Test-Path $buildDir)) {
-        cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
+        # 不写死 VS 版本号生成器,改用 Ninja Multi-Config,理由同
+        # ci\check_budget.ps1 同一处改动。
+        cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAIL: CMake 配置失败，退出码 $LASTEXITCODE"
             exit 1

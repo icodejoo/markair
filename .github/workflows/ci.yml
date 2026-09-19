@@ -52,16 +52,73 @@ jobs:
         with:
           arch: x64
 
+      # 缓存 CMake 配置产物 + 编译中间对象:check_budget.ps1 内部按
+      # Test-Path $exePath 判断是否需要重建,命中缓存时直接跳过整个构建段,
+      # 不用每次从零重装/重编 third_party/lunasvg+plutovg+md4c 这类基本
+      # 不变的 vendored 源码。key 按 CMakeLists/源码内容哈希。
+      #
+      # 拆成 restore(这里)+ save(check_budget.ps1 那一步之后、带
+      # if: success())两步,理由同 release.yml 同一处改动:一体式
+      # actions/cache 会在门禁失败时仍把"坏"build 目录存回缓存,污染下次
+      # restore-keys 前缀回退的命中结果。restore-keys 前缀回退命中生成器
+      # 不匹配的陈旧缓存这条风险,由 check_budget.ps1 内新加的"CMakeCache.txt
+      # 生成器不符就整目录删掉重配"兜底。
+      #
+      # Cache the CMake configure output + compiled objects: check_budget.ps1
+      # decides whether a rebuild is needed via Test-Path $exePath, so a
+      # cache hit skips the whole build section instead of reinstalling and
+      # recompiling the largely-static vendored third_party/lunasvg+plutovg+
+      # md4c source from scratch every run. Key is hashed from CMakeLists/
+      # source content.
+      #
+      # Split into restore (here) + save (after the check_budget.ps1 step,
+      # gated on if: success()), same reasoning as the release.yml change:
+      # the single-step actions/cache form would save a "bad" build dir back
+      # even when the budget gate fails, poisoning the next restore-keys
+      # prefix fallback. The generator-mismatch risk from that prefix
+      # fallback is covered by the "delete-and-reconfigure if CMakeCache.txt
+      # generator doesn't match" guard newly added inside check_budget.ps1.
+      - name: 恢复构建目录缓存 / Restore build directory cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build
+          key: ci-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/CMakeLists.txt', 'tests/CMakeLists.txt', 'third_party/**', 'src/**', 'tests/**') }}
+          restore-keys: |
+            ci-build-${{ runner.os }}-
+
       # ci/check_budget.ps1 内部会在构建产物缺失时自动执行
-      # cmake -S . -B build -G "Visual Studio 17 2022" -A x64 与
+      # cmake -S . -B build -G "Ninja Multi-Config" 与
       # cmake --build build --config Release，因此这里不单独拆分构建步骤。
+      # 不写死 VS 版本号生成器、改用 Ninja Multi-Config 的理由见脚本内注释
+      # (windows-latest 镜像 VS 版本会不定期升级)。
       #
       # check_budget.ps1 现在是覆盖 01§4 全部 8 行硬指标 + M1/M2 既有门禁的
       # 单一入口（M3 T83），CI 侧不新增独立 job/step——拆分反而会让"任一项
       # 失败即整体失败"这条语义在两处维护。不加 -Strict：CI 上暖启动用上限值
       # 判据、leak_probe 的已知"一次性预热"降级为提示，理由见本文件顶部注释
       # 与 ci\check_budget.ps1 脚本头部注释。
+      #
+      # shell 用 pwsh(PowerShell 7,windows-latest 预装)而不是 powershell
+      # (Windows PowerShell 5.1):check_budget.ps1 无 BOM 的 UTF-8 源码文件
+      # 含中文注释/字符串,5.1 在无 BOM 时按系统 ANSI 代码页读取源码文件,
+      # 中文字节序列被错误解码成乱码,进而破坏脚本的整体语法解析(实测报
+      # "Unexpected token"/"reserved for future use"等一堆解析错误,不是
+      # 逻辑 bug,是编码问题)。pwsh 默认按 UTF-8(无 BOM 也一样)读源码,
+      # 不需要改动脚本文件本身加 BOM。
       - name: 运行性能门禁脚本（构建 + 单测 + 01§4 全部硬指标门禁）
-        shell: powershell
+        shell: pwsh
         run: |
           .\ci\check_budget.ps1 -N 20
+
+      # 只在门禁通过后才把 build 目录存回缓存(if: success()),理由见上面
+      # 恢复步骤的注释。
+      #
+      # Only save the build dir back to the cache after the budget gate
+      # passes (if: success()); see the restore step's comment above.
+      - name: 保存构建目录缓存 / Save build directory cache
+        if: success() && steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build
+          key: ${{ steps.restore-cache.outputs.cache-primary-key }}

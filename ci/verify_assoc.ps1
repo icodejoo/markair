@@ -74,8 +74,18 @@ if (-not (Test-Path $ExePath)) {
     }
     Info "exe 不存在，执行一次 Release 构建：$ExePath"
     $buildDir = Join-Path $repoRoot "build"
+    # 防御:恢复出的陈旧缓存 $buildDir 可能是用其他生成器配置的,理由同
+    # ci\check_budget.ps1 同一处改动。
+    $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+    if ((Test-Path $cacheFile) -and
+        -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
+        Info "检测到 $buildDir 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
+        Remove-Item -Recurse -Force $buildDir
+    }
     if (-not (Test-Path $buildDir)) {
-        cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
+        # 不写死 VS 版本号生成器,改用 Ninja Multi-Config,理由同
+        # ci\check_budget.ps1 同一处改动。
+        cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
     }
     cmake --build $buildDir --config Release --target mdvn
     if (-not (Test-Path $ExePath)) {

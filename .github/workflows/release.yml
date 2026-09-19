@@ -78,16 +78,103 @@ jobs:
       # /GL /Gy /Gw + /OPT:REF /OPT:ICF /LTCG). This step does not pass
       # extra compile options, to avoid a second source of truth that can
       # drift from the one in CMakeLists.txt.
+      # 缓存 CMake 配置产物 + 编译中间对象(third_party/lunasvg+plutovg+md4c
+      # 这类基本不变的 vendored 源码,每次从零编译最费时间):key 按
+      # CMakeLists/源码内容哈希,命中时增量编译,不用每次全量重装/重建依赖。
+      # third_party/** 加进 key 是因为 vendored 库版本升级也要让缓存失效。
+      #
+      # 拆成 restore(这里)+ save(job 末尾、且带 if: success())两步,不用
+      # 一体式 actions/cache——一体式的话即使后面构建/验收失败,post-step
+      # 仍会照常把这份"坏"build 目录存回缓存,下次 restore-keys 前缀回退时
+      # 就会捞到一份没通过验收的产物当"命中"复用。restore-keys 前缀回退本身
+      # 也可能捞到生成器不匹配的陈旧缓存,这条由 check_budget.ps1/run_fuzz.ps1/
+      # verify_assoc.ps1 里新加的"CMakeCache.txt 生成器不符就整目录删掉重配"
+      # 兜底(本文件的构建路径同样先过 cmake -S ... -G "Ninja Multi-Config"
+      # 的显式配置步骤,不依赖那三个脚本的兜底逻辑,但 restore-keys 命中同一
+      # 风险仍然存在,所以 save 才要求 success())。
+      #
+      # Cache the CMake configure output + compiled objects (recompiling
+      # the largely-static vendored third_party/lunasvg+plutovg+md4c source
+      # from scratch is the slow part every run): key is hashed from
+      # CMakeLists/source content so a cache hit gives an incremental build
+      # instead of reinstalling/rebuilding everything each time. third_party/**
+      # is in the key so a vendored library bump still invalidates it.
+      #
+      # Split into restore (here) + save (end of job, gated on if: success())
+      # instead of the single-step actions/cache — with the single-step form,
+      # even a failed build/verify still gets its "bad" build dir saved back
+      # by the post-step, so the next restore-keys prefix fallback could pick
+      # up an unverified artifact as a "hit". The prefix fallback can also
+      # restore a build dir configured with a stale/mismatched generator;
+      # that risk is covered by the "delete-and-reconfigure if CMakeCache.txt
+      # generator doesn't match" guard newly added to check_budget.ps1/
+      # run_fuzz.ps1/verify_assoc.ps1 (this workflow's own build path already
+      # runs an explicit cmake -S ... -G "Ninja Multi-Config" configure step
+      # below and doesn't depend on those scripts' guard, but the same
+      # restore-keys risk exists here too, which is why save still requires
+      # success()).
+      - name: 恢复构建目录缓存 / Restore build directory cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build
+          key: release-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/CMakeLists.txt', 'tests/CMakeLists.txt', 'third_party/**', 'src/**', 'tests/**') }}
+          restore-keys: |
+            release-build-${{ runner.os }}-
+
+      # 不写死 VS 版本号生成器("Visual Studio 17 2022"):windows-latest 镜像
+      # 的 VS 版本会不定期升级(2026-09-19 观测到已是 VS 18),硬编码 17 会在
+      # 镜像升级后直接报"could not find any instance of Visual Studio"退出。
+      # 改用 "Ninja Multi-Config"——不依赖任何 VS 生成器命名/版本探测,只需要
+      # cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经配置好),产出的多配置
+      # 目录结构(build\src\Release\...)与原 VS 生成器完全一致,不影响本
+      # workflow 后续按 build\src\Release\mdvn.exe 取产物的路径假设。本机
+      # 实测过(2026-09-19):同一份源码配置+构建 mdvn.exe 成功,产物落在
+      # build\src\Release\mdvn.exe,与切换前路径一致。
+      #
+      # Don't pin the generator version ("Visual Studio 17 2022"): the
+      # windows-latest image's VS version bumps periodically (already VS 18
+      # as of 2026-09-19); a hardcoded 17 fails with "could not find any
+      # instance of Visual Studio" once the image moves on. Switched to
+      # "Ninja Multi-Config" instead — no dependency on VS generator
+      # naming/version detection, only needs cl.exe/link.exe on PATH
+      # (already set up by msvc-dev-cmd). Its multi-config output layout
+      # (build\src\Release\...) matches the old VS generator exactly, so
+      # this workflow's downstream build\src\Release\mdvn.exe path
+      # assumption is unaffected. Verified locally (2026-09-19): configuring
+      # and building mdvn.exe from the same source succeeds, landing at the
+      # same build\src\Release\mdvn.exe path as before the switch.
+      # 防御:restore-keys 前缀回退可能恢复出一份用旧生成器("Visual Studio
+      # 17 2022")配置过的 build 目录(比如切到 Ninja Multi-Config 之前的
+      # 缓存条目)。若不做这层判断就直接 cmake -B 复用该目录,CMake 会因
+      # 生成器不匹配报错退出——整个目录删了重配,理由同 ci\check_budget.ps1
+      # 同一处改动。
+      #
+      # Defense: the restore-keys prefix fallback may restore a build dir
+      # configured with the old "Visual Studio 17 2022" generator (a cache
+      # entry saved before the Ninja Multi-Config switch). Reusing it as-is
+      # makes CMake fail with a generator mismatch — delete and reconfigure,
+      # same reasoning as the ci\check_budget.ps1 change.
+      - name: 校验构建目录缓存的生成器 / Validate cached build dir generator
+        shell: pwsh
+        run: |
+          $cacheFile = "build\CMakeCache.txt"
+          if ((Test-Path $cacheFile) -and
+              -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
+            Write-Host "检测到 build 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
+            Remove-Item -Recurse -Force build
+          }
+
       - name: 配置 / Configure (CMake, Release)
-        shell: powershell
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        shell: pwsh
+        run: cmake -S . -B build -G "Ninja Multi-Config"
 
       - name: 构建 / Build (Release)
-        shell: powershell
+        shell: pwsh
         run: cmake --build build --config Release --target mdvn
 
       - name: 跑单元测试 / Run unit tests
-        shell: powershell
+        shell: pwsh
         run: |
           cmake --build build --config Release --target mdvn_tests
           .\build\tests\Release\mdvn_tests.exe
@@ -102,8 +189,21 @@ jobs:
       # count. Any failure fails the whole job — no shipping a
       # non-conforming artifact.
       - name: 验收产物 / Verify release artifact
-        shell: powershell
+        shell: pwsh
         run: .\ci\verify_release.ps1
+
+      # 只在验收通过后才把 build 目录存回缓存(if: success()):避免把一份
+      # 没通过验收的构建结果标记成"命中"存进去,污染下次 restore-keys。
+      #
+      # Only save the build dir back to the cache after verification passes
+      # (if: success()): avoids writing back a build that failed
+      # verification, which would poison the next restore-keys lookup.
+      - name: 保存构建目录缓存 / Save build directory cache
+        if: success() && steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build
+          key: ${{ steps.restore-cache.outputs.cache-primary-key }}
 
       - name: 上传单文件 exe / Upload single-file exe
         uses: actions/upload-artifact@v4
