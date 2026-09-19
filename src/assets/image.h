@@ -7,7 +7,9 @@
 //   - 解码时若原始像素尺寸超过 kMaxDecodedDimension,用 IWICBitmapScaler
 //     边解码边缩小,而不是整图拒绝(裁决 #5)。
 //   - 动图 GIF 只解第 0 帧,GetFrame(0) 之后立即释放解码器。
-//   - SVG 直接判定为不支持,不进 WIC。
+//   - SVG 不进本解码器:由调用方(ImageResidencyManager::DecodeNow)按
+//     IsSvgImageRef 分流到 svg_decoder.h(lunasvg 离线栅格化),WIC 本身
+//     不认识 svg 格式。
 //   - 解码失败一律返回占位状态,不崩溃、不抛异常(本工程禁异常)。
 #pragma once
 
@@ -61,7 +63,8 @@ struct DecodedImage {
 
 /**
  * 判断一个图片地址是否是 SVG(按扩展名,忽略 ?query / #fragment 与大小写),
- * 或是 data:image/svg+xml 这种 MIME。SVG 不进 WIC,直接走占位(裁决)。
+ * 或是 data:image/svg+xml 这种 MIME。SVG 不进 WIC,改走 svg_decoder.h
+ * (lunasvg 离线栅格化)。
  *
  * @param href 图片地址(UTF-8 切片),可以是本地路径、URL 或 data: URI。
  * @return 判定为 SVG 返回 true。
@@ -140,8 +143,8 @@ public:
     DecodedImage DecodeFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target);
 
     /**
-     * 从磁盘文件路径解码一张图片,语义同 DecodeFromMemory。
-     * 路径以 .svg 结尾时直接返回 Unsupported,不进 WIC。
+     * 从磁盘文件路径解码一张图片,语义同 DecodeFromMemory。调用方需先用
+     * IsSvgImageRef 判断,SVG 不应传入本函数(应走 svg_decoder.h)。
      *
      * @param path 绝对或相对的宽字符文件路径,非空。
      * @param target D2D 渲染目标,可为 nullptr(只取尺寸)。

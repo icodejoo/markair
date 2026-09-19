@@ -3,6 +3,8 @@
 #include <cstring>
 
 #include "../assets/data_uri.h"
+#include "../assets/svg_decoder.h"
+#include "../doc/file_map.h"
 #include "../hl/lexer.h"
 #include "../util/str.h"
 
@@ -284,7 +286,7 @@ const wchar_t* ImagePlaceholderText(ImageStatus status) {
     case ImageStatus::Ok:              return L"";
     case ImageStatus::NotLoaded:       return L"图片加载中";
     case ImageStatus::Failed:          return L"图片加载失败";
-    case ImageStatus::Unsupported:     return L"不支持的图片格式(SVG)";
+    case ImageStatus::Unsupported:     return L"不支持的图片格式";
     case ImageStatus::TooLarge:        return L"图片过大,未加载";
     case ImageStatus::RemoteNotLoaded: return L"网络图片,点击加载";
     }
@@ -295,7 +297,7 @@ const wchar_t* DownsampledBadgeText() { return L"已压缩·点击看原图"; }
 
 namespace {
 
-// 某个状态是否是"终态失败":不要每帧重试解码(损坏文件、SVG、超限)。
+// 某个状态是否是"终态失败":不要每帧重试解码(损坏文件、格式不支持、超限)。
 bool IsTerminalFailure(ImageStatus status) {
     return status == ImageStatus::Failed || status == ImageStatus::Unsupported ||
            status == ImageStatus::TooLarge;
@@ -350,14 +352,9 @@ void ImageResidencyManager::Init(Renderer* renderer, ImageCache* cache, Arena* s
 ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
     if (!cache_) return ImageStatus::Failed;
 
-    // SVG 直接判不支持,不进 WIC(裁决)——这条判断在任何 WIC 调用之前。
-    if (IsSvgImageRef(box.href)) {
-        cache_->Put(box.href, nullptr, 0, 0, ImageStatus::Unsupported, false);
-        return ImageStatus::Unsupported;
-    }
-
     ID2D1RenderTarget* target = renderer_ ? renderer_->Target() : nullptr;
     DecodedImage decoded{nullptr, 0, 0, ImageStatus::Failed, false};
+    bool isSvg = IsSvgImageRef(box.href);  // SVG 走 lunasvg 离线栅格化,不进 WIC
 
     if (box.kind == LinkTargetKind::DataUri) {
         if (!scratch_) return ImageStatus::Failed;
@@ -367,7 +364,8 @@ ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
             cache_->Put(box.href, nullptr, 0, 0, ImageStatus::Failed, false);
             return ImageStatus::Failed;
         }
-        decoded = decoder_.DecodeFromMemory(payload.bytes, payload.len, target);
+        decoded = isSvg ? DecodeSvgFromMemory(payload.bytes, payload.len, target)
+                         : decoder_.DecodeFromMemory(payload.bytes, payload.len, target);
     } else if (box.kind == LinkTargetKind::External) {
         // 网络图片:只有已经下载过原始字节才解码,否则停在"点击加载"占位(T34)。
         u32 rawLen = 0;
@@ -376,14 +374,26 @@ ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
             cache_->Put(box.href, nullptr, 0, 0, ImageStatus::RemoteNotLoaded, false);
             return ImageStatus::RemoteNotLoaded;
         }
-        decoded = decoder_.DecodeFromMemory(raw, rawLen, target);
+        decoded = isSvg ? DecodeSvgFromMemory(raw, rawLen, target)
+                         : decoder_.DecodeFromMemory(raw, rawLen, target);
     } else if (box.kind == LinkTargetKind::RelativePath) {
         wchar_t path[MAX_PATH * 2]{};
         if (!BuildLocalImagePath(box.href, docDir_, path, MAX_PATH * 2)) {
             cache_->Put(box.href, nullptr, 0, 0, ImageStatus::Failed, false);
             return ImageStatus::Failed;
         }
-        decoded = decoder_.DecodeFromFile(path, target);
+        if (isSvg) {
+            // SVG 走只读文件映射零拷贝取字节,再喂给 lunasvg——不复用 WIC 那条
+            // CreateDecoderFromFilename 路径(WIC 本身不认识 svg)。
+            FileMap fm;
+            if (fm.Open(path) == FileMapError::None) {
+                StrSlice content = fm.Data();
+                decoded = DecodeSvgFromMemory(content.data, content.len, target);
+                fm.Close();
+            }
+        } else {
+            decoded = decoder_.DecodeFromFile(path, target);
+        }
     } else {
         cache_->Put(box.href, nullptr, 0, 0, ImageStatus::Failed, false);
         return ImageStatus::Failed;

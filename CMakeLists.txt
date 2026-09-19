@@ -90,5 +90,45 @@ add_library(md4c STATIC third_party/md4c/md4c.c)
 target_include_directories(md4c PUBLIC third_party/md4c)
 target_compile_options(md4c PRIVATE /W3 /wd4204 /wd4706)
 
+# lunasvg + plutovg 是 vendored 的第三方源码（third_party/lunasvg/，含内嵌的
+# plutovg 子模块源码），用于 T?? SVG 图片解码支持（裁决：SVG 图片走 lunasvg
+# 离线栅格化成 RGBA 再进现有 ImageCache/ID2D1Bitmap 管线，不新增 D3D 设备，
+# 不改动「默认软件渲染」架构裁决）。上游代码在 /W4 下有警告，单独关闭，不修改
+# third_party 源码去掩盖；STATIC 构建需要 *_BUILD_STATIC 宏关掉 dllexport。
+add_library(plutovg STATIC
+    third_party/lunasvg/plutovg/source/plutovg-blend.c
+    third_party/lunasvg/plutovg/source/plutovg-canvas.c
+    third_party/lunasvg/plutovg/source/plutovg-font.c
+    third_party/lunasvg/plutovg/source/plutovg-ft-math.c
+    third_party/lunasvg/plutovg/source/plutovg-ft-raster.c
+    third_party/lunasvg/plutovg/source/plutovg-ft-stroker.c
+    third_party/lunasvg/plutovg/source/plutovg-matrix.c
+    third_party/lunasvg/plutovg/source/plutovg-paint.c
+    third_party/lunasvg/plutovg/source/plutovg-path.c
+    third_party/lunasvg/plutovg/source/plutovg-rasterize.c
+    third_party/lunasvg/plutovg/source/plutovg-surface.c
+)
+target_include_directories(plutovg PUBLIC third_party/lunasvg/plutovg/include)
+target_compile_definitions(plutovg PUBLIC PLUTOVG_BUILD_STATIC)
+target_compile_options(plutovg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100)
+
+add_library(lunasvg STATIC
+    third_party/lunasvg/source/graphics.cpp
+    third_party/lunasvg/source/lunasvg.cpp
+    third_party/lunasvg/source/svgelement.cpp
+    third_party/lunasvg/source/svggeometryelement.cpp
+    third_party/lunasvg/source/svglayoutstate.cpp
+    third_party/lunasvg/source/svgpaintelement.cpp
+    third_party/lunasvg/source/svgparser.cpp
+    third_party/lunasvg/source/svgproperty.cpp
+    third_party/lunasvg/source/svgrenderstate.cpp
+    third_party/lunasvg/source/svgtextelement.cpp
+)
+target_include_directories(lunasvg PUBLIC third_party/lunasvg/include
+                                    PRIVATE third_party/lunasvg/source)
+target_compile_definitions(lunasvg PUBLIC LUNASVG_BUILD_STATIC)
+target_link_libraries(lunasvg PUBLIC plutovg)
+target_compile_options(lunasvg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100)
+
 add_subdirectory(src)
 add_subdirectory(tests)

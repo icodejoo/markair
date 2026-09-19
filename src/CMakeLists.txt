@@ -15,6 +15,7 @@ add_executable(mdvn WIN32
     doc/search.cpp
     doc/outline.cpp
     assets/image.cpp
+    assets/svg_decoder.cpp
     assets/data_uri.cpp
     assets/cache.cpp
     assets/remote.cpp
@@ -48,7 +49,7 @@ add_executable(mdvn WIN32
 # uxtheme:T48 追加,原生滚动条深浅色(SetWindowTheme),同样走 /DELAYLOAD,
 # 链接期仍需要 uxtheme.lib。
 target_link_libraries(mdvn PRIVATE
-    md4c d2d1 dwrite imm32 shell32 psapi ole32 winhttp pathcch dwmapi uxtheme delayimp)
+    md4c lunasvg d2d1 dwrite imm32 shell32 psapi ole32 winhttp pathcch dwmapi uxtheme delayimp)
 
 # 主代码在所有配置下都要求 /W4 零警告；Release 追加体积/速度优化选项。
 target_compile_options(mdvn PRIVATE

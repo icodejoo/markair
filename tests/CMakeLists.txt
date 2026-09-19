@@ -22,6 +22,7 @@ add_executable(mdvn_tests
     test_scrollbar.cpp
     test_bench.cpp
     test_image.cpp
+    test_svg_decoder.cpp
     test_data_uri.cpp
     test_cache.cpp
     test_navigate.cpp
@@ -72,6 +73,7 @@ add_executable(mdvn_tests
     ../src/hl/lexer.cpp
     ../src/shell/theme_state.cpp
     ../src/assets/image.cpp
+    ../src/assets/svg_decoder.cpp
     ../src/assets/data_uri.cpp
     ../src/assets/cache.cpp
     ../src/assets/remote.cpp
@@ -117,7 +119,7 @@ target_compile_definitions(mdvn_tests PRIVATE
 # 延迟/惰性加载是 mdvn.exe 的验收项,测试进程本来就是要去用这些库的。
 # test_navigate.cpp 的 T36 路径规范化用 PathCchCombineEx,需要 pathcch。
 target_link_libraries(mdvn_tests PRIVATE
-    md4c dwrite psapi d2d1 ole32 winhttp shell32 pathcch)
+    md4c lunasvg dwrite psapi d2d1 ole32 winhttp shell32 pathcch)
 
 enable_testing()
 add_test(NAME mdvn_tests COMMAND mdvn_tests)
