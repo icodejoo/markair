@@ -45,7 +45,8 @@ enum class ImageStatus : u8 {
     Failed = 2,        // 文件损坏 / 读不到 / WIC 解码失败
     Unsupported = 3,   // 格式不支持(SVG)
     TooLarge = 4,      // 压缩字节数超过 kMaxEncodedBytes
-    RemoteNotLoaded = 5, // 网络图片且 load_remote_images=0,等用户点击加载(T34)
+    RemoteNotLoaded = 5, // 网络图片但尚未下载完成,或 load_remote_images=0(用户手动
+                          // 关闭)时等用户点击加载(T34)
 };
 
 /**

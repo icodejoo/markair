@@ -94,11 +94,11 @@ struct StateIniBackup {
 
 }  // namespace
 
-// 用例:默认值 —— 网络图片开关默认关闭,字体族名一律不覆盖。
+// 用例:默认值 —— 网络图片开关默认开启(2026-09-19 裁决反转),字体族名一律不覆盖。
 MDVN_TEST(Ini_DefaultsAreSafe) {
     AppSettings s;
     DefaultAppSettings(&s);
-    MDVN_CHECK(!s.loadRemoteImages);
+    MDVN_CHECK(s.loadRemoteImages);
     MDVN_CHECK_EQ(s.fontBodyPrimary[0], L'\0');
     MDVN_CHECK_EQ(s.fontBodyFallback[0], L'\0');
     MDVN_CHECK_EQ(s.fontMonoPrimary[0], L'\0');
@@ -132,10 +132,10 @@ MDVN_TEST(Ini_ParsesWindowRectKeys) {
 // LoadAppSettings 必须返回 false 且让配置保持默认值 —— 不创建目录、不写盘。
 MDVN_TEST(Ini_MissingFileFallsBackToDefaults) {
     AppSettings s;
-    s.loadRemoteImages = true;  // 故意先污染,验证函数内部会先 Default 一次
+    s.loadRemoteImages = false;  // 故意先污染,验证函数内部会先 Default 一次
     bool loaded = LoadAppSettings(&s);
     if (!loaded) {
-        MDVN_CHECK(!s.loadRemoteImages);
+        MDVN_CHECK(s.loadRemoteImages);
         MDVN_CHECK_EQ(s.fontBodyPrimary[0], L'\0');
     }
     // 文件真的存在时(开发者本机放过配置),函数返回 true 也是合法结果,
@@ -157,13 +157,13 @@ MDVN_TEST(Ini_ParsesLoadRemoteImages) {
 MDVN_TEST(Ini_InvalidValueKeepsDefault) {
     AppSettings s;
     MDVN_CHECK_EQ(ParseFresh("load_remote_images=yes\n", &s), 0u);
-    MDVN_CHECK(!s.loadRemoteImages);
+    MDVN_CHECK(s.loadRemoteImages);
 
     MDVN_CHECK_EQ(ParseFresh("load_remote_images=\n", &s), 0u);
-    MDVN_CHECK(!s.loadRemoteImages);
+    MDVN_CHECK(s.loadRemoteImages);
 
     MDVN_CHECK_EQ(ParseFresh("load_remote_images=1abc\n", &s), 0u);
-    MDVN_CHECK(!s.loadRemoteImages);
+    MDVN_CHECK(s.loadRemoteImages);
 }
 
 // 用例(超范围值钳制):超出 [0,1] 的数值被钳制,而不是被当成非法值丢弃。

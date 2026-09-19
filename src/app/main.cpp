@@ -897,9 +897,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         InvalidateRect(hwnd, nullptr, FALSE);
     }
 
-    // T34/T39:绑定"下载完成"通知窗口与 load_remote_images 开关(现在读自 state.ini,
-    // 默认仍是 0)。开关为 false 时 RemoteImageLoader::Request 第一行就返回 false,
-    // 进程全程不会调用任何 WinHttp* 函数。
+    // T34/T39:绑定"下载完成"通知窗口与 load_remote_images 开关(读自 state.ini,
+    // 2026-09-19 裁决反转默认为 1)。开关为 false(用户手动关闭)时
+    // RemoteImageLoader::Request 第一行就返回 false,进程全程不会调用任何
+    // WinHttp* 函数。
     remoteLoader.Init(hwnd, settings.loadRemoteImages);
 
     // T36:窗口内换文档所需的上下文,必须在 hwnd 拿到之后才能填完。

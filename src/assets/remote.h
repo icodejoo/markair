@@ -1,13 +1,14 @@
-// mdvn 网络图片加载(T34,默认关闭)。
+// mdvn 网络图片加载(T34,2026-09-19 裁决反转为默认开启)。
 //
-// 硬性承诺(§7 "不做任何主动网络请求"的可验证形式):
-//   - `load_remote_images` 为 0(默认)时,本模块**完全不触碰 WinHTTP** ——
-//     RemoteImageLoader::Request 在开关关闭时第一行就返回 false,进程里所有
-//     WinHttp* 调用都只存在于 remote.cpp 的工作线程函数里,而该函数只可能
-//     由 Request 成功之后启动。配合根 CMakeLists 的 /DELAYLOAD:winhttp.dll,
-//     不点击加载就不会加载 winhttp.dll。
-//   - 请求在独立的 IO 线程上同步跑,完成后 `PostMessage` 回主线程(架构 §8),
-//     主线程不阻塞,首帧不受影响。
+// 开关语义(§7 "不做任何主动网络请求"原则的可配置逃生舱,而非硬性默认):
+//   - `load_remote_images` 为 0 时(用户手动改 state.ini 关闭),本模块
+//     **完全不触碰 WinHTTP** —— RemoteImageLoader::Request 在开关关闭时
+//     第一行就返回 false,进程里所有 WinHttp* 调用都只存在于 remote.cpp
+//     的工作线程函数里,而该函数只可能由 Request 成功之后启动。配合根
+//     CMakeLists 的 /DELAYLOAD:winhttp.dll,关闭时不点击加载就不会加载
+//     winhttp.dll。
+//   - 默认(1)时,文档里的网络图片会在首屏之后自动发起下载,同样走
+//     独立 IO 线程 + `PostMessage` 回主线程(架构 §8),不阻塞首帧。
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
@@ -66,10 +67,11 @@ bool ParseHttpUrl(StrSlice url, bool* outHttps, wchar_t* host, u32 hostCap,
  *
  * @example
  *   mdvn::RemoteImageLoader loader;
- *   loader.Init(hwnd, false);              // load_remote_images = 0(默认)
- *   loader.Request(href);                   // 返回 false,完全不触碰 WinHTTP
- *   // 用户点击占位块之后:
- *   loader.RequestOnUserClick(href);        // 无视开关,只为这一张图发一次请求
+ *   loader.Init(hwnd, true);                // load_remote_images = 1(默认)
+ *   loader.Request(href);                   // 自动发起下载
+ *   // 开关关闭(用户改 state.ini)时,Request 直接返回 false,
+ *   // 用户点击占位块可无视开关补一次:
+ *   loader.RequestOnUserClick(href);
  */
 class RemoteImageLoader {
 public:
@@ -85,9 +87,9 @@ public:
     /**
      * 绑定接收完成通知的窗口与开关。
      * @param notifyWindow 完成后 PostMessage 的目标窗口,可为 nullptr(此时禁止请求)。
-     * @param loadRemoteImages `state.ini` 的 load_remote_images 开关值(M1 默认 0/false;
-     *        ini 读取是 T39 的事,这里只接受传入值,不自己读盘)。
-     * @example loader.Init(hwnd, false);
+     * @param loadRemoteImages `state.ini` 的 load_remote_images 开关值(默认 1/true,
+     *        2026-09-19 裁决反转;ini 读取是 T39 的事,这里只接受传入值,不自己读盘)。
+     * @example loader.Init(hwnd, true);
      */
     void Init(HWND notifyWindow, bool loadRemoteImages);
 

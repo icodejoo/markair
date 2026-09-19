@@ -1,6 +1,6 @@
 # mdvn
 
-Windows 专用、只读的极轻量 Markdown 查看器。**M0(骨架)/ M1(基础 GFM 支持)/ M2(文件关联/主题/体验)均已完成,M3(性能打磨与发布)进行中**:429 个自写单测全绿,已推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)。
+Windows 专用、只读的极轻量 Markdown 查看器。**M0(骨架)/ M1(基础 GFM 支持)/ M2(文件关联/主题/体验)均已完成,M3(性能打磨与发布)进行中**:492 个自写单测全绿,已推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)。
 
 ## 一句话目标
 
@@ -30,7 +30,7 @@ Windows 专用、只读的极轻量 Markdown 查看器。**M0(骨架)/ M1(基础
 
 > "mdvn 会增加显著内存的放弃,如果增加一点点换来使用体验就保留。"
 
-结论速览:**不做** mermaid / LaTeX / SVG / emoji 短码 / 网络图片自动加载 / 单实例 / 同目录文件列表 / MSI 安装包 / 自绘标题栏 / 测试框架;**做** 代码高亮(M2 自研,11 语言)/ 深色模式(跟随系统 + 手动)/ 大纲侧栏(M2,默认关)/ 历史前进后退;许可 **MIT**,打包 **绿色单 exe**。
+结论速览:**不做** mermaid / LaTeX / emoji 短码 / 单实例 / 同目录文件列表 / MSI 安装包 / 自绘标题栏 / 测试框架;**做** 代码高亮(M2 自研,11 语言)/ 深色模式(跟随系统 + 手动)/ 大纲侧栏(M2,默认关)/ 历史前进后退 / SVG 图片(M3 新增,lunasvg 离线栅格化,详见「已知限制」) / 网络图片自动加载(2026-09-19 裁决反转为默认开启,可在 `state.ini` 关闭);许可 **MIT**,打包 **绿色单 exe**。
 
 ## 系统支持说明
 
@@ -79,9 +79,9 @@ Windows 专用、只读的极轻量 Markdown 查看器。**M0(骨架)/ M1(基础
 ### 已知限制
 
 - **暂不支持 Windows 高对比度模式**（见上文「系统支持说明」）。
-- 默认不加载网络图片。
+- 默认自动加载网络图片（`load_remote_images=1`，2026-09-19 裁决反转）：文档打开后网络图片会在首屏之后自动发起下载。想恢复"零主动网络请求"，在 `state.ini` 里手动设 `load_remote_images=0`——关闭后网络图片显示占位块，点击占位块仍可单次加载该图。Markdown 官方语义（CommonMark/GFM）只定义 `![alt](src)` 语法本身，是否自动抓取远程资源完全是实现方的策略选择，不属于规范强制项。
 - 只读，不可编辑。
-- SVG 显示为占位块，不渲染实际内容。
+- SVG 图片走 [lunasvg](https://github.com/sammycage/lunasvg) 离线栅格化（vendored，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)），支持 shape / gradient / clip-path / mask；**不支持 filter**（`feGaussianBlur` 等特效，图标级场景通常用不到）。
 
 ### 系统要求
 

@@ -5,7 +5,7 @@
 // 缩放级别按裁决 #4 只存内存态)。
 //
 // M1 支持的键(其余键一律忽略,便于日后扩展时老版本不报错):
-//   load_remote_images = 0|1      网络图片开关(T34),默认 0
+//   load_remote_images = 0|1      网络图片开关(T34),默认 1(2026-09-19 裁决反转)
 //   font_body_primary  = <族名>   正文主字体族名覆盖(裁决 #10 白名单之外的用户偏好)
 //   font_body_fallback = <族名>   正文回退族名覆盖(中文回退链首选)
 //   font_mono_primary  = <族名>   等宽主字体族名覆盖
@@ -74,7 +74,7 @@ constexpr DWORD kStateIniMutexTimeoutMs = 2000;
  * 纯 POD,不含任何有副作用的构造函数,直接放栈上即可。
  */
 struct AppSettings {
-    bool loadRemoteImages;                        // 网络图片开关,默认 false(= 0)
+    bool loadRemoteImages;                        // 网络图片开关,默认 true(= 1,2026-09-19 裁决反转)
     wchar_t fontBodyPrimary[kMaxFontFamilyChars]; // 空串表示不覆盖,走裁决 #10 默认族
     wchar_t fontBodyFallback[kMaxFontFamilyChars];
     wchar_t fontMonoPrimary[kMaxFontFamilyChars];
@@ -111,7 +111,7 @@ struct AppSettings {
  * @param out 待填充的配置,非空。
  * @example
  *   mdvn::AppSettings s;
- *   mdvn::DefaultAppSettings(&s);   // s.loadRemoteImages == false
+ *   mdvn::DefaultAppSettings(&s);   // s.loadRemoteImages == true
  */
 void DefaultAppSettings(AppSettings* out);
 

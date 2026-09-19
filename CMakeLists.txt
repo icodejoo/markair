@@ -49,8 +49,12 @@ set(MDVN_RELEASE_LINK_OPTIONS
 )
 
 # 延迟加载的系统 DLL（T34 验收项）：网络图片用的 WinHTTP 只在真正发起请求时
-# 才加载 —— load_remote_images=0 且用户不点击加载时，模块列表里不应出现
-# winhttp.dll。/DELAYLOAD 需要配合链接 delayimp.lib（在 src/CMakeLists.txt 里链接）。
+# 才加载 —— 不含网络图片的文档、或 load_remote_images=0（用户手动关闭）时，
+# 模块列表里不应出现 winhttp.dll。2026-09-19 裁决把 load_remote_images 默认值
+# 反转为 1，因此"默认不出现"这条验收口径现在只在无网络图片的文档下成立；
+# 含网络图片的文档默认会自动发起下载，winhttp.dll 会按预期加载，这是功能
+# 生效的正常表现，不是延迟加载失效。/DELAYLOAD 需要配合链接 delayimp.lib
+# （在 src/CMakeLists.txt 里链接）。
 #
 # 为什么没有 /DELAYLOAD:windowscodecs.dll（T30 验收项的等价实现）：
 # mdvn 访问 WIC 的唯一途径是 `CoCreateInstance(CLSID_WICImagingFactory, ...)`，

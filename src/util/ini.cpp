@@ -448,7 +448,10 @@ bool WriteAndReplaceAtomically(const wchar_t* tmpPath, const wchar_t* filePath, 
 
 void DefaultAppSettings(AppSettings* out) {
     if (!out) return;
-    out->loadRemoteImages = false;  // 裁决 #5:默认完全不触碰 WinHTTP
+    out->loadRemoteImages = true;  // 用户裁决(2026-09-19):默认开启网络图片自动加载,
+                                     // 反转此前"默认完全不触碰 WinHTTP"的裁决 #5;
+                                     // 想恢复零网络行为可在 state.ini 里手动设
+                                     // load_remote_images=0。
     out->fontBodyPrimary[0] = 0;
     out->fontBodyFallback[0] = 0;
     out->fontMonoPrimary[0] = 0;
