@@ -35,6 +35,9 @@ constexpr float kTableCellPaddingDip = 6.0f;
 // (单元格 padding: 6px 13px)单独给表格定义,与横向内边距对称。
 constexpr float kTableCellVerticalPaddingDip = 6.0f;
 
+// 表格行最小高度(DIP,1x 缩放下),单行短文本也不会矮于这个值。
+constexpr float kTableRowMinHeightDip = 42.0f;
+
 // 估算单元格内容理想宽度用的平均字符宽度(DIP),与 layout.cpp 的
 // kAvgCharWidthDip 取相同口径,保持两处估算风格一致。这里的"字符"指
 // Utf8VisualWidth 输出的视觉宽度单位(ASCII 记 1、CJK 等宽字符记 2),

@@ -158,7 +158,8 @@ constexpr u32 kMaxOutlineTitleChars = 256;
 // 底部操作栏几何常量。数值必须与 shell/bottom_bar.h 里的同名常量保持一致
 // ——同一条"render 不反向 include shell"的约束(见上面大纲侧栏的注释),
 // 这里只重复几个纯数字,真正的"唯一权威定义"(含命中测试/文字标签)在 shell 侧。
-// 新布局(2026-09-18):栏高 32px 画不下"图标+文字"两行,图标改为在整条栏
+// 新布局(2026-09-18):栏高塞不下"图标+文字"两行(2026-09-19 由 32px 再收窄
+// 到 24px,同一条理由更适用),图标改为在整条栏
 // 高度内垂直居中,不再画常驻文字标签;左侧 5 个按钮固定宽度紧贴排列,右侧最右边是历史记录按钮,中间是状态文字区。
 constexpr float kBottomBarHeightDip = 24.0f;
 constexpr u32 kBottomBarButtonCount = 8;
@@ -797,7 +798,10 @@ void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
                                        ID2D1SolidColorBrush* maskBrush) {
     // 与 DrawOutlinePanel 同一个"侧栏是否打开"判断依据,侧栏关闭时本函数
     // 直接返回,不产生任何额外绘制(维持 T63"关闭时开销为 0"的设计)。
-    if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
+    // 注意:不能拿 outlineItemCount == 0 当"侧栏未打开"的判据——大纲为空的
+    // 文档(或欢迎屏空状态)打开侧栏时 itemCount 恒为 0,之前误把这种情况当
+    // "侧栏关闭"直接跳过,导致点击大纲按钮蒙层/侧栏都不出现(真实 bug)。
+    if (!overlay_) return;
     if (!maskBrush || !target_) return;
 
     float animProgress = overlay_->outlineAnimProgress;
@@ -859,8 +863,11 @@ void Renderer::DrawOutlinePanel(float targetHeight,
                                 ID2D1SolidColorBrush* highlightTextBrush,
                                 ID2D1SolidColorBrush* scrollbarTrackBrush,
                                 ID2D1SolidColorBrush* scrollbarThumbBrush) {
-    if (!overlay_ || !overlay_->outlineItems || overlay_->outlineItemCount == 0) return;
-    if (!fonts_ || !overlay_->doc || !bgBrush || !textBrush || !target_) return;
+    // 同上:不能拿 itemCount == 0 当"侧栏未打开"判据(空大纲/欢迎屏空状态)。
+    // overlay_->doc 同理放宽——itemCount == 0 时下面循环体不会执行,不会
+    // 解引用 doc,doc 为空并不妨碍画出空侧栏的背景/边框。
+    if (!overlay_) return;
+    if (!fonts_ || !bgBrush || !textBrush || !target_) return;
 
     float animProgress = overlay_->outlineAnimProgress;
     if (animProgress <= 0.0001f) return;
@@ -882,11 +889,39 @@ void Renderer::DrawOutlinePanel(float targetHeight,
     D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, panelWidth, targetHeight);
     target_->FillRectangle(panelRect, bgBrush);
 
+    // 侧栏右边框:与 DrawHistoryPanel 左边框同一手法,分隔侧栏与蒙层区域,
+    // 缺了这条线侧栏右边缘会跟蒙层的纯色背景糊在一起(真实 bug)。
+    if (highlightBgBrush) {
+        target_->DrawLine(D2D1::Point2F(panelWidth, 0.0f), D2D1::Point2F(panelWidth, targetHeight),
+                          highlightBgBrush, 1.0f);
+    }
+
     // 标题原文的拼接/UTF-16 转换缓冲,惰性 Init(见头文件字段注释),每帧开头
     // 整体 Reset 复用同一块地址空间——这是唯一被本函数使用的 Arena,侧栏从未
     // 打开过时本函数永远不会被调用,自然也不会走到这里。
     if (!outlineScratchInited_) outlineScratchInited_ = outlineScratch_.Init(1 * 1024 * 1024);
     outlineScratch_.Reset();
+
+    // 大纲为空(当前文档没有标题,或欢迎屏空状态):整片区域居中画一行提示,
+    // 不进入下面的逐行循环(itemCount 为 0,循环体本就不会执行,这里只是补
+    // 一行视觉反馈)——与 DrawHistoryPanel 的"No Records"同一手法。
+    if (overlay_->outlineItemCount == 0) {
+        static const wchar_t kNoOutlineText[] = L"No Outline";
+        u32 noOutlineLen = static_cast<u32>(wcslen(kNoOutlineText));
+        float maxTextWidth = panelWidth - kOutlinePanelPaddingDip * 2.0f;
+        IDWriteTextLayout* emptyLayout = fonts_->CreateTextLayout(
+            kNoOutlineText, noOutlineLen, FontRole::Body, maxTextWidth, targetHeight);
+        if (emptyLayout) {
+            emptyLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            emptyLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            target_->DrawTextLayout(D2D1::Point2F(kOutlinePanelPaddingDip, 0.0f),
+                                    emptyLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            emptyLayout->Release();
+        }
+        target_->SetTransform(D2D1::Matrix3x2F::Identity());
+        return;
+    }
 
     for (u32 i = 0; i < overlay_->outlineItemCount; ++i) {
         const OutlineItem& item = overlay_->outlineItems[i];
@@ -2031,7 +2066,10 @@ void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight, bool but
         labelLayout = fonts_->CreateTextLayout(kWelcomeButtonLabel, kLabelLen, FontRole::Body,
                                                  kWelcomeButtonWidthDip, kWelcomeButtonHeightDip);
         if (labelLayout) {
-            labelLayout->SetFontSize(kWelcomeButtonLabelFontSizeDip, DWRITE_TEXT_RANGE{0, kLabelLen});
+            // 按钮文字字号须跟随底部栏缩放档位一起变,否则放大/缩小对欢迎屏
+            // 按钮文字无效(真实 bug:此前是固定字面量,不读 fonts_->Scale())。
+            labelLayout->SetFontSize(kWelcomeButtonLabelFontSizeDip * fonts_->Scale(),
+                                      DWRITE_TEXT_RANGE{0, kLabelLen});
             DWRITE_TEXT_METRICS metrics{};
             labelLayout->GetMetrics(&metrics);
             labelWidth = metrics.width;
@@ -2150,12 +2188,14 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 大纲及历史记录蒙层淡入淡出透明度动画。
     D2D1_COLOR_F maskColor = palette_->outlineOverlayMaskBackground;
     float animProgress = 0.0f;
-    if (overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0 &&
-        overlay_->outlineAnimProgress > animProgress) {
+    // 不能再拿 itemCount > 0 当"侧栏打开"判据(空大纲/空历史/欢迎屏空状态
+    // 打开侧栏时 itemCount 恒为 0)——outlineAnimProgress/historyAnimProgress
+    // 本身在侧栏关闭时已经是 0(见 window.cpp 组装 overlay 处),直接读它们
+    // 就够了,itemCount 只影响画不画条目,不该影响蒙层透明度。
+    if (overlay_ && overlay_->outlineAnimProgress > animProgress) {
         animProgress = overlay_->outlineAnimProgress;
     }
-    if (overlay_ && overlay_->historyEntries && overlay_->historyItemCount > 0 &&
-        overlay_->historyAnimProgress > animProgress) {
+    if (overlay_ && overlay_->historyAnimProgress > animProgress) {
         animProgress = overlay_->historyAnimProgress;
     }
     if (animProgress < 0.0f) animProgress = 0.0f;

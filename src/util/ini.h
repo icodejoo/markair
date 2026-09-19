@@ -27,6 +27,9 @@
 //                        矩形);`win_w`/`win_h` 缺失或 <= 0 表示"没有存过"
 //                        (首次启动),按系统默认位置/尺寸走。
 //   win_maximized      = 0|1          上次退出时窗口是否处于最大化态,默认 0。
+//   last_open_dir      = <路径>       "打开文件"对话框上次选中文件所在目录,
+//                        下次弹窗据此调用 SetFolder 定位到同一目录;默认空
+//                        (未存过,对话框走系统默认目录)。
 //
 // T55 起本文件同时具备**写盘**能力(`SaveAppSettings`):写出格式与本文件
 // 的解析口径完全对称,UTF-8 无 BOM;保留未识别的原有键;先写 `.tmp` 再
@@ -103,6 +106,9 @@ struct AppSettings {
     i32 winW;
     i32 winH;
     bool winMaximized;  // 上次退出时是否处于最大化态,默认 false
+
+    // "打开文件"对话框上次选中文件所在目录,空串表示未存过。
+    wchar_t lastOpenDir[MAX_PATH];
 };
 
 /**

@@ -770,7 +770,7 @@ float BlockLayoutEngine::LayoutTableSubtree(u32 tableBlockIndex, float x, float 
         // 不改动 EstimateLeafHeight 本身(它是段落/代码块共用的通用估算函数)。
         constexpr float kVerticalPaddingDelta =
             kTableCellVerticalPaddingDip - kLeafVerticalPaddingDip;
-        float rowHeight = kBaseLineHeightDip * fontScale_ + kTableCellVerticalPaddingDip * fontScale_;
+        float rowHeight = kTableRowMinHeightDip * fontScale_;
         for (u32 c = 0; c < colCount; ++c) {
             u32 cIdx = cellBlockIdx[r * colCount + c];
             if (cIdx == kInvalidIndex) continue;

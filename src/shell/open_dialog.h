@@ -25,6 +25,11 @@ namespace markair {
  * 内部按需 `CoInitializeEx`(与 `assets/image.cpp` 的 WIC 惰性初始化同一手法,
  * 调用对称的 `CoUninitialize`),调用方不需要预先初始化 COM。
  *
+ * 打开时按 `state.ini` 的 `last_open_dir` 键定位到上次选中文件所在目录
+ * (键不存在/目录已失效时 `SetFolder` 静默失败,对话框照常走系统默认目录);
+ * 用户成功选中文件后,把新目录写回 `state.ini`,下次弹窗据此定位——两端
+ * 都在本函数内部完成,调用方不需要关心这份持久化。
+ *
  * @param owner 对话框的父窗口,可为 nullptr(无父窗口)。
  * @param outPath 输出缓冲,选中的文件完整路径(以 '\0' 结尾)。
  * @param outCap outPath 的容量(wchar_t 个数,含结尾 '\0')。

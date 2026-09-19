@@ -109,6 +109,15 @@ MARKAIR_TEST(Ini_DefaultsAreSafe) {
     MARKAIR_CHECK_EQ(s.winW, 0);
     MARKAIR_CHECK_EQ(s.winH, 0);
     MARKAIR_CHECK(!s.winMaximized);
+    MARKAIR_CHECK_EQ(s.lastOpenDir[0], L'\0');
+}
+
+// 用例:last_open_dir 键解析("打开文件"对话框上次目录记忆)。
+MARKAIR_TEST(Ini_ParsesLastOpenDir) {
+    AppSettings s;
+    const char* text = "last_open_dir=D:/docs/notes\n";
+    MARKAIR_CHECK_EQ(ParseFresh(text, &s), 1u);
+    MARKAIR_CHECK(wcscmp(s.lastOpenDir, L"D:/docs/notes") == 0);
 }
 
 // 用例:窗口矩形键的基本解析,含负坐标(副屏在主屏左侧的合法场景)。

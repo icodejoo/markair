@@ -252,6 +252,26 @@ MARKAIR_TEST(Table_SingleLineCjkCellDoesNotOverestimateRowHeight) {
     MARKAIR_CHECK(diff < 0.5f);
 }
 
+// 用户反馈(2026-09-19):表格行最矮不应低于 kTableRowMinHeightDip(42dip),
+// 单行短文本此前只按基础行高+内边距算出约 26dip,视觉上偏挤。
+MARKAIR_TEST(Table_RowHeightHasMinimumFloor) {
+    MARKAIR_MAKE_TEST_ARENA();
+    const char src[] =
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    MARKAIR_CHECK(!doc.truncated);
+
+    BlockLayoutEngine layout;
+    MARKAIR_CHECK(layout.Relayout(doc, 900.0f));
+
+    u32 headRow = FindBlockOfType(doc, BlockType::TableRow, 0);
+    MARKAIR_CHECK(headRow != markair::kInvalidIndex);
+    float headHeight = layout.Geometry(headRow).bottom - layout.Geometry(headRow).top;
+    MARKAIR_CHECK(headHeight >= markair::kTableRowMinHeightDip);
+}
+
 
 // ---- 回归:理想宽度必须覆盖真实字形宽度(2026-09-18 用户真机反馈) ----
 

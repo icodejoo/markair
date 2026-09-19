@@ -200,10 +200,9 @@ inline constexpr Palette kDarkPalette{
     /* findBarText                */ MakeColor(0xC9D1D9u),
     /* outlineHighlightBackground */ MakeColor(0x58A6FFu, 0.18f),
     /* outlineHighlightText       */ MakeColor(0x58A6FFu),
-    // 深色主题背景本身接近黑色,蒙层取背景的反色(近白)才能压暗/柔化正文,
-    // 与浅色主题用黑色蒙层同一设计意图("往主题背景的反方向遮"),不是随手
-    // 换个数值。
-    /* outlineOverlayMaskBackground */ MakeColor(0xFFFFFFu, 0.28f),
+    // 蒙层统一用半透明黑,不再跟主题反色(用户反馈:深色主题下用近白蒙层
+    // 视觉上像"提亮"而不是"压暗",与浅色主题的遮罩观感不一致)。
+    /* outlineOverlayMaskBackground */ MakeColor(0x000000u, 0.35f),
     /* historyRowButtonBackground */ MakeColor(0x1F3A57u),
     /* hlKeyword                  */ MakeColor(0xFF7B72u),
     /* hlString                   */ MakeColor(0xA5D6FFu),

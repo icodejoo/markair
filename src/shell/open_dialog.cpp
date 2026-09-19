@@ -3,7 +3,10 @@
 #include <shobjidl.h>
 #include <objbase.h>
 
-#include "assoc.h"  // kAssociatedExtensions(唯一定义处)
+#include <cwchar>
+
+#include "assoc.h"      // kAssociatedExtensions(唯一定义处)
+#include "../util/ini.h"  // last_open_dir 键的读/写(AppSettings)
 
 namespace markair {
 
@@ -24,6 +27,22 @@ u32 BuildExtensionFilterPattern(wchar_t* out, u32 outCap) {
     return pos;
 }
 
+// 从完整文件路径里截出所在目录(不含末尾分隔符),写入调用方缓冲。
+// 与 app/main.cpp::ExtractDirectory 同一手法(纯字符串操作,未跨模块复用——
+// 那边是文件局部函数,量很小不值得为此新增公共头)。
+void ExtractParentDirectory(const wchar_t* path, wchar_t* out, u32 outCap) {
+    out[0] = 0;
+    if (!path) return;
+    u32 lastSep = 0;
+    u32 i = 0;
+    for (; path[i] != 0 && i + 1 < outCap; ++i) {
+        if (path[i] == L'\\' || path[i] == L'/') lastSep = i;
+    }
+    if (lastSep == 0) return;
+    for (u32 k = 0; k < lastSep && k + 1 < outCap; ++k) out[k] = path[k];
+    out[lastSep] = 0;
+}
+
 }  // namespace
 
 bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap) {
@@ -35,6 +54,12 @@ bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap) {
     // 都需要之后配一次 CoUninitialize(引用计数式,不会因为多次调用而出错)。
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     bool needUninit = SUCCEEDED(coHr);
+
+    // 读上次选中文件所在目录(last_open_dir),定位对话框初始位置——静默降级
+    // 三处任一环节失败(键不存在/目录已被删除/SHCreateItemFromParsingName
+    // 失败)都不影响对话框正常弹出,只是回退到系统默认目录。
+    AppSettings settings;
+    LoadAppSettings(&settings);
 
     bool ok = false;
     IFileOpenDialog* dialog = nullptr;
@@ -49,6 +74,16 @@ bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap) {
         dialog->SetFileTypes(1, filter);
         dialog->SetFileTypeIndex(1);
 
+        if (settings.lastOpenDir[0] != L'\0') {
+            IShellItem* folder = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(settings.lastOpenDir, nullptr,
+                                                        IID_PPV_ARGS(&folder))) &&
+                folder) {
+                dialog->SetFolder(folder);
+                folder->Release();
+            }
+        }
+
         hr = dialog->Show(owner);
         if (SUCCEEDED(hr)) {
             IShellItem* item = nullptr;
@@ -61,6 +96,14 @@ bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap) {
                     for (; path[i] != L'\0' && i + 1 < outCap; ++i) outPath[i] = path[i];
                     outPath[i] = L'\0';
                     ok = (i > 0);
+                    if (ok) {
+                        wchar_t newDir[MAX_PATH];
+                        ExtractParentDirectory(outPath, newDir, MAX_PATH);
+                        if (newDir[0] != L'\0' && wcscmp(newDir, settings.lastOpenDir) != 0) {
+                            wcscpy_s(settings.lastOpenDir, MAX_PATH, newDir);
+                            SaveAppSettings(settings);
+                        }
+                    }
                     CoTaskMemFree(path);
                 }
                 item->Release();

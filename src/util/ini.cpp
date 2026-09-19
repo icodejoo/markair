@@ -155,8 +155,8 @@ void Utf8ToWideFixed(StrSlice s, wchar_t* out, u32 cap) {
 constexpr const char* kKnownKeys[] = {
     "load_remote_images", "font_body_primary", "font_body_fallback",
     "font_mono_primary",  "font_mono_fallback", "theme", "zoom",
-    "win_x", "win_y", "win_w", "win_h", "win_maximized"};
-constexpr u32 kKnownKeyCount = 12;
+    "win_x", "win_y", "win_w", "win_h", "win_maximized", "last_open_dir"};
+constexpr u32 kKnownKeyCount = 13;
 
 // T55:本进程最近一次 Load/Save 成功后"磁盘上应该有"的配置快照,用来判断
 // SaveAppSettings 调用时哪些键是"本进程真正改动过的"——只有 target 与这份
@@ -267,6 +267,10 @@ bool AppendKnownKeyLine(const char* key, const AppSettings& s, char* out, u32 ca
         if (!AppendInt(out, cap, pos, s.winH)) return false;
     } else if (strcmp(key, "win_maximized") == 0) {
         if (!AppendCStr(out, cap, pos, s.winMaximized ? "1" : "0")) return false;
+    } else if (strcmp(key, "last_open_dir") == 0) {
+        char valueBuf[MAX_PATH * 3 + 1];
+        WideToUtf8Fixed(s.lastOpenDir, valueBuf, sizeof(valueBuf));
+        if (!AppendCStr(out, cap, pos, valueBuf)) return false;
     } else {
         const wchar_t* wide = nullptr;
         if (strcmp(key, "font_body_primary") == 0) wide = s.fontBodyPrimary;
@@ -377,6 +381,9 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
     if (target.winW != g_baseline.winW) effective.winW = target.winW;
     if (target.winH != g_baseline.winH) effective.winH = target.winH;
     if (target.winMaximized != g_baseline.winMaximized) effective.winMaximized = target.winMaximized;
+    if (wcscmp(target.lastOpenDir, g_baseline.lastOpenDir) != 0) {
+        wcscpy_s(effective.lastOpenDir, MAX_PATH, target.lastOpenDir);
+    }
     return effective;
 }
 
@@ -466,6 +473,7 @@ void DefaultAppSettings(AppSettings* out) {
     out->winW = 0;
     out->winH = 0;
     out->winMaximized = false;
+    out->lastOpenDir[0] = 0;
 }
 
 u32 ParseIniSettings(StrSlice text, AppSettings* out) {
@@ -567,6 +575,12 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
                 out->winMaximized = v != 0;
                 applied++;
             }
+            continue;
+        }
+
+        if (KeyEquals(key, "last_open_dir")) {
+            Utf8ToWideFixed(value, out->lastOpenDir, MAX_PATH);
+            applied++;
             continue;
         }
 
