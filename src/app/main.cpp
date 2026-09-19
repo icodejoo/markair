@@ -55,22 +55,6 @@
 
 namespace {
 
-// 没有传入文件路径,或传入的文件打不开/映射失败时展示的占位样例:覆盖标题、
-// 段落、引用(左侧竖线)、分割线、围栏代码块(背景)几种块类型,用来证明
-// "解析 -> 布局 -> 渲染"整条链路走得通。
-constexpr char kSampleMarkdown[] =
-    "# markair 示例文档\n\n"
-    "这是一个 **段落**,用来验证解析 -> 布局 -> 渲染整条链路是否走得通。\n\n"
-    "## 二级标题\n\n"
-    "> 这是一段引用文字,左侧应画出一条用 D2D 几何图元绘制的竖线,\n"
-    "> 而不是用某个字体里的竖线字符模拟。\n\n"
-    "---\n\n"
-    "```\n"
-    "fn main() {\n"
-    "    println!(\"hello markair\");\n"
-    "}\n"
-    "```\n";
-
 // 以下全局变量均为 POD / 普通指针,零初始化,不含任何有副作用的构造函数。
 ID2D1Factory* g_d2dFactory = nullptr;
 wchar_t g_displayText[MAX_PATH + 16] = L"markair";
@@ -665,12 +649,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     bool fileOpened = hasTarget &&
                        (fileMap.Open(normalizedPath) == markair::FileMapError::None);
 
+    // 未打开任何文件时(没传路径,或传的路径打不开)不再解析示例 markdown 走
+    // 完整渲染管线,改走欢迎屏(见 windowState.showWelcomeScreen)——这里只
+    // 给 doc/layout 一份空文档占位,保证后续依赖 doc/layout 非空的调用点
+    // (Relayout/PaintOnce 等)不需要为"根本没有文档"这种状态单独判空。
     markair::Document doc = fileOpened
         ? LoadMarkdownFile(&fileMap, &docArena)
-        : markair::ParseMarkdown(
-              markair::SkipFrontMatter(markair::StrSlice{
-                  kSampleMarkdown, static_cast<markair::u32>(sizeof(kSampleMarkdown) - 1)}),
-              &docArena);
+        : markair::ParseMarkdown(markair::StrSlice{"", 0}, &docArena);
     markair::bench::MarkParseDone();
 
     if (fileOpened) {
@@ -778,6 +763,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // (它需要 documentHost,而 documentHost 需要 hwnd 才能填完)。
         settings.winX, settings.winY, settings.winW, settings.winH, settings.winMaximized,
         nullptr};
+
+    // 未打开任何文档(没传路径,或传的路径打不开)时展示欢迎屏,取代示例
+    // markdown 走完整渲染管线;fileOpened 为 true(文档已正常加载)时保持
+    // 正常渲染路径不变。
+    windowState.showWelcomeScreen = !fileOpened;
 
     // T65:接上历史栈;currentDocumentPath 初始化为首次打开的文档路径
     // (未打开任何文件时保持聚合初始化留下的空字符串,Alt+←/→ 此时天然

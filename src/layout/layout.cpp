@@ -30,11 +30,11 @@ constexpr float kQuoteBarWidthDip = 3.0f;
 // 围栏代码块背景矩形右侧留白,不铺满到视口最右边。
 constexpr float kCodeBlockRightMarginDip = 16.0f;
 
-// 代码高亮区内边距(参考常见 Markdown 渲染器,如 GitHub 的代码块留白),
-// 文字四周离背景边框 8 DIP;圆角半径见 renderer.cpp 的 kCodeBlockCornerRadiusDip。
+// 代码高亮区内边距,对齐 GitHub 代码块的 16px 留白(GitHub Primer 规范),
+// 文字四周离背景边框 16 DIP;圆角半径见 renderer.cpp 的 kCodeBlockCornerRadiusDip。
 // 与 kCodeBlockRightMarginDip/kTableCellPaddingDip 同一惯例:固定留白不随
 // fontScale_ 缩放。
-constexpr float kCodeBlockPaddingDip = 8.0f;
+constexpr float kCodeBlockPaddingDip = 16.0f;
 
 // 代码块右上角"复制"按钮的边长(DIP,未缩放前),随 fontScale_ 缩放;按钮与
 // 背景矩形四边的留白直接复用 kCodeBlockPaddingDip(与代码文字同一档内边距,

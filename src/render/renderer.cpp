@@ -40,8 +40,11 @@ float TextDrawTop(const BlockGeometry& g) {
     return offset > 0.0f ? top + offset : top;
 }
 
-// 代码高亮区圆角半径(DIP),参考常见 Markdown 渲染器的代码块风格。
-constexpr float kCodeBlockCornerRadiusDip = 4.0f;
+// 代码高亮区圆角半径(DIP),对齐 GitHub Primer 代码块的 6px 圆角。
+constexpr float kCodeBlockCornerRadiusDip = 6.0f;
+
+// 代码块边框线宽(DIP),对齐 GitHub 代码块的 1px 描边(颜色见 Palette::codeBorder)。
+constexpr float kCodeBlockBorderWidthDip = 1.0f;
 
 // T27 勾选框圆角半径(DIP)。
 constexpr float kCheckboxCornerRadiusDip = 3.0f;
@@ -157,7 +160,7 @@ constexpr u32 kMaxOutlineTitleChars = 256;
 // 这里只重复几个纯数字,真正的"唯一权威定义"(含命中测试/文字标签)在 shell 侧。
 // 新布局(2026-09-18):栏高 32px 画不下"图标+文字"两行,图标改为在整条栏
 // 高度内垂直居中,不再画常驻文字标签;左侧 5 个按钮固定宽度紧贴排列,右侧最右边是历史记录按钮,中间是状态文字区。
-constexpr float kBottomBarHeightDip = 32.0f;
+constexpr float kBottomBarHeightDip = 24.0f;
 constexpr u32 kBottomBarButtonCount = 8;
 constexpr u32 kBottomBarLeftButtonCount = 6;
 // 右侧固定图标位下标(与 shell/bottom_bar.h::BottomBarButton 保持一致)。
@@ -165,7 +168,7 @@ constexpr u32 kBottomBarLeftButtonCount = 6;
 constexpr u32 kBottomBarCopyPathIndex = 6;
 constexpr u32 kBottomBarHistoryIndex = 7;
 constexpr float kBottomBarButtonWidthDip = kBottomBarHeightDip;  // 正方形按钮,与栏高相等
-constexpr float kBottomBarIconSizeDip = 15.0f;   // 图标绘制区正方形边长(右侧固定按钮群)
+constexpr float kBottomBarIconSizeDip = 14.0f;   // 图标绘制区正方形边长(右侧固定按钮群)
 // 左侧 6 个按钮(大纲/打开/主题/缩小/放大/查找)整体比右侧固定按钮群小 2px,
 // 视觉上更轻——2026-09-19 新增查找按钮时一并调整。
 constexpr float kBottomBarLeftIconSizeDip = kBottomBarIconSizeDip - 2.0f;
@@ -186,6 +189,21 @@ constexpr float kBottomBarTooltipGapDip = 4.0f;        // 气泡底边与底部�
 constexpr const wchar_t* kBottomBarTooltipLabels[kBottomBarButtonCount] = {
     L"大纲", L"打开", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
 };
+
+// 欢迎屏几何/文案常量。按钮尺寸/位置数值必须与 shell/welcome_screen.h 的
+// 同名常量保持一致——同一条"render 不反向 include shell"的约束,这里只
+// 重复几个纯数字,真正的"唯一权威定义"(含命中测试)在 shell 侧。
+constexpr float kWelcomeButtonWidthDip = 140.0f;
+constexpr float kWelcomeButtonHeightDip = 32.0f;
+constexpr float kWelcomeButtonTopRatio = 0.46f;
+constexpr float kWelcomeButtonCornerRadiusDip = 8.0f;
+constexpr float kWelcomeButtonLabelFontSizeDip = 14.0f;    // 按钮文案字号
+constexpr float kWelcomeHeadingFontSizeScale = 1.8f;   // 与正文一级标题同一档缩放(kHeadingScale[1])
+constexpr float kWelcomeHeadingGapAboveButtonDip = 24.0f;  // 标题底边与按钮顶边的间距
+constexpr float kWelcomeIconSizeDip = 14.0f;               // 文件夹图标外接正方形边长
+constexpr float kWelcomeIconLabelGapDip = 8.0f;            // 图标与文字标签的横向间距
+constexpr const wchar_t kWelcomeHeadingText[] = L"Welcome To Markair";
+constexpr const wchar_t kWelcomeButtonLabel[] = L"打开文件";
 
 // 侧栏列表项通用几何常量（与 shell/sidebar.h 保持数值一致）。
 constexpr float kSidebarRowHeightDip = 28.0f;
@@ -981,7 +999,11 @@ void Renderer::DrawOutlinePanel(float targetHeight,
 
 void Renderer::DrawHistoryOverlayMask(float targetWidth, float targetHeight,
                                       ID2D1SolidColorBrush* maskBrush) {
-    if (!overlay_ || !overlay_->historyEntries || overlay_->historyItemCount == 0) return;
+    // 2026-09-19 修复:历史记录为空(count==0)时也要能打开侧栏显示"No Records"
+    // 提示,不能在这里直接 return——之前把"entries 指针为空"(功能未接入)
+    // 和"entries 非空但条目数为 0"(功能已接入,只是暂无记录)混为一谈,
+    // 导致空历史时点击按钮毫无视觉反应。只在指针真正为空时才当作功能未接入。
+    if (!overlay_ || !overlay_->historyEntries) return;
     if (!maskBrush || !target_) return;
 
     float animProgress = overlay_->historyAnimProgress;
@@ -1001,7 +1023,8 @@ void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
                                 ID2D1SolidColorBrush* buttonBgBrush,
                                 ID2D1SolidColorBrush* scrollbarTrackBrush,
                                 ID2D1SolidColorBrush* scrollbarThumbBrush) {
-    if (!overlay_ || !overlay_->historyEntries || overlay_->historyItemCount == 0) return;
+    // 同上:count==0 不再直接 return,空历史也要能画出侧栏骨架 + "No Records"。
+    if (!overlay_ || !overlay_->historyEntries) return;
     if (!fonts_ || !bgBrush || !textBrush || !target_) return;
 
     float animProgress = overlay_->historyAnimProgress;
@@ -1048,6 +1071,27 @@ void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
     // 文案永远用满宽度——关闭/文件夹按钮只在 hover 时无背景色地悬浮在文案
     // 之上,不为它们预留固定空间(否则未 hover 的行会白白截断文案)。
     float maxTextWidth = panelWidth - kSidebarPanelPaddingDip * 2.0f;
+
+    // 历史记录为空:侧栏标题栏之下的整片区域居中画一行提示,不进入下面的
+    // 逐行循环(count 为 0,循环体本就不会执行,这里只是补一行视觉反馈)。
+    if (overlay_->historyItemCount == 0) {
+        static const wchar_t kNoRecordsText[] = L"No Records";
+        u32 noRecordsLen = static_cast<u32>(wcslen(kNoRecordsText));
+        float emptyAreaTop = kSidebarHeaderHeightDip;
+        float emptyAreaHeight = targetHeight - emptyAreaTop;
+        IDWriteTextLayout* emptyLayout = fonts_->CreateTextLayout(
+            kNoRecordsText, noRecordsLen, FontRole::Body, maxTextWidth, emptyAreaHeight);
+        if (emptyLayout) {
+            emptyLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            emptyLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, emptyAreaTop),
+                                    emptyLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            emptyLayout->Release();
+        }
+        target_->SetTransform(D2D1::Matrix3x2F::Identity());
+        return;
+    }
 
     for (u32 i = 0; i < overlay_->historyItemCount; ++i) {
         float rowTop = kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(i) -
@@ -1823,6 +1867,7 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* textBrush,
                           ID2D1SolidColorBrush* quoteBrush,
                           ID2D1SolidColorBrush* codeBgBrush,
+                          ID2D1SolidColorBrush* codeBorderBrush,
                           ID2D1SolidColorBrush* hrBrush,
                           ID2D1SolidColorBrush* linkBrush,
                           ID2D1SolidColorBrush* tableHeaderBrush,
@@ -1851,6 +1896,10 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
         D2D1_ROUNDED_RECT roundedRect =
             D2D1::RoundedRect(rect, kCodeBlockCornerRadiusDip, kCodeBlockCornerRadiusDip);
         target_->FillRoundedRectangle(roundedRect, codeBgBrush);
+        // 1px 描边(对齐 GitHub 代码块的细边框),画在填色之后避免被盖住。
+        if (codeBorderBrush) {
+            target_->DrawRoundedRectangle(roundedRect, codeBorderBrush, kCodeBlockBorderWidthDip);
+        }
     }
 
     // 引用块左侧竖线:D2D 几何图元填色矩形,不用任何字体字符模拟(架构 §4 第 5 条)。
@@ -1928,11 +1977,104 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
     }
 }
 
+// 画欢迎屏(未打开任何文档时,取代正文 DrawBlock 循环,详见 renderer.h 的
+// 声明处注释)。
+void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight, bool buttonHover,
+                                  ID2D1SolidColorBrush* textBrush,
+                                  ID2D1SolidColorBrush* buttonFillBrush,
+                                  ID2D1SolidColorBrush* buttonHoverFillBrush,
+                                  ID2D1SolidColorBrush* buttonBorderBrush) {
+    float buttonTop = targetHeight * kWelcomeButtonTopRatio;
+    float buttonLeft = targetWidth * 0.5f - kWelcomeButtonWidthDip * 0.5f;
+    D2D1_RECT_F buttonRect = D2D1::RectF(buttonLeft, buttonTop, buttonLeft + kWelcomeButtonWidthDip,
+                                          buttonTop + kWelcomeButtonHeightDip);
+
+    // 标题:与正文一级标题同一套"CreateTextLayout(Body) + 放大字号 + 加粗"
+    // 手法(见 layout.cpp::CreateLayoutForBlock 对 BlockType::Heading 的处理),
+    // 不新增字体角色。
+    constexpr u32 kHeadingLen = sizeof(kWelcomeHeadingText) / sizeof(wchar_t) - 1;
+    if (fonts_ && textBrush) {
+        IDWriteTextLayout* headingLayout = fonts_->CreateTextLayout(
+            kWelcomeHeadingText, kHeadingLen, FontRole::Body, targetWidth, buttonTop);
+        if (headingLayout) {
+            IDWriteTextFormat* fmt = fonts_->GetTextFormat(FontRole::Body);
+            float baseFontSize = fmt ? fmt->GetFontSize() : 16.0f;
+            DWRITE_TEXT_RANGE fullRange{0, kHeadingLen};
+            headingLayout->SetFontSize(baseFontSize * kWelcomeHeadingFontSizeScale, fullRange);
+            headingLayout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, fullRange);
+            headingLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+
+            DWRITE_TEXT_METRICS metrics{};
+            headingLayout->GetMetrics(&metrics);
+            float headingTop = buttonTop - kWelcomeHeadingGapAboveButtonDip - metrics.height;
+            if (headingTop < 0.0f) headingTop = 0.0f;
+            target_->DrawTextLayout(D2D1::Point2F(0.0f, headingTop), headingLayout, textBrush,
+                                      D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            headingLayout->Release();
+        }
+    }
+
+    // 按钮本体:圆角矩形,默认态/悬浮态两档底色 + 描边。
+    D2D1_ROUNDED_RECT rounded =
+        D2D1::RoundedRect(buttonRect, kWelcomeButtonCornerRadiusDip, kWelcomeButtonCornerRadiusDip);
+    ID2D1SolidColorBrush* fillBrush = buttonHover ? buttonHoverFillBrush : buttonFillBrush;
+    if (fillBrush) target_->FillRoundedRectangle(rounded, fillBrush);
+    if (buttonBorderBrush) target_->DrawRoundedRectangle(rounded, buttonBorderBrush, 1.0f);
+
+    // 按钮内容:文件夹图标(纯 D2D 几何——一个小"标签"矩形叠一个大"主体"
+    // 矩形,零图标字体零位图)+ 居中文字标签,两者水平并排、整体在按钮内居中。
+    constexpr u32 kLabelLen = sizeof(kWelcomeButtonLabel) / sizeof(wchar_t) - 1;
+    IDWriteTextLayout* labelLayout = nullptr;
+    float labelWidth = 0.0f;
+    float labelHeight = 0.0f;
+    if (fonts_) {
+        labelLayout = fonts_->CreateTextLayout(kWelcomeButtonLabel, kLabelLen, FontRole::Body,
+                                                 kWelcomeButtonWidthDip, kWelcomeButtonHeightDip);
+        if (labelLayout) {
+            labelLayout->SetFontSize(kWelcomeButtonLabelFontSizeDip, DWRITE_TEXT_RANGE{0, kLabelLen});
+            DWRITE_TEXT_METRICS metrics{};
+            labelLayout->GetMetrics(&metrics);
+            labelWidth = metrics.width;
+            labelHeight = metrics.height;
+        }
+    }
+
+    float contentWidth = kWelcomeIconSizeDip + (labelLayout ? kWelcomeIconLabelGapDip + labelWidth : 0.0f);
+    float contentLeft = buttonLeft + (kWelcomeButtonWidthDip - contentWidth) * 0.5f;
+    float iconTop = buttonTop + (kWelcomeButtonHeightDip - kWelcomeIconSizeDip) * 0.5f;
+
+    if (textBrush) {
+        // 文件夹标签:贴在主体左上方的小圆角矩形。
+        float tabWidth = kWelcomeIconSizeDip * 0.46f;
+        float tabHeight = kWelcomeIconSizeDip * 0.20f;
+        D2D1_RECT_F tabRect =
+            D2D1::RectF(contentLeft, iconTop, contentLeft + tabWidth, iconTop + tabHeight);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(tabRect, 1.5f, 1.5f), textBrush);
+
+        // 文件夹主体:紧接标签下方的大圆角矩形。
+        float bodyTop = iconTop + tabHeight * 0.7f;
+        D2D1_RECT_F bodyRect = D2D1::RectF(contentLeft, bodyTop, contentLeft + kWelcomeIconSizeDip,
+                                            iconTop + kWelcomeIconSizeDip);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(bodyRect, 2.0f, 2.0f), textBrush);
+    }
+
+    if (labelLayout) {
+        float labelLeft = contentLeft + kWelcomeIconSizeDip + kWelcomeIconLabelGapDip;
+        float labelTop = buttonTop + (kWelcomeButtonHeightDip - labelHeight) * 0.5f;
+        if (textBrush) {
+            target_->DrawTextLayout(D2D1::Point2F(labelLeft, labelTop), labelLayout, textBrush,
+                                      D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+        }
+        labelLayout->Release();
+    }
+}
+
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
                             float leftPaddingDip, const ShellOverlay* overlay,
                             bool mainScrollbarActive, const wchar_t* documentPath,
                             u64 documentSizeBytes, u32 bottomBarHoverButtonIndex,
-                            bool bottomBarPathCopied) {
+                            bool bottomBarPathCopied, bool welcomeScreen,
+                            bool welcomeButtonHover) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -1941,6 +2083,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* textBrush = nullptr;
     ID2D1SolidColorBrush* quoteBrush = nullptr;
     ID2D1SolidColorBrush* codeBgBrush = nullptr;
+    ID2D1SolidColorBrush* codeBorderBrush = nullptr;
     ID2D1SolidColorBrush* hrBrush = nullptr;
     ID2D1SolidColorBrush* linkBrush = nullptr;
     ID2D1SolidColorBrush* tableHeaderBrush = nullptr;
@@ -1980,6 +2123,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->text, &textBrush);
     target_->CreateSolidColorBrush(palette_->quoteBar, &quoteBrush);
     target_->CreateSolidColorBrush(palette_->codeBackground, &codeBgBrush);
+    target_->CreateSolidColorBrush(palette_->codeBorder, &codeBorderBrush);
     target_->CreateSolidColorBrush(palette_->thematicBreak, &hrBrush);
     target_->CreateSolidColorBrush(palette_->link, &linkBrush);
     target_->CreateSolidColorBrush(palette_->tableHeaderBackground, &tableHeaderBrush);
@@ -2063,17 +2207,26 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     const float cullTop = scrollY - cullMargin;
     const float cullBottom = scrollY + targetSize.height + cullMargin;
 
-    u32 blockCount = layout.BlockCount();
-    for (u32 i = 0; i < blockCount; ++i) {
-        const BlockGeometry& g = layout.Geometry(i);
-        if (g.bottom < cullTop || g.top > cullBottom) continue;
-        DrawBlock(g, i, scrollY, contentWidth,
-                  textBrush, quoteBrush, codeBgBrush, hrBrush, linkBrush,
-                  tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
-                  placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
-                  findHighlightBrush, findCurrentBrush, selectionBrush,
-                  copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush,
-                  hlBrushes);
+    if (welcomeScreen) {
+        // 欢迎屏(当前没有已加载文档):不走正常的 DrawBlock 循环,改画
+        // "Welcome to markair" 标题 + "打开文件"按钮。按钮底色/描边复用代码块
+        // 复制按钮同一套画笔槽位(codeBgBrush/copyHoverBgBrush/codeBorderBrush),
+        // 不新增 Palette 槽位。
+        DrawWelcomeScreen(targetSize.width, targetSize.height, welcomeButtonHover, textBrush,
+                          codeBgBrush, copyHoverBgBrush, codeBorderBrush);
+    } else {
+        u32 blockCount = layout.BlockCount();
+        for (u32 i = 0; i < blockCount; ++i) {
+            const BlockGeometry& g = layout.Geometry(i);
+            if (g.bottom < cullTop || g.top > cullBottom) continue;
+            DrawBlock(g, i, scrollY, contentWidth,
+                      textBrush, quoteBrush, codeBgBrush, codeBorderBrush, hrBrush, linkBrush,
+                      tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
+                      placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
+                      findHighlightBrush, findCurrentBrush, selectionBrush,
+                      copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush,
+                      hlBrushes);
+        }
     }
 
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
@@ -2090,7 +2243,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // leftPaddingDip 已经是外壳层减去过 kContentPaddingDip 的"有效滚动偏移",
     // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
     // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
-    if (!outlineOpen && !historyOpen) {
+    if (!welcomeScreen && !outlineOpen && !historyOpen) {
         float scrollbarHeight = targetSize.height - kBottomBarHeightDip;
         if (scrollbarHeight < 0.0f) scrollbarHeight = 0.0f;
         // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
@@ -2159,6 +2312,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (textBrush) textBrush->Release();
     if (quoteBrush) quoteBrush->Release();
     if (codeBgBrush) codeBgBrush->Release();
+    if (codeBorderBrush) codeBorderBrush->Release();
     if (hrBrush) hrBrush->Release();
     if (linkBrush) linkBrush->Release();
     if (tableHeaderBrush) tableHeaderBrush->Release();

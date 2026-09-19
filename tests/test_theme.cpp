@@ -37,6 +37,7 @@ int FirstUnassignedSlot(const Palette& p) {
     const D2D1_COLOR_F* slots[] = {
         &p.background,       &p.text,
         &p.quoteBar,          &p.codeBackground,
+        &p.codeBorder,
         &p.thematicBreak,     &p.link,
         &p.tableHeaderBackground, &p.tableGrid,
         &p.checkboxBorder,    &p.checkboxCheck,
@@ -62,13 +63,13 @@ int FirstUnassignedSlot(const Palette& p) {
 
 }  // namespace
 
-// 用例:sizeof(Palette) 不超过验收给的字节上限——2026-09-19 查找条主题适配
-// 新增 findBarBackground/findBarText 两个槏位,由 688 上调到 720
-// (45 个 D2D1_COLOR_F * 16 字节 = 720,刚好顶格),防止后续再无节制地
+// 用例:sizeof(Palette) 不超过验收给的字节上限——2026-09-19 代码块对齐 GitHub
+// 样式新增 codeBorder 槽位,由 720 上调到 736
+// (46 个 D2D1_COLOR_F * 16 字节 = 736,刚好顶格),防止后续再无节制地
 // 往里堆槏位。
 MARKAIR_TEST(Theme_PaletteSizeWithinBudget) {
     size_t paletteSize = sizeof(Palette);
-    MARKAIR_CHECK(paletteSize <= 720);
+    MARKAIR_CHECK(paletteSize <= 736);
 }
 
 // 用例:浅色调色板每个槽位都已显式赋值,不残留透明黑默认值。

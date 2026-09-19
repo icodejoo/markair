@@ -7,7 +7,7 @@
 namespace markair {
 
 // 底部栏固定高度(DIP),随 DPI 缩放(调用方按需再乘 DPI 缩放系数)。
-constexpr float kBottomBarHeightDip = 32.0f;
+constexpr float kBottomBarHeightDip = 24.0f;
 
 // 底部栏左侧按钮数量与总按钮数。
 constexpr u32 kBottomBarLeftButtonCount = 6;

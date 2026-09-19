@@ -32,6 +32,7 @@
 #include "scrollbar.h"
 #include "selection.h"
 #include "theme_state.h"
+#include "welcome_screen.h"
 #include "window_state.h"
 #include "../util/recent_files.h"
 
@@ -258,6 +259,17 @@ struct WindowState {
     // 渲染层据此在悬浮的按钮上方画一个纯 D2D 文字气泡当提示,不引入
     // Win32 TOOLTIPS_CLASS 控件(风险更小、改动更集中)。
     BottomBarButton bottomBarHoverButton;
+
+    // 欢迎屏(未打开任何文档时的静态引导页,取代示例 markdown):true 表示
+    // 不走正常的 DrawBlock 渲染管线,改画"Welcome to markair" + 打开文件
+    // 按钮。由调用方(main.cpp)在文档未打开成功时设为 true,window.cpp
+    // 运行期只读不改写。
+    bool showWelcomeScreen;
+
+    // 欢迎屏"打开文件"按钮悬浮态,判定口径与 bottomBarHoverButton 相同:
+    // WM_MOUSEMOVE 命中时置真,鼠标移出时置假,CreateMainWindow 显式初始化
+    // 为 false。仅在 showWelcomeScreen 为真时有意义。
+    bool welcomeButtonHover;
 
     // Pointer to recent files history records collection (owned by caller).
     //

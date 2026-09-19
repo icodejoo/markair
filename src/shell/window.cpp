@@ -247,9 +247,16 @@ void ApplyTitleBarTheme(HWND hwnd, bool isDark) {
     // ci/verify_release.ps1)都还认这个符号,保留调用避免牵连一次不必要的
     // 构建系统改动。
     SetWindowTheme(hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    // 2026-09-19 用户反馈修订:上面 `ShowWindow(SW_HIDE)`+`ShowWindow(SW_SHOWNA)`
+    // 那套"隐藏再显示"确实能强制 DWM 重绘标题栏(见上方历史记录),但真机上
+    // 第一次点击会被系统当成一次真实的最小化(窗口刚创建/首次显示的过渡动画
+    // 还没落定,恰好撞上 SW_HIDE)。换成 `WM_NCACTIVATE` 假活跃态切换:
+    // 只强制非客户区(标题栏)重绘,不隐藏窗口、不改变任务栏状态、不触发最小化
+    // 动画。lParam 传 -1 表示"不要重绘客户区内容",避免连带闪一下正文。
+    // 这条消息是发给窗口自身的、脱离真实激活/失焦事件,不会抢焦点。
     if (IsWindowVisible(hwnd)) {
-        ShowWindow(hwnd, SW_HIDE);
-        ShowWindow(hwnd, SW_SHOWNA);
+        SendMessageW(hwnd, WM_NCACTIVATE, FALSE, static_cast<LPARAM>(-1));
+        SendMessageW(hwnd, WM_NCACTIVATE, TRUE, static_cast<LPARAM>(-1));
     }
 }
 
@@ -1486,7 +1493,8 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     bool presented = state->renderer->RenderFrame(
         hwnd, *state->layout, effectiveScrollY, kContentPaddingDip, overlayPtr,
         mainScrollbarActive, state->currentDocumentPath, state->currentDocumentSizeBytes,
-        static_cast<u32>(state->bottomBarHoverButton), state->bottomBarPathCopied);
+        static_cast<u32>(state->bottomBarHoverButton), state->bottomBarPathCopied,
+        state->showWelcomeScreen, state->welcomeButtonHover);
 
     if (state->onFrameEnd) state->onFrameEnd(state->callbackUserData);
 
@@ -1562,6 +1570,20 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
     if (state->onWindowGeometryChanged) state->onWindowGeometryChanged(state->callbackUserData);
 }
 
+// "打开文件"动作本体:弹出 IFileOpenDialog,选中后用 CreateProcessW 新开一个
+// 独立 markair.exe 进程——不调用 openDocumentInPlace,不替换当前正在看的
+// 文档。底部栏 OpenDoc 按钮与欢迎屏"打开文件"大按钮共用这一份实现,保证
+// 两处点击行为完全一致。
+void TriggerOpenDocument(HWND hwnd, WindowState* state) {
+    if (!state) return;
+    wchar_t path[MAX_PATH]{};
+    if (!ShowOpenMarkdownDialog(hwnd, path, MAX_PATH)) return;  // 用户取消,静默无行为
+    if (!LaunchNewInstance(path)) {
+        state->statusMessage = L"打开新窗口失败";
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+}
+
 // 底部操作栏(新需求):6 个按钮各自的动作全部复用现有函数,不另写一套——
 // 放大/缩小复用 T29 的 FontSubsystem::ZoomIn/ZoomOut + ApplyZoomChange(与
 // Ctrl+± 同一路径),主题复用 T47 的 CycleTheme(与 Ctrl+Shift+T 同一路径),
@@ -1592,15 +1614,9 @@ void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn
     case BottomBarButton::Outline:
         ToggleOutlinePanel(hwnd, state);
         return;
-    case BottomBarButton::OpenDoc: {
-        wchar_t path[MAX_PATH]{};
-        if (!ShowOpenMarkdownDialog(hwnd, path, MAX_PATH)) return;  // 用户取消,静默无行为
-        if (!LaunchNewInstance(path)) {
-            state->statusMessage = L"打开新窗口失败";
-            InvalidateRect(hwnd, nullptr, FALSE);
-        }
+    case BottomBarButton::OpenDoc:
+        TriggerOpenDocument(hwnd, state);
         return;
-    }
     case BottomBarButton::CopyPath:
         OnBottomBarCopyPathClicked(hwnd, state);
         return;
@@ -1737,6 +1753,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 bool hasDocument = state->currentDocumentPath[0] != 0;
                 BottomBarButton btn = HitTestBottomBar(clientWidthDip, dipX, hasDocument);
                 OnBottomBarButtonClicked(hwnd, state, btn);
+                return 0;
+            }
+        }
+
+        // 欢迎屏"打开文件"大按钮——只在未打开任何文档时存在,优先级同样
+        // 高于正文/侧栏命中测试(欢迎屏本就没有正文可点)。
+        if (state && state->showWelcomeScreen) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            WelcomeButtonRect rect = WelcomeButtonRectDip(ClientWidthDip(hwnd), ClientHeightDip(hwnd));
+            if (IsPointInWelcomeButton(rect, dipX, dipY)) {
+                TriggerOpenDocument(hwnd, state);
                 return 0;
             }
         }
@@ -2108,6 +2137,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 state->bottomBarHoverButton = newBottomBarHover;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+
+            // 欢迎屏按钮悬浮态,判定口径与上面底部栏按钮同一套。
+            if (state->showWelcomeScreen) {
+                WelcomeButtonRect rect =
+                    WelcomeButtonRectDip(ClientWidthDip(hwnd), clientHeightDip);
+                bool newWelcomeHover = IsPointInWelcomeButton(rect, dipX, dipY);
+                if (newWelcomeHover != state->welcomeButtonHover) {
+                    state->welcomeButtonHover = newWelcomeHover;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+            }
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
@@ -2349,6 +2389,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
         if (state && state->bottomBarHoverButton != BottomBarButton::None && LOWORD(lparam) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+            return TRUE;
+        }
+        if (state && state->showWelcomeScreen && state->welcomeButtonHover &&
+            LOWORD(lparam) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
             return TRUE;
         }
@@ -2708,6 +2753,10 @@ bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme) {
     // 标准箭头光标(IDC_ARROW 的资源序号 32512;工程未定义 UNICODE 宏,
     // 这里显式用宽字符版本的资源 ID 以匹配 LoadCursorW)。
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    // 标题栏/任务栏图标:资源 ID 1 对应 resources/app.rc 里的 "1 ICON app.ico"。
+    // 不设置的话 Windows 会退化成通用应用图标,不是我们内置的 app.ico。
+    // WNDCLASSW(非 WNDCLASSEXW)没有 hIconSm 字段,系统会从 hIcon 按需缩出小图标。
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
     // T48:背景刷跟随注册时的生效主题,避免窗口首次显示到首帧绘制之间出现与
     // 主题不符的白闪(架构 §6)。深色下自建一支与 kDarkPalette.background 同色
     // 的纯色刷(进程退出前由 ReleaseMainWindowClassResources 释放);浅色沿用
@@ -2754,6 +2803,9 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // (ZoomIn)上",必须显式置为 None,与上面两个 kInvalidIndex 同一条理由。
     state->bottomBarHoverButton = BottomBarButton::None;
     state->bottomBarPathCopied = false;
+    // 欢迎屏按钮悬浮态默认关闭;showWelcomeScreen 本身由调用方在构造
+    // WindowState 时填好,这里不覆盖(与 doc/layout 等"调用方持有"字段同一约定)。
+    state->welcomeButtonHover = false;
     // 自绘滚动条(方案A):默认没有任何一个在被拖动,也没有悬浮。
     state->scrollbarDragTarget = ScrollbarDragTarget::None;
     state->mainScrollbarHover = false;

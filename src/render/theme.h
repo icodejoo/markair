@@ -41,6 +41,7 @@ struct Palette {
     D2D1_COLOR_F text;                        // 正文与各级标题共用的文字色
     D2D1_COLOR_F quoteBar;                    // 引用块左侧竖线
     D2D1_COLOR_F codeBackground;              // 行内代码/代码块的底色
+    D2D1_COLOR_F codeBorder;                  // 围栏代码块的 1px 描边色(对齐 GitHub)
     D2D1_COLOR_F thematicBreak;                // 分割线颜色
     D2D1_COLOR_F link;                        // 链接/自动链接文字色
     D2D1_COLOR_F tableHeaderBackground;       // 表格表头底色
@@ -110,7 +111,8 @@ inline constexpr Palette kLightPalette{
     /* background                 */ MakeColor(0xFFFFFFu),
     /* text                       */ MakeColor(0x000000u),
     /* quoteBar                   */ MakeColor(0x808080u),
-    /* codeBackground             */ MakeColor(0xF0F0F0u),
+    /* codeBackground             */ MakeColor(0xF6F8FAu),
+    /* codeBorder                 */ MakeColor(0xD0D7DEu),
     /* thematicBreak              */ MakeColor(0xC0C0C0u),
     /* link                       */ MakeColor(0x0366D6u),
     /* tableHeaderBackground      */ MakeColor(0xF6F8FAu),
@@ -138,12 +140,12 @@ inline constexpr Palette kLightPalette{
     // 浅色主题背景接近白色,蒙层取背景的反色(黑)压暗正文,半透明。
     /* outlineOverlayMaskBackground */ MakeColor(0x000000u, 0.35f),
     /* historyRowButtonBackground */ MakeColor(0xCFE4FFu),
-    /* hlKeyword                  */ MakeColor(0xD73A49u),
-    /* hlString                   */ MakeColor(0x032F62u),
-    /* hlNumber                   */ MakeColor(0x005CC5u),
-    /* hlComment                  */ MakeColor(0x6A737Du),
+    /* hlKeyword                  */ MakeColor(0xCF222Eu),
+    /* hlString                   */ MakeColor(0x0A3069u),
+    /* hlNumber                   */ MakeColor(0x0550AEu),
+    /* hlComment                  */ MakeColor(0x6E7781u),
     /* hlPunct                    */ MakeColor(0x24292Eu),
-    /* hlBuiltin                  */ MakeColor(0x6F42C1u),
+    /* hlBuiltin                  */ MakeColor(0x8250DFu),
     /* hlOther                    */ MakeColor(0x000000u),
     /* bottomBarBackground        */ MakeColor(0xF6F8FAu),
     /* bottomBarIcon              */ MakeColor(0x24292Fu),
@@ -173,6 +175,7 @@ inline constexpr Palette kDarkPalette{
     /* text                       */ MakeColor(0xC9D1D9u),
     /* quoteBar                   */ MakeColor(0x8B949Eu),
     /* codeBackground             */ MakeColor(0x161B22u),
+    /* codeBorder                 */ MakeColor(0x30363Du),
     /* thematicBreak              */ MakeColor(0x30363Du),
     /* link                       */ MakeColor(0x58A6FFu),
     /* tableHeaderBackground      */ MakeColor(0x161B22u),

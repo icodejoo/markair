@@ -330,6 +330,12 @@ public:
      *              >= kBottomBarButtonCountRender 表示未悬浮任何按钮。
      * @param bottomBarPathCopied 复制路径按钮当前是否处于点击后的短暂
      *              "已复制"成功态;documentPath 为空时忽略。
+     * @param welcomeScreen 为 true 时不画正文块循环,改画欢迎屏
+     *              ("Welcome to markair" 标题 + "打开文件"大按钮),用于
+     *              当前没有已加载文档的场景;底部栏/滚动条等其余元素画法
+     *              不受影响(滚动条因内容为空天然不出现)。
+     * @param welcomeButtonHover 欢迎屏"打开文件"按钮当前是否处于鼠标悬浮态,
+     *              welcomeScreen 为 false 时忽略。
      * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay, true);
      */
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
@@ -337,7 +343,8 @@ public:
                       bool mainScrollbarActive = false, const wchar_t* documentPath = nullptr,
                       u64 documentSizeBytes = 0,
                       u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender,
-                      bool bottomBarPathCopied = false);
+                      bool bottomBarPathCopied = false, bool welcomeScreen = false,
+                      bool welcomeButtonHover = false);
 
     /**
      * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
@@ -363,6 +370,7 @@ private:
                     ID2D1SolidColorBrush* textBrush,
                     ID2D1SolidColorBrush* quoteBrush,
                     ID2D1SolidColorBrush* codeBgBrush,
+                    ID2D1SolidColorBrush* codeBorderBrush,
                     ID2D1SolidColorBrush* hrBrush,
                     ID2D1SolidColorBrush* linkBrush,
                     ID2D1SolidColorBrush* tableHeaderBrush,
@@ -434,6 +442,22 @@ private:
     void DrawDownsampledBadge(const D2D1_RECT_F& imageRect,
                                ID2D1SolidColorBrush* badgeBgBrush,
                                ID2D1SolidColorBrush* badgeTextBrush);
+
+    // 画欢迎屏(未打开任何文档时,取代正文 DrawBlock 循环):居中标题
+    // "Welcome to markair"(与正文一级标题同一套字号/加粗手法)+ 下方一个
+    // 宽大的"打开文件"按钮(圆角矩形描边/填充 + 纯 D2D 几何画的文件夹图标
+    // + 居中文字)。不参与任何布局/虚拟化,每帧原样重画,开销可忽略。
+    // @param targetWidth/targetHeight 渲染目标当前尺寸(DIP)。
+    // @param buttonHover 按钮当前是否处于鼠标悬浮态,决定按钮底色深浅。
+    // @param textBrush 标题与按钮文字共用的文字色(复用正文文字色槽位)。
+    // @param buttonFillBrush 按钮默认态底色。
+    // @param buttonHoverFillBrush 按钮悬浮态底色。
+    // @param buttonBorderBrush 按钮描边色。
+    void DrawWelcomeScreen(float targetWidth, float targetHeight, bool buttonHover,
+                            ID2D1SolidColorBrush* textBrush,
+                            ID2D1SolidColorBrush* buttonFillBrush,
+                            ID2D1SolidColorBrush* buttonHoverFillBrush,
+                            ID2D1SolidColorBrush* buttonBorderBrush);
 
     // 画表格网格线与表头背景(T26):只依赖 BlockGeometry 里已存好的
     // tableColWidths/tableRowTops/tableHeadRowCount,不依赖 Document。

@@ -48,6 +48,7 @@ add_executable(markair_tests
     test_selection.cpp
     test_bottom_bar.cpp
     test_open_dialog.cpp
+    test_welcome_screen.cpp
     test_recent_files.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
