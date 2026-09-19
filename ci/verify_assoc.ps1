@@ -168,19 +168,32 @@ function Export-Snapshot {
         $regPath = "HKCU\Software\Classes\$t"
         $tmp = New-TemporaryFile
         $exported = $false
+        # $tmp 理论上不该为空(New-TemporaryFile 失败会抛异常,被下面 catch 兜住),
+        # 但 2026-09-19 CI 实测出现过本函数返回值最终被外层 Compare-Object 判定
+        # 为 $null 的情况(本机复现不出,疑似 CI runner 环境下的极端情况)——
+        # 显式判空,任何一步意外失败都退化为"<error>"占位而不是让整个函数
+        # 静默产出异常结果,把故障留在本函数内部就地暴露,不传染到调用方。
         try {
-            reg export $regPath $tmp.FullName /y 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $exported = $true
+            if ($tmp -and $tmp.FullName) {
+                reg export $regPath $tmp.FullName /y 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $exported = $true
+                }
             }
         } catch {}
         if ($exported) {
-            $content = Get-Content -Path $tmp.FullName -Encoding Unicode
-            foreach ($l in $content) { $lines.Add("$t|$l") }
+            $content = Get-Content -Path $tmp.FullName -Encoding Unicode -ErrorAction SilentlyContinue
+            if ($content) {
+                foreach ($l in $content) { $lines.Add("$t|$l") }
+            } else {
+                $lines.Add("$t|<empty>")
+            }
         } else {
             $lines.Add("$t|<absent>")
         }
-        Remove-Item -Path $tmp.FullName -Force -ErrorAction SilentlyContinue
+        if ($tmp -and $tmp.FullName) {
+            Remove-Item -Path $tmp.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
     return $lines
 }
@@ -256,6 +269,14 @@ foreach ($ext in $AssocExtensions) {
 }
 
 $snapshotAfter = Export-Snapshot
+# 防御:Compare-Object 的 -ReferenceObject/-DifferenceObject 传 $null 会直接
+# 触发参数绑定期错误(TerminatingError,不受下面的 try/catch 之外任何逻辑
+# 拦截)。2026-09-19 CI 实测出现过 $snapshotBefore 在到达这里时为 $null 的
+# 情况(本机复现不出);不管上游 Export-Snapshot 为什么会产出 $null,这里
+# 兜底转空数组,让"确实有残留"这一判断依旧成立(空数组 vs 有内容的快照
+# 一定会被判定为有 diff,不会把真实残留误判成一致),不静默吞掉问题。
+if ($null -eq $snapshotBefore) { $snapshotBefore = @() }
+if ($null -eq $snapshotAfter) { $snapshotAfter = @() }
 $diff = Compare-Object -ReferenceObject $snapshotBefore -DifferenceObject $snapshotAfter
 if ($diff) {
     Fail "卸载后快照与注册前快照存在差异："
