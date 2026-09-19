@@ -1,4 +1,4 @@
-// mdvn 的 data: URI 解码(T31):把 `data:[<mime>][;base64],<payload>` 解成
+// markair 的 data: URI 解码(T31):把 `data:[<mime>][;base64],<payload>` 解成
 // 原始字节,交给 T30 同一条 WIC 解码路径(§6 "零新增代码路径")。
 //
 // 解码缓冲区一律来自调用方传入的 Arena,不做任何独立堆分配;非法输入
@@ -9,7 +9,7 @@
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /** data: URI 解码后的字节数上限,与单图压缩字节上限(kMaxEncodedBytes)一致。 */
 constexpr u32 kMaxDataUriBytes = 16u * 1024u * 1024u;
@@ -38,8 +38,8 @@ struct DataUriPayload {
  * @param arena 解码缓冲区所在的 Arena,生命周期须覆盖对返回字节的使用期。
  * @return 解码结果;valid 为 false 时 bytes/len 必为 nullptr/0。
  * @example
- *   mdvn::DataUriPayload p =
- *       mdvn::ParseDataUri(mdvn::StrSlice{"data:image/png;base64,iVBORw==", 30}, &arena);
+ *   markair::DataUriPayload p =
+ *       markair::ParseDataUri(markair::StrSlice{"data:image/png;base64,iVBORw==", 30}, &arena);
  *   if (p.valid) { decoder.DecodeFromMemory(p.bytes, p.len, target); }
  */
 DataUriPayload ParseDataUri(StrSlice uri, Arena* arena);
@@ -50,8 +50,8 @@ DataUriPayload ParseDataUri(StrSlice uri, Arena* arena);
  *
  * @param mime MIME 切片(如 "image/jpeg");可为空切片。
  * @return 以 '\0' 结尾的静态字符串,如 L".png";调用方不得释放。
- * @example const wchar_t* ext = mdvn::ExtensionForMime(mdvn::StrSlice{"image/gif", 9}); // L".gif"
+ * @example const wchar_t* ext = markair::ExtensionForMime(markair::StrSlice{"image/gif", 9}); // L".gif"
  */
 const wchar_t* ExtensionForMime(StrSlice mime);
 
-}  // namespace mdvn
+}  // namespace markair

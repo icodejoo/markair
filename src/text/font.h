@@ -1,4 +1,4 @@
-// mdvn 字体子系统:DirectWrite 工厂 + 裁决 #10 白名单回退链 +
+// markair 字体子系统:DirectWrite 工厂 + 裁决 #10 白名单回退链 +
 // IDWriteTextFormat 复用池。全程不调用 GetSystemFontCollection 做全量枚举。
 #pragma once
 
@@ -6,7 +6,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 字体角色:决定用哪一条裁决 #10 白名单链路创建文本格式。
@@ -24,10 +24,10 @@ enum class FontRole {
  * 交给按需内存映射的系统字体服务,不做进程内全量枚举。
  *
  * @example
- *   mdvn::FontSubsystem fonts;
+ *   markair::FontSubsystem fonts;
  *   if (fonts.Init()) {
  *       IDWriteTextLayout* layout = fonts.CreateTextLayout(
- *           L"你好 Hello", 8, mdvn::FontRole::Body, 600.0f, 200.0f);
+ *           L"你好 Hello", 8, markair::FontRole::Body, 600.0f, 200.0f);
  *       if (layout) layout->Release();
  *   }
  */
@@ -73,7 +73,7 @@ public:
      * 一份容易走样的常量。
      * @param scale 任意缩放浮点值。
      * @return 8 个档位中距 `scale` 最近的一个。
-     * @example float z = mdvn::FontSubsystem::ClampToNearestZoomLevel(1.31f); // 1.3f
+     * @example float z = markair::FontSubsystem::ClampToNearestZoomLevel(1.31f); // 1.3f
      */
     static float ClampToNearestZoomLevel(float scale);
 
@@ -96,7 +96,7 @@ public:
      * @param outCount 输出元素个数,可为 nullptr。
      * @return 指向内部常量族名表的指针,恒非空,生命周期同进程。
      * @example
-     *   mdvn::u32 n = 0;
+     *   markair::u32 n = 0;
      *   const wchar_t* const* chain = FontSubsystem::MonoFallbackFamilies(&n);
      */
     static const wchar_t* const* MonoFallbackFamilies(u32* outCount);
@@ -132,7 +132,7 @@ public:
      * @param role 字体角色(正文/等宽)。
      * @return 对应的文本格式指针;创建失败返回 nullptr。所有权归本对象持有,
      *         调用方不应 Release。
-     * @example IDWriteTextFormat* mono = fonts.GetTextFormat(mdvn::FontRole::Mono);
+     * @example IDWriteTextFormat* mono = fonts.GetTextFormat(markair::FontRole::Mono);
      */
     IDWriteTextFormat* GetTextFormat(FontRole role);
 
@@ -145,7 +145,7 @@ public:
      * @param maxHeight 排版可用的最大高度(DIP)。
      * @return 新建的布局对象,所有权转移给调用方(需自行 Release);失败返回 nullptr。
      * @example
-     *   IDWriteTextLayout* layout = fonts.CreateTextLayout(text, len, mdvn::FontRole::Body, 760.0f, 400.0f);
+     *   IDWriteTextLayout* layout = fonts.CreateTextLayout(text, len, markair::FontRole::Body, 760.0f, 400.0f);
      */
     IDWriteTextLayout* CreateTextLayout(const wchar_t* text, u32 length,
                                          FontRole role,
@@ -185,4 +185,4 @@ private:
     wchar_t monoFallbackOverride_[64];
 };
 
-}  // namespace mdvn
+}  // namespace markair

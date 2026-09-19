@@ -4,7 +4,7 @@
 
 ## 测试方式说明
 
-由于 `mdvn.exe` 目前只有 GUI 交互式打开一条路径,没有命令行批量/无窗口模式,
+由于 `markair.exe` 目前只有 GUI 交互式打开一条路径,没有命令行批量/无窗口模式,
 "打开不崩溃"这条验收线改走 `tests/test_corpus_smoke.cpp` 新增的
 `CorpusSmoke_AllRealWorldFilesOpenParseLayoutWithoutCrash` 用例:对 39 份语料
 逐一跑一次与 `src/app/main.cpp::LoadMarkdownFile` 完全一致的链路——
@@ -12,7 +12,7 @@
 BlockLayoutEngine::Relayout`(不含渲染/窗口,因为渲染需要真实 HWND/D2D 目标,
 且本任务范围是"解析/排版不出岔子",不是像素级渲染验证)。
 
-结论:**39/39 全部成功打开、解析、布局,进程不崩溃**(`mdvn_tests.exe` 退出码
+结论:**39/39 全部成功打开、解析、布局,进程不崩溃**(`markair_tests.exe` 退出码
 0,185 个用例全绿,其中就包含这条新用例;M0 原有 61 个用例、T40 新增用例均
 未改动)。此外该用例还断言了 `doc.truncated == false`——**39 份真实文档没有
 一份触发 `kMaxNestingDepth`(64 层)/`kMaxDocumentNodeCount`(20 万节点)截断**,
@@ -56,11 +56,11 @@ BlockLayoutEngine::Relayout`(不含渲染/窗口,因为渲染需要真实 HWND/D
 | github-docs-get-started-index.md | **跳过 front matter 之后正文长度为 0,解析出 0 个块** | 可接受 | 无需处理——核对原文后确认这是一份"纯元数据/正文完全由 Jekyll/Liquid 站点模板渲染"的索引页(`children`/`carousels` 等字段驱动外部渲染),`---...---` 之后原文本身就没有 Markdown 正文,`doc.blocks.Size() == 0` 是**正确**解析结果而非丢内容;`test_corpus_smoke.cpp` 已按"正文非空白才要求块数 > 0"的口径处理,不误判为异常 |
 | github-docs-onboarding-getting-started-account.md | 无异常;front matter 被正确跳过,正文 109 块 | 可接受 | 无需处理 |
 | reactjs-react.dev-blog-react19.md | 无异常;front matter 被正确跳过,21 处代码块(React 19 迁移代码示例)完整保留 | 可接受 | 无需处理 |
-| remarkjs-remark-gfm-readme.md | 文中演示脚注/任务列表/表格语法的 ` ```markdown ` 围栏示例块被**当作纯代码文本**显示,`[^1]`/`- [x]`/`\| a \| b \|` 等语法**未被解析**成真正的脚注/任务列表/表格 | 可接受 | 无需处理——这些语法字面量本来就写在围栏代码块里,是"演示语法长什么样"的示例文本,GitHub 网页版同样把它们渲染成代码块而非活跃元素,mdvn 的行为与预期完全一致,不是围栏代码块解析的缺陷 |
+| remarkjs-remark-gfm-readme.md | 文中演示脚注/任务列表/表格语法的 ` ```markdown ` 围栏示例块被**当作纯代码文本**显示,`[^1]`/`- [x]`/`\| a \| b \|` 等语法**未被解析**成真正的脚注/任务列表/表格 | 可接受 | 无需处理——这些语法字面量本来就写在围栏代码块里,是"演示语法长什么样"的示例文本,GitHub 网页版同样把它们渲染成代码块而非活跃元素,markair 的行为与预期完全一致,不是围栏代码块解析的缺陷 |
 | micromark-gfm-footnote-readme.md | 同上:多处围栏代码块内的脚注示例语法未被解析,按纯文本正确保留 | 可接受 | 无需处理,理由同上 |
 | microsoft-playwright-readme.md | 无异常;2 张表格 | 可接受 | 无需处理 |
 | n8n-io-n8n-readme.md | 无异常 | 可接受 | 无需处理 |
-| mermaid-js-mermaid-readme.md | ` ```mermaid ` 围栏代码块被当作**普通围栏代码块**显示(展示 mermaid 源码文本,不渲染成流程图/时序图),2 处尖括号自动链接被正确识别 | 可接受 | 无需处理——mdvn 需求范围内从未包含"mermaid 图形渲染"这一功能(01-requirements.md/06-m1-tasks.md 均未列出),按代码块处理是唯一合理且与项目裁决一致的行为,GitHub 网页版才会额外渲染成图,这属于"该项目主动裁决不做"的能力差异,不是解析缺陷 |
+| mermaid-js-mermaid-readme.md | ` ```mermaid ` 围栏代码块被当作**普通围栏代码块**显示(展示 mermaid 源码文本,不渲染成流程图/时序图),2 处尖括号自动链接被正确识别 | 可接受 | 无需处理——markair 需求范围内从未包含"mermaid 图形渲染"这一功能(01-requirements.md/06-m1-tasks.md 均未列出),按代码块处理是唯一合理且与项目裁决一致的行为,GitHub 网页版才会额外渲染成图,这属于"该项目主动裁决不做"的能力差异,不是解析缺陷 |
 | mermaid-js-mermaid-cli-readme.md | 同上:3 处 mermaid 围栏代码块按纯代码块显示 | 可接受 | 无需处理,理由同上 |
 | prettier-prettier-changelog.md | 文中演示任务列表格式化效果的 ` ```markdown ` 围栏示例块里的 `- [x]` 未被解析成任务列表(与 remark-gfm 情况相同);超大文件(160KB,1754 块、178 处代码块)解析/布局均正常 | 可接受 | 无需处理,理由同 remark-gfm |
 | pandoc-manual.md | 无异常;手册正文里 4 处真实(非围栏)脚注定义/引用均被正确解析为 `FootnoteDef`/`kInlineFlagFootnoteRef`(`footnoteDefs=4 footnoteRefs=4`),304 处代码块(超大文件,300KB)全部正常 | 可接受 | 无需处理——这是当前语料集里**唯一**验证到"脚注在真实正文中被正确解析"的文件,细节见下方"遗留问题" |
@@ -75,7 +75,7 @@ BlockLayoutEngine::Relayout`(不含渲染/窗口,因为渲染需要真实 HWND/D
 (`github-docs-get-started-index.md`)经核对原文确认是文档本身正文为空、
 不是解析缺陷。凡是"内容看起来没有被渲染成 GitHub 网页版那样的活跃元素"的
 情况(HTML 片段、mermaid 图、围栏代码块里的语法示例文本),经核对均属于
-mdvn 已在需求/架构文档里明确裁决的行为边界(HTML 按纯文本 / 不做 mermaid
+markair 已在需求/架构文档里明确裁决的行为边界(HTML 按纯文本 / 不做 mermaid
 图形渲染 / 围栏代码块内容不做二次解析),按任务说明的口径统一分类为"可接受"。
 
 ## 遗留问题(需要主对话决策)

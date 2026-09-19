@@ -1,6 +1,6 @@
 #include "table.h"
 
-namespace mdvn {
+namespace markair {
 
 Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u32 rowCount,
                                       float viewportWidth, Arena* arena, float fontScale) {
@@ -94,4 +94,4 @@ Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u3
     return Span<float>{widths, colCount};
 }
 
-}  // namespace mdvn
+}  // namespace markair

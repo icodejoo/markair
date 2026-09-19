@@ -5,7 +5,7 @@
 
 ## 0. 环境与验收目标
 
-- 验收目标：`build\src\Release\mdvn.exe`（Release，clean 未强制重建，本次实测直接复用已有构建产物）。
+- 验收目标：`build\src\Release\markair.exe`（Release，clean 未强制重建，本次实测直接复用已有构建产物）。
 - 本机为真实 Windows 10 Pro 桌面环境（双屏，`SystemInformation.VirtualScreen` 实测
   `5120x1440`，`query session` 确认 console 会话 ID=1 处于 Active 状态），不是"环境不具备"。
 - `dumpbin.exe` 定位：本机未装独立 VS IDE，只有 BuildTools，`dumpbin` 不在系统 PATH，
@@ -64,14 +64,14 @@ CRT），**没有出现任何 `vcruntime*.dll`/`msvcp*.dll`/`api-ms-win-crt-*.dl
 
 ### 3.1 方法说明（先讲清楚测法，避免误判）
 
-用 `Get-CimInstance Win32_Process -Filter "ParentProcessId=<mdvn PID>"` 在整个观察窗口内
+用 `Get-CimInstance Win32_Process -Filter "ParentProcessId=<markair PID>"` 在整个观察窗口内
 持续轮询（间隔 150ms），断言**任何时刻该查询结果都为空**。
 
 **关键澄清**（任务要求必须写清楚）：`ShellExecuteW`（`src\shell\navigate.cpp:309` 打开外链、
 `:463` 打开本地图片文件）会让系统默认浏览器/看图软件启动，但这个新进程的父进程是
-Windows Shell 代为启动的宿主（explorer.exe 或对应的 Shell 组件），**不是** mdvn.exe 的直接
-子进程——`Get-CimInstance Filter "ParentProcessId=<mdvn PID>"` 查不到它，属于设计上的正确
-行为，不能因为"点了外链之后系统里出现了新进程"就误判 mdvn 违反了"子进程恒为 0"。
+Windows Shell 代为启动的宿主（explorer.exe 或对应的 Shell 组件），**不是** markair.exe 的直接
+子进程——`Get-CimInstance Filter "ParentProcessId=<markair PID>"` 查不到它，属于设计上的正确
+行为，不能因为"点了外链之后系统里出现了新进程"就误判 markair 违反了"子进程恒为 0"。
 
 ### 3.2 实测结果
 
@@ -92,12 +92,12 @@ Windows Shell 代为启动的宿主（explorer.exe 或对应的 Shell 组件）�
   窗口站/桌面与交互式桌面不完全等价，尽管 `query session` 显示同一个 Active 会话。
 - `PrintWindow`：调用返回成功（`ok=True`），但截图内容是**纯白空白**，与本项目
   既有踩坑记录一致（memory: "UI截图验收要用真实截图，不要用 PrintWindow，否则验收
-  结果不可信"）——mdvn 走 D2D 软件渲染，`PrintWindow` 对这类窗口截不到真实内容，
+  结果不可信"）——markair 走 D2D 软件渲染，`PrintWindow` 对这类窗口截不到真实内容，
   这里只是如实复现了该已知结论，没有拿它的空白截图冒充验收证据。
 
 因此，本次改用**网格扫点点击**（在文档左上角"标题/外链/图片"所在区域按 10~20px
 步进撒点，48 点与 390 点两轮，覆盖坐标范围 `x∈[20,300], y∈[20,400]`）+ 全程子进程
-轮询的方式验证：无论是否精确命中链接/图片的可点击热区，**mdvn.exe 在任何一次点击后
+轮询的方式验证：无论是否精确命中链接/图片的可点击热区，**markair.exe 在任何一次点击后
 都没有产生过子进程**。同时对系统级新进程做了前后差异比对，两轮扫点后新出现的进程
 都是与本次操作无关的系统噪声（`svchost.exe`/`backgroundTaskHost.exe`/`audiodg.exe`，
 父进程分别是系统服务宿主），**没有观测到浏览器/图片查看器被拉起**，说明本次网格扫点
@@ -114,7 +114,7 @@ Windows Shell 代为启动的宿主（explorer.exe 或对应的 Shell 组件）�
 
 ## 4. 不加壳、不 UPX 声明
 
-**声明：本次交付流程未对 `mdvn.exe` 执行任何可执行文件压缩或加壳操作。**
+**声明：本次交付流程未对 `markair.exe` 执行任何可执行文件压缩或加壳操作。**
 构建产物直接来自 CMake + MSVC 链接器（`cmake --build build --config Release`）的输出，
 未引入 UPX 或任何其它 exe 压缩/加壳工具，`ci\verify_release.ps1` 的段名特征检查
 （第 4 步）也未检测到相关特征。
@@ -122,7 +122,7 @@ Windows Shell 代为启动的宿主（explorer.exe 或对应的 Shell 组件）�
 ## 5. 干净系统验证 —— 按裁决 #6，未做
 
 按 `08-m3-tasks.md` 「M3 裁决记录」#6：不建虚拟机、不建新用户账户，
-**本报告如实注明：mdvn.exe 未在干净系统（无 Visual C++ Redistributable、无本项目
+**本报告如实注明：markair.exe 未在干净系统（无 Visual C++ Redistributable、无本项目
 开发环境残留的独立系统/账户）上验证过。** 已验证的是当前开发机上的行为（含
 dumpbin 依赖检查、子进程数观察），不能替代干净系统验证。
 

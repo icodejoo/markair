@@ -1,9 +1,9 @@
-// mdvn 的 md4c SAX 回调 -> 文档模型转换器(T8)。
+// markair 的 md4c SAX 回调 -> 文档模型转换器(T8)。
 #pragma once
 
 #include "model.h"
 
-namespace mdvn {
+namespace markair {
 
 // 节点总数上限(Block + Inline 合计)。选取几十万级别:M0 目标文档量级在
 // 百 KB~10MB(见 02-tech-stack.md §6 的 BENCH-A/10MB 场景),正常 Markdown
@@ -35,11 +35,11 @@ constexpr u32 kMaxNestingDepth = 64;
  * @return 解析得到的文档模型;输入为空、Arena 分配失败或触发截断时,
  *         仍返回可用的(可能为空或被截断的)文档,不返回错误码、不抛异常。
  * @example
- *   mdvn::Arena arena;
+ *   markair::Arena arena;
  *   arena.Init(4 * 1024 * 1024);
  *   const char* text = "# Hello\n";
- *   mdvn::Document doc = mdvn::ParseMarkdown(mdvn::StrSlice{text, 8}, &arena);
+ *   markair::Document doc = markair::ParseMarkdown(markair::StrSlice{text, 8}, &arena);
  */
 Document ParseMarkdown(StrSlice source, Arena* arena);
 
-} // namespace mdvn
+} // namespace markair

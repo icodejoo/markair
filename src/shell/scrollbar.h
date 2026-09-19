@@ -1,4 +1,4 @@
-// mdvn 的滚动条几何计算:正文与大纲侧栏共用的自绘滚动条(方案A,替代正文原
+// markair 的滚动条几何计算:正文与大纲侧栏共用的自绘滚动条(方案A,替代正文原
 // 原生 WS_VSCROLL),全部是纯数字函数,不依赖 HWND/D2D,可脱离 Win32 单测
 // (与 shell/scroll.h、shell/hit_test.h 同一套设计口径)。
 //
@@ -8,7 +8,7 @@
 
 #include "scroll.h"
 
-namespace mdvn {
+namespace markair {
 
 // 滚动条宽度(DIP),正文与大纲侧栏共用同一数值。
 constexpr float kScrollbarWidthDip = 6.0f;
@@ -39,7 +39,7 @@ struct ScrollbarMetrics {
  * @param totalHeightDip 内容总高度(DIP)。
  * @param scrollYDip 当前滚动偏移(DIP)。
  * @return 滑块几何;内容不超过一屏或视口高度非正时 `visible` 为 false。
- * @example auto m = mdvn::CalcScrollbarMetrics(800.0f, 600.0f, 2000.0f, 100.0f);
+ * @example auto m = markair::CalcScrollbarMetrics(800.0f, 600.0f, 2000.0f, 100.0f);
  */
 inline ScrollbarMetrics CalcScrollbarMetrics(float viewportWidthDip, float viewportHeightDip,
                                               float totalHeightDip, float scrollYDip) {
@@ -71,7 +71,7 @@ inline ScrollbarMetrics CalcScrollbarMetrics(float viewportWidthDip, float viewp
  * @param localXDip 视口局部横坐标(DIP)。
  * @param localYDip 视口局部纵坐标(DIP)。
  * @return 落在滑块内返回 true;`m.visible == false` 时恒为 false。
- * @example bool hit = mdvn::IsPointInScrollbarThumb(m, 794.0f, 50.0f);
+ * @example bool hit = markair::IsPointInScrollbarThumb(m, 794.0f, 50.0f);
  */
 inline bool IsPointInScrollbarThumb(const ScrollbarMetrics& m, float localXDip, float localYDip) {
     if (!m.visible) return false;
@@ -86,7 +86,7 @@ inline bool IsPointInScrollbarThumb(const ScrollbarMetrics& m, float localXDip, 
  * @param viewportWidthDip 视口宽度(DIP),轨道贴其右边缘。
  * @param localXDip 视口局部横坐标(DIP)。
  * @return 落在轨道横向范围内返回 true。
- * @example bool inColumn = mdvn::IsPointInScrollbarColumn(800.0f, 794.0f);
+ * @example bool inColumn = markair::IsPointInScrollbarColumn(800.0f, 794.0f);
  */
 inline bool IsPointInScrollbarColumn(float viewportWidthDip, float localXDip) {
     float right = viewportWidthDip - kScrollbarMarginDip;
@@ -103,7 +103,7 @@ inline bool IsPointInScrollbarColumn(float viewportWidthDip, float localXDip) {
  * @param viewportHeightDip 视口高度(DIP)。
  * @param totalHeightDip 内容总高度(DIP)。
  * @return 夹取后的新滚动偏移(DIP);内容不超过一屏时原样返回 `dragStartScrollYDip`。
- * @example float y = mdvn::ScrollYAfterThumbDrag(100.0f, 20.0f, 600.0f, 2000.0f);
+ * @example float y = markair::ScrollYAfterThumbDrag(100.0f, 20.0f, 600.0f, 2000.0f);
  */
 inline float ScrollYAfterThumbDrag(float dragStartScrollYDip, float dragDeltaYDip,
                                     float viewportHeightDip, float totalHeightDip) {
@@ -144,7 +144,7 @@ inline float ScrollYAfterThumbDrag(float dragStartScrollYDip, float dragDeltaYDi
  *
  *   夹取后的新滚动偏移 (DIP);内容不超过一屏时返回 0。
  *
- * @example float y = mdvn::ScrollYAfterTrackClick(300.0f, 600.0f, 2000.0f);
+ * @example float y = markair::ScrollYAfterTrackClick(300.0f, 600.0f, 2000.0f);
  */
 inline float ScrollYAfterTrackClick(float clickYDip, float viewportHeightDip, float totalHeightDip) {
     if (viewportHeightDip <= 0.0f || totalHeightDip <= viewportHeightDip) return 0.0f;
@@ -178,4 +178,4 @@ inline float ScrollYAfterTrackClick(float clickYDip, float viewportHeightDip, fl
     return ClampScrollOffset(newScrollY, totalHeightDip, viewportHeightDip);
 }
 
-}  // namespace mdvn
+}  // namespace markair

@@ -8,7 +8,7 @@
 #include "../hl/lexer.h"
 #include "../util/str.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -202,7 +202,7 @@ constexpr float kSidebarCloseButtonMarginDip = 6.0f;
 constexpr float kSidebarCloseButtonGlyphPaddingDip = 6.0f;  // X 图标相对按钮矩形的内边距
 constexpr float kSidebarFolderButtonGapDip = 4.0f;  // 须与 shell/sidebar.h 的同名常量一致
 
-// 标题级别 -> 缩进量,口径与 mdvn::OutlineItemIndentDip 一致。
+// 标题级别 -> 缩进量,口径与 markair::OutlineItemIndentDip 一致。
 float OutlineRowIndentDip(u8 level) {
     u8 step = (level >= 1) ? static_cast<u8>(level - 1) : 0;
     if (step > 5) step = 5;
@@ -910,7 +910,7 @@ void Renderer::DrawOutlinePanel(float targetHeight,
         if (maxTextWidth <= 0.0f) continue;
 
         // 超长标题截断成省略号:先量整段,放得下就直接画;放不下二分查出
-        // 能塞下的最大前缀长度(与 mdvn::TruncateOutlineTitle 同一口径,
+        // 能塞下的最大前缀长度(与 markair::TruncateOutlineTitle 同一口径,
         // 这里不跨 shell/render 反向 include,直接用 fonts_ 现场量)。
         u32 useLen = wide.len;
         if (useLen > kMaxOutlineTitleChars) useLen = kMaxOutlineTitleChars;
@@ -2204,4 +2204,4 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     return SUCCEEDED(hr);
 }
 
-}  // namespace mdvn
+}  // namespace markair

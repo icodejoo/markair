@@ -141,7 +141,7 @@ int main(int argc, char** argv)
 
     t0 = NowMs();
     static const wchar_t kSample[] =
-        L"mdvn 是一个 Windows 专用的只读 Markdown 查看器,"
+        L"markair 是一个 Windows 专用的只读 Markdown 查看器,"
         L"目标常驻内存 15MB。Mixed CJK/Latin line-breaking test: "
         L"https://github.com/mity/md4c —— 排版质量与断行位置需人工确认。";
     IDWriteTextLayout* layout = nullptr;

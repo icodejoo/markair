@@ -1,4 +1,4 @@
-// mdvn 的全文查找算法层(T37):在已解析好的 `Document` 上做**大小写不敏感**的
+// markair 的全文查找算法层(T37):在已解析好的 `Document` 上做**大小写不敏感**的
 // 子串查找。纯算法,不依赖布局/渲染/Win32,可直接单测(见 tests/test_search.cpp)。
 //
 // 查找范围(裁决 #7):正文 / 代码块 / 链接 URL / 图片 alt 全部参与,直接复用已有的
@@ -16,7 +16,7 @@
 #include "../util/types.h"
 #include "model.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 一处查找命中。
@@ -41,8 +41,8 @@ struct Match {
  * @param fromOffset 起始搜索偏移(字节),用于找下一处命中。
  * @return 命中处的字节偏移;没有命中返回 `kInvalidIndex`。
  * @example
- *   u32 at = mdvn::FindSubstringNoCase(mdvn::StrSlice{"Hello", 5},
- *                                       mdvn::StrSlice{"ell", 3}, 0); // 1
+ *   u32 at = markair::FindSubstringNoCase(markair::StrSlice{"Hello", 5},
+ *                                       markair::StrSlice{"ell", 3}, 0); // 1
  */
 u32 FindSubstringNoCase(StrSlice haystack, StrSlice needle, u32 fromOffset);
 
@@ -56,8 +56,8 @@ u32 FindSubstringNoCase(StrSlice haystack, StrSlice needle, u32 fromOffset);
  * @param out 命中结果输出,非空;函数只追加,不清空(调用方负责重新绑定 Arena)。
  * @return 本次找到的命中总数。
  * @example
- *   mdvn::Vec<mdvn::Match> matches(&findArena);
- *   u32 n = mdvn::SearchDocument(doc, mdvn::StrSlice{"todo", 4}, &scratch, &matches);
+ *   markair::Vec<markair::Match> matches(&findArena);
+ *   u32 n = markair::SearchDocument(doc, markair::StrSlice{"todo", 4}, &scratch, &matches);
  */
 u32 SearchDocument(const Document& doc, StrSlice needle, Arena* scratch, Vec<Match>* out);
 
@@ -74,8 +74,8 @@ u32 SearchDocument(const Document& doc, StrSlice needle, Arena* scratch, Vec<Mat
  * @return 可以映射返回 true;不可高亮返回 false(此时两个输出参数不被修改)。
  * @example
  *   u32 pos = 0, len = 0;
- *   if (mdvn::MatchToTextRange(doc, m, &pos, &len)) { / * HitTestTextRange * / }
+ *   if (markair::MatchToTextRange(doc, m, &pos, &len)) { / * HitTestTextRange * / }
  */
 bool MatchToTextRange(const Document& doc, const Match& m, u32* outPosition, u32* outLength);
 
-}  // namespace mdvn
+}  // namespace markair

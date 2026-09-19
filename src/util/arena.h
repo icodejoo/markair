@@ -1,9 +1,9 @@
-// mdvn 的内存分配策略：不用 new/malloc 做长生命周期分配，统一走 Arena。
+// markair 的内存分配策略：不用 new/malloc 做长生命周期分配，统一走 Arena。
 #pragma once
 
 #include <cstddef>
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 基于 VirtualAlloc 的线性内存池。
@@ -13,7 +13,7 @@ namespace mdvn {
  * 这种生命周期，避免大量小对象走系统堆造成的碎片与开销。
  *
  * @example
- *   mdvn::Arena arena;
+ *   markair::Arena arena;
  *   if (!arena.Init(64 * 1024 * 1024)) { // 预留 64MB 地址空间
  *       // 处理初始化失败
  *   }
@@ -66,4 +66,4 @@ private:
     size_t used_;           // 已分配游标，相对 base_ 的偏移
 };
 
-} // namespace mdvn
+} // namespace markair

@@ -2,7 +2,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // Minimum and maximum allowable sidebar width in DIPs.
 //
@@ -464,4 +464,4 @@ inline SidebarRectDip SidebarFolderButtonLocalRectDip(
     return SidebarRectDip{left, closeRect.top, right, closeRect.bottom};
 }
 
-}  // namespace mdvn
+}  // namespace markair

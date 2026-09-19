@@ -17,13 +17,13 @@ T78 内存泄漏排查基线脚本（04-delivery-plan.md 明文要求："反复�
   两者任一失败，该序列判定为"疑似泄漏"，脚本以 exit code 1 结束。
 
 用法：
-  powershell -File ci/leak_probe.ps1 [-N 100] [-ExePath <mdvn.exe>] [-CorpusDir <dir>]
+  powershell -File ci/leak_probe.ps1 [-N 100] [-ExePath <markair.exe>] [-CorpusDir <dir>]
               [-OutMarkdown <path>]
 #>
 
 param(
     [int]$N = 100,
-    [string]$ExePath = "$PSScriptRoot\..\build\src\Release\mdvn.exe",
+    [string]$ExePath = "$PSScriptRoot\..\build\src\Release\markair.exe",
     [string]$CorpusDir = "$PSScriptRoot\..\bench\corpus",
     [string]$OutMarkdown = "$PSScriptRoot\..\bench\M3-LEAK.md"
 )
@@ -92,7 +92,7 @@ function Invoke-FreshProcessRound([int]$count) {
     $samples = New-Object System.Collections.Generic.List[double]
     for ($i = 0; $i -lt $count; $i++) {
         $file = $corpusFiles[$i % $corpusFiles.Count].FullName
-        $stderrFile = [System.IO.Path]::Combine($env:TEMP, "mdvn_leak_err_$([guid]::NewGuid().ToString('N')).txt")
+        $stderrFile = [System.IO.Path]::Combine($env:TEMP, "markair_leak_err_$([guid]::NewGuid().ToString('N')).txt")
         $proc = Start-Process -FilePath $ExePath `
             -ArgumentList @("--bench", "`"$file`"") `
             -RedirectStandardError $stderrFile -PassThru
@@ -123,7 +123,7 @@ function Invoke-FreshProcessRound([int]$count) {
 # 解析 "bench_loop_iter=<i> private_bytes=<n>"。
 # ---------------------------------------------------------------------------
 function Invoke-InProcessLoop([string]$kind, [int]$count, [string]$seedFile, [string]$corpusDirForReplace) {
-    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "mdvn_leak_loop_err_$([guid]::NewGuid().ToString('N')).txt")
+    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "markair_leak_loop_err_$([guid]::NewGuid().ToString('N')).txt")
     $args = @("--bench", "--bench-loop=$kind`:$count")
     if ($kind -eq "replace") { $args += "--bench-loop-dir=`"$corpusDirForReplace`"" }
     $args += "`"$seedFile`""

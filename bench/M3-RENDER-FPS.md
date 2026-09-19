@@ -6,7 +6,7 @@
 ## 1. 技术前提（开工前已核实，未重新调研）
 
 `src/render/renderer.cpp:379` 无条件把 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`
-设为渲染目标类型，走的是 `CreateHwndRenderTarget`，**没有 mdvn 自己的 DXGI
+设为渲染目标类型，走的是 `CreateHwndRenderTarget`，**没有 markair 自己的 DXGI
 交换链**。PresentMon 本质是订阅 ETW 里的 DXGI/D3D Present 事件，理论上"抓
 不到软件渲染窗口的帧"是大概率事件——这正是 T72 要求先探测而不是先选型/先
 写代码的原因。
@@ -21,25 +21,25 @@
 ### 2.2 探测命令
 
 ```powershell
-# 1) 启动 mdvn 打开基准语料
-E:\workspaces\mdvn\build\src\Release\mdvn.exe bench\BENCH-A.md
+# 1) 启动 markair 打开基准语料
+E:\workspaces\markair\build\src\Release\markair.exe bench\BENCH-A.md
 
 # 2) 并行：PresentMon 采集 10 秒 + 脚本化滚动 10 秒
-tools\PresentMon.exe --process_name mdvn.exe --timed 10 --terminate_after_timed `
+tools\PresentMon.exe --process_name markair.exe --timed 10 --terminate_after_timed `
     --output_file bench\render_fps\frametimes_BENCH-A_20260918.csv
 powershell -File bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16
 ```
 
 ### 2.3 探测结果：**能抓到帧，出乎预期**
 
-PresentMon 对 mdvn.exe 产出了 268 行有效帧记录（BENCH-A）/ 253 行（BENCH-C），
+PresentMon 对 markair.exe 产出了 268 行有效帧记录（BENCH-A）/ 253 行（BENCH-C），
 `PresentMode` 列的值是 **`Composed: Copy with GPU GDI`**。
 
-**原因分析**：mdvn 自己确实没有 DXGI 交换链，但 Windows 的桌面窗口管理器
+**原因分析**：markair 自己确实没有 DXGI 交换链，但 Windows 的桌面窗口管理器
 （DWM）在合成桌面时，会把每个顶层窗口的位图作为一次"Present"提交进
 DWM 自己的合成交换链——这条 DWM 合成层的 Present 事件同样能被 PresentMon
-的 ETW 订阅捕获到，且以 mdvn.exe 的进程名/PID 归类。也就是说 PresentMon 在
-这里测到的不是"mdvn 自己发起的 D3D Present"，而是**"mdvn 这个窗口内容被
+的 ETW 订阅捕获到，且以 markair.exe 的进程名/PID 归类。也就是说 PresentMon 在
+这里测到的不是"markair 自己发起的 D3D Present"，而是**"markair 这个窗口内容被
 合成上屏的频率"**——这恰好就是 01 §4 想要的"用户实际看到的刷新节奏"，
 比自建埋点（只能测到 D2D `EndDraw` 返回，不知道 DWM 合成层还要再等多久
 才真正上屏）口径更贴近真实体感。
@@ -52,7 +52,7 @@ DWM 自己的合成交换链——这条 DWM 合成层的 Present 事件同样�
 
 新增 `bench/scroll_probe.ps1`：
 
-- 用 `EnumWindows + GetClassNameW` 按窗口类名 `mdvn_main_window` 定位目标窗口
+- 用 `EnumWindows + GetClassNameW` 按窗口类名 `markair_main_window` 定位目标窗口
   （详见脚本内注释：**本机实测 `FindWindowW` 对本项目窗口稳定返回 NULL**，
   `GetLastError` 也不是"未找到"该有的错误码，但同一进程里 `EnumWindows`
   能正常枚举到该窗口并核对类名一致，怀疑是本机某个 hook/安全软件拦截了
@@ -91,11 +91,11 @@ DWM 自己的合成交换链——这条 DWM 合成层的 Present 事件同样�
 - 掉帧率接近 100%（几乎每一帧都超过 16.6ms 的单帧预算）；
 - 平均 FPS 约 32.3，远低于 55 FPS 的不通过线，更远低于 60 FPS 的目标线。
 
-⚠️ **注意口径边界**：本次测的是"持续投递滚轮消息期间 mdvn 窗口被 DWM
-合成上屏的频率"，混杂了两部分开销——① mdvn 收到 `WM_MOUSEWHEEL` 后自己
+⚠️ **注意口径边界**：本次测的是"持续投递滚轮消息期间 markair 窗口被 DWM
+合成上屏的频率"，混杂了两部分开销——① markair 收到 `WM_MOUSEWHEEL` 后自己
 的滚动重绘耗时（`InvalidateRect` → `WM_PAINT` → D2D `EndDraw`）；②
 DWM 把该位图合成上屏的固有延迟。**这正是 T76（软件渲染路径验证）要接手
-分析的下一步**：需要拆解这 30ms 左右的帧时间里，mdvn 自己的重绘占多少、
+分析的下一步**：需要拆解这 30ms 左右的帧时间里，markair 自己的重绘占多少、
 DWM 合成占多少，才能判断"达不到 60 FPS"是重绘慢还是合成慢——本任务
 （T72）只负责把测量能力立起来，不做归因和优化，归因与优化留给 T76。
 
@@ -113,7 +113,7 @@ DWM 合成占多少，才能判断"达不到 60 FPS"是重绘慢还是合成慢�
 
 - 本任务未改动任何 `src/` 下文件。
 - 掉帧率数据已经足以支撑 T76 的"软件渲染是否达到 60 FPS"这一实测结论；
-  T76 需要进一步拆解 mdvn 自身重绘耗时与 DWM 合成耗时的占比。
+  T76 需要进一步拆解 markair 自身重绘耗时与 DWM 合成耗时的占比。
 - CI 上跑帧率门禁大概率假红（`windows-latest` 是无 GPU 虚拟机，DWM 合成
   行为在虚拟机上与本机不同），此结论留给 T83 处理"本机门禁 vs CI 门禁"
   两套阈值。

@@ -1,7 +1,7 @@
 #include "str.h"
 #include "span.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -183,4 +183,4 @@ StrSlice Utf16ToUtf8(Utf16Slice input, Arena* arena) {
     return StrSlice{out.Data(), out.Size() - 1};
 }
 
-} // namespace mdvn
+} // namespace markair

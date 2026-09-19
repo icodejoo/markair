@@ -1,6 +1,6 @@
 #include "outline.h"
 
-namespace mdvn {
+namespace markair {
 
 u32 ExtractOutline(const Document& doc, Vec<OutlineItem>* out) {
     u32 found = 0;
@@ -16,4 +16,4 @@ u32 ExtractOutline(const Document& doc, Vec<OutlineItem>* out) {
     return found;
 }
 
-} // namespace mdvn
+} // namespace markair

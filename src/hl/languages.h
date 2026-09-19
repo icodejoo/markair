@@ -1,4 +1,4 @@
-// mdvn 语言规则表与围栏语言别名映射(T52)。纯数据 + 纯函数模块,不链接任何
+// markair 语言规则表与围栏语言别名映射(T52)。纯数据 + 纯函数模块,不链接任何
 // Win32/D2D/DWrite,可脱离图形环境单测——这也是后续 T51 词法器的约束。
 //
 // 职责边界:本文件只回答"这个围栏语言标记归一化成哪个 languageId、这个
@@ -9,7 +9,7 @@
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 语言 ID。`kLanguageNone` 表示"无高亮",是未命中别名表时的归一化结果,
@@ -71,7 +71,7 @@ struct LanguageRule {
  *
  * @param id 语言 ID(取值范围 [0, kLanguageCount)),越界视为 kLanguageNone。
  * @return 对应的规则表引用,生命周期与进程等长(静态数据)。
- * @example const LanguageRule& rule = mdvn::GetLanguageRule(mdvn::kLanguageCpp);
+ * @example const LanguageRule& rule = markair::GetLanguageRule(markair::kLanguageCpp);
  */
 const LanguageRule& GetLanguageRule(LanguageId id);
 
@@ -86,8 +86,8 @@ const LanguageRule& GetLanguageRule(LanguageId id);
  *
  * @param fenceInfo 围栏语言标记(如 "cpp"、"Py"、"JS"),空切片返回 kLanguageNone。
  * @return 归一化后的语言 ID。
- * @example mdvn::LanguageId id = mdvn::ResolveLanguageId(mdvn::StrSlice{"PY", 2}); // kLanguagePython
+ * @example markair::LanguageId id = markair::ResolveLanguageId(markair::StrSlice{"PY", 2}); // kLanguagePython
  */
 LanguageId ResolveLanguageId(StrSlice fenceInfo);
 
-} // namespace mdvn
+} // namespace markair

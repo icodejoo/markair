@@ -1,4 +1,4 @@
-// mdvn 的 `Ctrl+F` 查找条状态(T37 的 UI 层)。
+// markair 的 `Ctrl+F` 查找条状态(T37 的 UI 层)。
 //
 // 与 `shell/scroll.h` / `shell/hit_test.h` 同一口径:**不 include windows.h**,
 // 这里只维护"查询串 + 命中集合 + 当前命中下标"这套纯状态机,真正的按键翻译
@@ -17,7 +17,7 @@
 #include "../util/span.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 查询串的最大长度(UTF-16 code unit,不含结尾 '\0')。查找条不是编辑器,
 // 固定小缓冲即可,顺带天然挡住"超长关键词"这类退化输入。
@@ -30,11 +30,11 @@ constexpr u32 kMaxFindQueryChars = 128;
  * 不做增量维护、不使用任何 STL 容器。
  *
  * @example
- *   mdvn::FindSession find(&findArena, &findScratch);
+ *   markair::FindSession find(&findArena, &findScratch);
  *   find.Open();
  *   find.AppendChar(L't');
  *   find.Rerun(doc);
- *   const mdvn::Match* m = find.CurrentMatch();
+ *   const markair::Match* m = find.CurrentMatch();
  */
 class FindSession {
 public:
@@ -43,7 +43,7 @@ public:
      * @param results 存放命中数组与 UTF-8 查询串,每次 `Rerun` 前整体 Reset。
      * @param scratch 传给 `SearchDocument` 的逐块拼接缓冲,与 results 必须是
      *        不同的两块(搜索过程中会反复 Reset scratch)。
-     * @example mdvn::FindSession find(&findArena, &findScratch);
+     * @example markair::FindSession find(&findArena, &findScratch);
      */
     FindSession(Arena* results, Arena* scratch);
 
@@ -153,4 +153,4 @@ private:
     bool dirty_;                  // 查询串自上次 Rerun 后是否变过,见 Dirty() 的注释
 };
 
-}  // namespace mdvn
+}  // namespace markair

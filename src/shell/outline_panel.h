@@ -1,4 +1,4 @@
-// mdvn 大纲侧栏(T63):`Ctrl+\` 切换,默认关闭。
+// markair 大纲侧栏(T63):`Ctrl+\` 切换,默认关闭。
 //
 // 硬性约束(裁决 #5/#6/#7,写死在这里避免后续维护者放松):
 //   - "关闭时开销为 0"从结构上保证,不是靠一个 bool 开关——本类实例本身
@@ -15,7 +15,7 @@
 //     纯函数),滚动过程中不重复计算。
 //
 // 本文件不 include <windows.h>,二分查找/截断/自身滚动裁剪都是纯数字函数,
-// 可以直接链进 mdvn_tests.exe 单测(见 tests/test_outline_panel.cpp)。
+// 可以直接链进 markair_tests.exe 单测(见 tests/test_outline_panel.cpp)。
 #pragma once
 
 #include "../doc/outline.h"
@@ -25,7 +25,7 @@
 #include "scroll.h"
 #include "sidebar.h"
 
-namespace mdvn {
+namespace markair {
 
 // 侧栏默认宽度(DIP),随 DPI/字号缩放(调用方按需再乘缩放系数)。T63b 起
 // 支持拖拽调宽(WindowState::outlinePanelWidthDip 才是运行期的实际宽度),
@@ -42,7 +42,7 @@ constexpr float kOutlinePanelMaxWidthDip = 480.0f;
  * 纯数字函数,不依赖 Win32,可脱离窗口环境单测。
  * @param widthDip 待夹取的宽度(DIP)。
  * @return 夹取后的合法宽度(DIP)。
- * @example float w = mdvn::ClampOutlinePanelWidth(50.0f); // 得 160
+ * @example float w = markair::ClampOutlinePanelWidth(50.0f); // 得 160
  */
 inline float ClampOutlinePanelWidth(float widthDip) {
     if (widthDip < kOutlinePanelMinWidthDip) return kOutlinePanelMinWidthDip;
@@ -130,7 +130,7 @@ constexpr int kOutlineHighlightDebounceMs = 150;
  * 标题级别(1-6)换算成缩进量(DIP)。纯数字函数,不依赖任何渲染上下文。
  * @param level 标题级别,1-6(与 `Block::level` 一致);超出范围按边界钳制。
  * @return 缩进量(DIP),level 1 为 0,每升一级增加 `kOutlineIndentStepDip`。
- * @example float indent = mdvn::OutlineItemIndentDip(3); // 得 28.0f
+ * @example float indent = markair::OutlineItemIndentDip(3); // 得 28.0f
  */
 inline float OutlineItemIndentDip(u8 level) {
     u8 step = (level >= 1) ? static_cast<u8>(level - 1) : 0;
@@ -142,7 +142,7 @@ inline float OutlineItemIndentDip(u8 level) {
  * 大纲条目在侧栏自身坐标系里的顶部 y 坐标(未减去侧栏自身滚动偏移)。
  * @param indexInPanel 条目在大纲数组里的下标(非块下标)。
  * @return `indexInPanel * kOutlineItemHeightDip`。
- * @example float y = mdvn::OutlineItemTopDip(2); // 得 56.0f
+ * @example float y = markair::OutlineItemTopDip(2); // 得 56.0f
  */
 inline float OutlineItemTopDip(u32 indexInPanel) {
     return static_cast<float>(indexInPanel) * kOutlineItemHeightDip;
@@ -152,7 +152,7 @@ inline float OutlineItemTopDip(u32 indexInPanel) {
  * 侧栏自身内容总高度(DIP),用于夹取侧栏自身滚动偏移。
  * @param itemCount 大纲条目总数。
  * @return `itemCount * kOutlineItemHeightDip`。
- * @example float h = mdvn::OutlinePanelContentHeightDip(10);
+ * @example float h = markair::OutlinePanelContentHeightDip(10);
  */
 inline float OutlinePanelContentHeightDip(u32 itemCount) {
     return static_cast<float>(itemCount) * kOutlineItemHeightDip;
@@ -183,7 +183,7 @@ struct OutlineTextMeasurer {
  * @return 实际写入 outBuf 的字符数(不含结尾 '\0')。
  * @example
  *   wchar_t buf[64];
- *   u32 n = mdvn::TruncateOutlineTitle(title, len, 180.0f, measurer, buf, 64);
+ *   u32 n = markair::TruncateOutlineTitle(title, len, 180.0f, measurer, buf, 64);
  */
 u32 TruncateOutlineTitle(const wchar_t* text, u32 len, float maxWidthDip,
                           const OutlineTextMeasurer& measurer,
@@ -206,7 +206,7 @@ u32 TruncateOutlineTitle(const wchar_t* text, u32 len, float maxWidthDip,
  * @param count itemTops 的长度;为 0 时直接返回 `kInvalidIndex`。
  * @param viewportTop 当前视口顶部 y 坐标(DIP)。
  * @return 应高亮的条目下标;无高亮返回 `kInvalidIndex`。
- * @example u32 idx = mdvn::FindCurrentOutlineItem(tops, n, scrollY);
+ * @example u32 idx = markair::FindCurrentOutlineItem(tops, n, scrollY);
  */
 u32 FindCurrentOutlineItem(const float* itemTops, u32 count, float viewportTop);
 
@@ -222,7 +222,7 @@ u32 FindCurrentOutlineItem(const float* itemTops, u32 count, float viewportTop);
  * @param scrollY 侧栏自身滚动偏移(DIP),即 `OutlinePanel::ScrollY()`。
  * @return 命中的条目下标;点落在侧栏内容之外(顶部之前/末条之后)返回
  *         `kInvalidIndex`。
- * @example u32 idx = mdvn::FindOutlineItemAtY(panel.ItemCount(), localY, panel.ScrollY());
+ * @example u32 idx = markair::FindOutlineItemAtY(panel.ItemCount(), localY, panel.ScrollY());
  */
 u32 FindOutlineItemAtY(u32 itemCount, float panelLocalY, float scrollY);
 
@@ -236,9 +236,9 @@ u32 FindOutlineItemAtY(u32 itemCount, float panelLocalY, float scrollY);
  * (成员全部是 POD/Arena 绑定容器,无需析构)。
  *
  * @example
- *   mdvn::Arena arena;
+ *   markair::Arena arena;
  *   arena.Init(4 * 1024 * 1024);
- *   mdvn::OutlinePanel panel(&arena);
+ *   markair::OutlinePanel panel(&arena);
  *   panel.Rebuild(doc);
  *   u32 idx = panel.CurrentItem();
  */
@@ -304,4 +304,4 @@ private:
     float scrollY_;           // 侧栏自身滚动偏移(DIP)
 };
 
-}  // namespace mdvn
+}  // namespace markair

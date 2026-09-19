@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace mdvn {
+namespace markair {
 
 // sRGB -> 线性空间的单通道换算(WCAG 2.x 公式),用 std::pow 实现 2.4 次方,
 // 因此不是 constexpr——theme.h 里两份调色板的常量构造不依赖本函数。
@@ -21,4 +21,4 @@ float ContrastRatio(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b) {
     return (lighter + 0.05f) / (darker + 0.05f);
 }
 
-}  // namespace mdvn
+}  // namespace markair

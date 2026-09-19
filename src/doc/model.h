@@ -1,4 +1,4 @@
-// mdvn 的文档模型:md4c 回调解析结果落地成的 Block/Inline 紧凑数组([架构 §7])。
+// markair 的文档模型:md4c 回调解析结果落地成的 Block/Inline 紧凑数组([架构 §7])。
 // 不建指针链表 AST,全部数据经由 Arena 分配,换文档时随 Arena 整体 reset。
 #pragma once
 
@@ -8,7 +8,7 @@
 #include "../util/types.h"
 #include "detail.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 块级节点类型,只覆盖 M0 范围内的 Markdown 元素(见 05-m0-tasks.md "M0 的边界")。 */
 enum class BlockType : u8 {
@@ -106,7 +106,7 @@ struct Inline {
     u32 linkTargetIdx;
 };
 
-/** 链接/图片目标的种类,用于渲染时决定跳转行为(纯 mdvn 自定义,不依赖 md4c)。 */
+/** 链接/图片目标的种类,用于渲染时决定跳转行为(纯 markair 自定义,不依赖 md4c)。 */
 enum class LinkTargetKind : u8 {
     External,     // 完整 URL(http/https 或其它带 scheme 的外部链接)
     RelativePath, // 相对路径(本地文件/相对链接)
@@ -127,9 +127,9 @@ struct LinkTarget {
  * 所有数组内存均来自构造时传入的 Arena,不做任何独立堆分配。
  *
  * @example
- *   mdvn::Arena arena;
+ *   markair::Arena arena;
  *   arena.Init(4 * 1024 * 1024);
- *   mdvn::Document doc = mdvn::ParseMarkdown(mdvn::StrSlice{text, len}, &arena);
+ *   markair::Document doc = markair::ParseMarkdown(markair::StrSlice{text, len}, &arena);
  *   if (doc.truncated) { / * 提示"文档过大/过深,已截断" * / }
  */
 struct Document {
@@ -187,4 +187,4 @@ inline const char* InlineTextBytes(const Inline& in, const Document& doc) {
     return doc.source.data + in.textOffset;
 }
 
-} // namespace mdvn
+} // namespace markair

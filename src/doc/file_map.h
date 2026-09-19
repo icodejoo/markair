@@ -1,10 +1,10 @@
-// mdvn 的只读文件内存映射:零拷贝读取磁盘文件内容,不引入异常/RTTI。
+// markair 的只读文件内存映射:零拷贝读取磁盘文件内容,不引入异常/RTTI。
 #pragma once
 
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 文件映射操作的错误码。
@@ -21,9 +21,9 @@ enum class FileMapError {
  * (遵守"无副作用全局构造"约束的同源精神,保持资源释放时机显式可控)。
  *
  * @example
- *   mdvn::FileMap fm;
- *   if (fm.Open(L"C:\\a.md") == mdvn::FileMapError::None) {
- *       mdvn::StrSlice content = fm.Data();
+ *   markair::FileMap fm;
+ *   if (fm.Open(L"C:\\a.md") == markair::FileMapError::None) {
+ *       markair::StrSlice content = fm.Data();
  *       // 使用 content.data / content.len...
  *       fm.Close();
  *   }
@@ -63,4 +63,4 @@ private:
     u64 size_;      // 文件字节数(映射视图长度)
 };
 
-} // namespace mdvn
+} // namespace markair

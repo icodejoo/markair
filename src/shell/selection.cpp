@@ -2,7 +2,7 @@
 
 #include "../util/str.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -91,4 +91,4 @@ StrSlice SelectionPlainTextUtf8(const Document& doc, const SelectionRange& range
     return StrSlice{outBuf, written};
 }
 
-}  // namespace mdvn
+}  // namespace markair

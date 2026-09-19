@@ -1,4 +1,4 @@
-// mdvn 图片缓存(T32,2026-09-17 第二次裁决:解码位图跟随块级虚拟化生命周期)。
+// markair 图片缓存(T32,2026-09-17 第二次裁决:解码位图跟随块级虚拟化生命周期)。
 //
 // 本模块**没有任何淘汰算法**,因为它自己不决定"什么时候该丢":解码位图的
 // 生死完全挂在已有的"可见 ± 1 屏"块级虚拟化触发点上(BlockLayoutEngine::
@@ -27,7 +27,7 @@
 
 struct ID2D1Bitmap;
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 缓存中一张图片的条目。
@@ -54,12 +54,12 @@ struct ImageCacheEntry {
  * 典型用法是"块进入可见范围时按需解码、滚出时释放位图":
  *
  * @example
- *   mdvn::ImageCache cache;
+ *   markair::ImageCache cache;
  *   cache.Init(&docArena);
  *   // 块进入"可见 ± 1 屏":
- *   const mdvn::ImageCacheEntry* e = cache.Find(href);
+ *   const markair::ImageCacheEntry* e = cache.Find(href);
  *   if (!e || !e->bitmap) {
- *       mdvn::DecodedImage img = decoder.DecodeFromFile(path, renderTarget);
+ *       markair::DecodedImage img = decoder.DecodeFromFile(path, renderTarget);
  *       cache.Put(href, img.bitmap, img.width, img.height, img.status, img.wasDownsampled);
  *   }
  *   // 块滚出"可见 ± 1 屏":
@@ -90,7 +90,7 @@ public:
      * @param key 图片来源 key(通常是 LinkTarget::href)。
      * @return 命中返回条目指针(指向内部数组,后续 Put 可能因扩容失效,
      *         调用方不应长期持有);未命中返回 nullptr。
-     * @example const mdvn::ImageCacheEntry* e = cache.Find(href);
+     * @example const markair::ImageCacheEntry* e = cache.Find(href);
      */
     const ImageCacheEntry* Find(StrSlice key) const;
 
@@ -140,8 +140,8 @@ public:
      * @param outLen 输出:字节数,非空。
      * @return 已下载返回字节指针(arena 拥有,活到文档关闭);未下载返回 nullptr。
      * @example
-     *   mdvn::u32 n = 0;
-     *   const mdvn::u8* raw = cache.FindRemoteBytes(url, &n);
+     *   markair::u32 n = 0;
+     *   const markair::u8* raw = cache.FindRemoteBytes(url, &n);
      *   if (!raw) loader.RequestOnUserClick(url);
      */
     const u8* FindRemoteBytes(StrSlice key, u32* outLen) const;
@@ -153,7 +153,7 @@ public:
      * 当前**仍存活的**解码位图占用的像素缓冲总字节数(Σ width × height × 4),
      * 即裁决 #5 的计量口径;位图已被 ReleaseBitmap 丢掉的条目不计入。
      * @return 总字节数。
-     * @example MDVN_CHECK(cache.TotalBytes() <= budget);
+     * @example MARKAIR_CHECK(cache.TotalBytes() <= budget);
      */
     u64 TotalBytes() const { return totalBytes_; }
 
@@ -189,8 +189,8 @@ private:
  * 计算图片 key 的 FNV-1a 64 位哈希。抽成公开函数便于单测直接验证散列一致性。
  * @param key 任意字节切片。
  * @return 64 位哈希值。
- * @example mdvn::u64 h = mdvn::HashImageKey(mdvn::StrSlice{"a.png", 5});
+ * @example markair::u64 h = markair::HashImageKey(markair::StrSlice{"a.png", 5});
  */
 u64 HashImageKey(StrSlice key);
 
-}  // namespace mdvn
+}  // namespace markair

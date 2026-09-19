@@ -1,4 +1,4 @@
-// mdvn 代码高亮词法器(T51):把一段代码文本切分成 Token 数组,供渲染层
+// markair 代码高亮词法器(T51):把一段代码文本切分成 Token 数组,供渲染层
 // (T53)按类型上色。纯函数模块,手写状态机,逐字节扫描 UTF-8——不链接任何
 // Win32/D2D/DWrite,可脱离图形环境单测。
 //
@@ -13,7 +13,7 @@
 #include "../util/types.h"
 #include "languages.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * Token 类型,固定 7 类(不超过 8 类上限),取值刚好放进 u8。
@@ -80,11 +80,11 @@ struct LexResult {
  * @return 扫描结果;若 arena 分配失败,tokens.len 可能小于实际应有数量,
  *         但绝不会返回悬空/越界指针。
  * @example
- *   mdvn::Arena hlArena;
+ *   markair::Arena hlArena;
  *   hlArena.Init(1 * 1024 * 1024);
- *   const mdvn::LanguageRule& rule = mdvn::GetLanguageRule(mdvn::kLanguageCpp);
- *   mdvn::LexResult result = mdvn::LexCodeBlock(mdvn::StrSlice{"int x;", 6}, rule, &hlArena);
+ *   const markair::LanguageRule& rule = markair::GetLanguageRule(markair::kLanguageCpp);
+ *   markair::LexResult result = markair::LexCodeBlock(markair::StrSlice{"int x;", 6}, rule, &hlArena);
  */
 LexResult LexCodeBlock(StrSlice code, const LanguageRule& rule, Arena* arena);
 
-} // namespace mdvn
+} // namespace markair

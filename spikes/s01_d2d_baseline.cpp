@@ -55,7 +55,7 @@ void EnsureRenderTarget(HWND hwnd) {
     D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
     D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties();
-#if defined(MDVN_D2D_SOFTWARE)
+#if defined(MARKAIR_D2D_SOFTWARE)
     rtProps.type = D2D1_RENDER_TARGET_TYPE_SOFTWARE;
 #endif
     g_d2dFactory->CreateHwndRenderTarget(
@@ -129,7 +129,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     QueryPerformanceFrequency(&g_freq);
     QueryPerformanceCounter(&g_tProcessStart);
 
-    // mdvn 是只读的 markdown 查看器，不需要文字输入，禁用 IME/TSF 激活可
+    // markair 是只读的 markdown 查看器，不需要文字输入，禁用 IME/TSF 激活可
     // 避免第三方输入法（如搜狗）把自己的 TSF 模块注入进来，实测能省下
     // 二三十 MB 级别的 private bytes（与我们自己的渲染逻辑无关）。
     ImmDisableIME(static_cast<DWORD>(-1));
@@ -146,12 +146,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     WNDCLASSW wc{};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = L"mdvn_s01_d2d_baseline";
+    wc.lpszClassName = L"markair_s01_d2d_baseline";
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
 
     HWND hwnd = CreateWindowExW(
-        0, wc.lpszClassName, L"mdvn S1 spike", WS_OVERLAPPEDWINDOW,
+        0, wc.lpszClassName, L"markair S1 spike", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         nullptr, nullptr, hInstance, nullptr);
 

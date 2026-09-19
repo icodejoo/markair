@@ -1,4 +1,4 @@
-// mdvn 的块级 detail 侧表:表格/单元格对齐/任务列表/脚注定义的按类型附加信息。
+// markair 的块级 detail 侧表:表格/单元格对齐/任务列表/脚注定义的按类型附加信息。
 // 不依赖 md4c.h,md4c 的枚举/结构体到这里的类型转换统一在 parser.cpp 里完成。
 #pragma once
 
@@ -6,7 +6,7 @@
 #include "../util/types.h"
 #include "../hl/languages.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 单元格对齐方式,对应 md4c 的 MD_ALIGN(转换发生在 parser.cpp)。 */
 enum class CellAlign : u8 {
@@ -63,4 +63,4 @@ struct FootnoteDetail {
     StrSlice label; // 原始标签文本,如 "1" 或 "note"
 };
 
-} // namespace mdvn
+} // namespace markair

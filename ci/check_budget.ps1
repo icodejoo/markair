@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    mdvn CI 性能门禁脚本（M0 T16，M1 T44 扩展，M2 T69 扩展，M3 T83 对齐 01 §4）。
+    markair CI 性能门禁脚本（M0 T16，M1 T44 扩展，M2 T69 扩展，M3 T83 对齐 01 §4）。
 
 .DESCRIPTION
     T83 把现行 8 步门禁**逐项对齐 01-requirements.md §4** 的硬指标表（该表 8 行，
     见文末汇总）。依次执行：
     1. 若 Release 构建产物不存在（或指定 -ForceRebuild），先执行 CMake 构建；
-    2. 运行 mdvn_tests.exe，退出码非 0 则整体失败；
+    2. 运行 markair_tests.exe，退出码非 0 则整体失败；
     3. 暖启动首屏门禁（BENCH-A，01 §4 第 1 行）；
     4. 冷启动首屏门禁（BENCH-A + RAMMap 清 standby，01 §4 第 2 行）；
     5. exe 体积硬线门禁（01 §4 第 5 行，1.5MB，取代旧的 8MB 宽松安全网）；
@@ -33,7 +33,7 @@
     ——— 本机门禁 vs CI 门禁：为什么要分两套（-Strict 开关）———
     GitHub Actions 的 windows-latest runner 是无 GPU 虚拟机，性能波动大：
     ① 暖启动首屏、10MB 文档首屏、帧率三项在 CI 上大概率比本机慢/差；
-    ② 帧率门禁走的是 mdvn 自身重绘耗时（"口径①"，见下方说明），不依赖
+    ② 帧率门禁走的是 markair 自身重绘耗时（"口径①"，见下方说明），不依赖
        GPU/DWM 合成，相对 CI 友好，但仍可能因虚拟机 CPU 被邻居抢占而偏高。
     因此本脚本默认（不加 -Strict）对"暖启动"这一项，用 01 §4 的**上限值**
     （120ms）而不是目标值（60ms）做硬性判据——理由见 T74/M3-STARTUP.md：
@@ -150,7 +150,7 @@
     怀疑是工具链版本差异导致的编译产物基线漂移,不是代码引入的真实内存
     回归。深挖过 Win32+D2D 常见内存优化手段(延迟创建渲染目标、图片/
     TextLayout 虚拟化、TextFormat 复用、按窗口摘 IME 防第三方 TSF 注入、
-    避免 PushLayer 等)——mdvn 代码库里能落地的都已经落地,没有找到新的
+    避免 PushLayer 等)——markair 代码库里能落地的都已经落地,没有找到新的
     可优化点，遂上调阈值而不是继续盲找。
     [口径提醒]"本机14.4MB"和这里的9.5/10.2MB门禁不是同一把尺子——本机
     数字来自本地临时对照测量脚本，未套用 CI 这套代理指标的既定换算公式，
@@ -195,7 +195,7 @@
     "滚动帧率"这一项改用 M3-RENDER.md 里的**口径①**：`--bench` 模式下
     `src/app/bench.cpp` 的逐帧重绘耗时埋点（`EmitFrameReport` 输出的
     `frame_total_p50_ms`），换算成"渲染能力上限 FPS = 1000 / p50"。这个
-    口径不依赖 GPU/DWM/ETW/管理员权限，测的是 mdvn 自身重绘一帧要多久，
+    口径不依赖 GPU/DWM/ETW/管理员权限，测的是 markair 自身重绘一帧要多久，
     是"能不能在 16.6ms 预算内画完一帧"这条硬指标背后真正的产品能力，
     在无 GPU 虚拟机上依然可信（T76 已证实软件渲染路径与 GPU 无关）。
     PresentMon 的口径②（DWM 合成层实测 FPS）留给本机人工复核，复跑命令见
@@ -207,7 +207,7 @@
 
 .PARAMETER SkipFrameRateGate
     跳过滚动帧率门禁。仅用于本地调试其它门禁项时节省时间（该步骤要真实
-    启动一次 mdvn 进程并投递 10 秒滚轮消息），CI 中不应加这个开关。
+    启动一次 markair 进程并投递 10 秒滚轮消息），CI 中不应加这个开关。
 
 .PARAMETER ExeSizeSoftLimitMB
     （T83 起降级为"仅供参考的旧宽松安全网"，不再是硬性门禁，硬性门禁见
@@ -291,8 +291,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 
 $buildDir = Join-Path $repoRoot "build"
-$exePath = Join-Path $buildDir "src\$BuildConfig\mdvn.exe"
-$testsExePath = Join-Path $buildDir "tests\$BuildConfig\mdvn_tests.exe"
+$exePath = Join-Path $buildDir "src\$BuildConfig\markair.exe"
+$testsExePath = Join-Path $buildDir "tests\$BuildConfig\markair_tests.exe"
 $runBenchScript = Join-Path $repoRoot "bench\run_bench.ps1"
 $benchDir = Join-Path $repoRoot "bench"
 
@@ -301,7 +301,7 @@ $failures = @()
 # 记录一次"未达标但不计入失败"的提示（暖启动目标值，见裁决 #5），单独汇总。
 $notices = @()
 
-Write-Host "==== mdvn CI 性能门禁（M0 T16 + M1 T44 + M2 T69 + M3 T83，对齐 01 §4）===="
+Write-Host "==== markair CI 性能门禁（M0 T16 + M1 T44 + M2 T69 + M3 T83，对齐 01 §4）===="
 if ($Strict) {
     Write-Host "已启用 -Strict：暖启动门禁改用目标值 60ms 做硬性判据（预期可能失败，见裁决 #5）。"
 } else {
@@ -354,8 +354,8 @@ if ($needBuild) {
         # 命名/版本探测,只需要 cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经
         # 配置好),产出的多配置目录结构(build\src\Release\...)与原 VS 生成器
         # 完全一致,不影响下游脚本按 $BuildConfig 子目录取产物的路径假设。
-        # 本机实测过(2026-09-19):同一份源码配置+构建 mdvn.exe 成功,
-        # 产物落在 build\src\Release\mdvn.exe,与切换前路径一致。
+        # 本机实测过(2026-09-19):同一份源码配置+构建 markair.exe 成功,
+        # 产物落在 build\src\Release\markair.exe,与切换前路径一致。
         cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
         if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
     }
@@ -365,13 +365,13 @@ if ($needBuild) {
     Write-Host "[1/15] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
 }
 
-if (-not (Test-Path $exePath)) { throw "构建后仍找不到 mdvn.exe：$exePath" }
-if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 mdvn_tests.exe：$testsExePath" }
+if (-not (Test-Path $exePath)) { throw "构建后仍找不到 markair.exe：$exePath" }
+if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 markair_tests.exe：$testsExePath" }
 
 # ------------------------- 第二步：单元测试 -------------------------
 
 Write-Host ""
-Write-Host "[2/15] 运行 mdvn_tests.exe ..."
+Write-Host "[2/15] 运行 markair_tests.exe ..."
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 & $testsExePath
@@ -379,7 +379,7 @@ $testsExitCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 # 用完立即清零:$LASTEXITCODE 只在真正调用原生 exe 时才会被刷新,像
 # run_bench.ps1 这类纯 PowerShell 脚本(内部用 Start-Process -PassThru
-# 异步拉起 mdvn.exe,不是同步调用,不会刷新 $LASTEXITCODE)执行完之后,
+# 异步拉起 markair.exe,不是同步调用,不会刷新 $LASTEXITCODE)执行完之后,
 # 后面 "if ($LASTEXITCODE -ne 0) { throw ... }" 这类判断读到的其实是这里
 # 单测失败时残留的旧值——2026-09-19 CI 实测踩过:单测 1 条失败,退出码 1
 # 一路残留到 15 步之外的 run_bench.ps1 检查点,报出一条与 run_bench.ps1
@@ -387,7 +387,7 @@ $ErrorActionPreference = $prevEap
 # 失败原因。
 $LASTEXITCODE = 0
 if ($testsExitCode -ne 0) {
-    $failures += "单元测试失败，mdvn_tests.exe 退出码为 $testsExitCode（应为 0）。"
+    $failures += "单元测试失败，markair_tests.exe 退出码为 $testsExitCode（应为 0）。"
 } else {
     Write-Host "单元测试通过（退出码 0）。"
 }
@@ -396,7 +396,7 @@ if ($testsExitCode -ne 0) {
 
 Write-Host ""
 Write-Host "[3/15] 运行 bench\run_bench.ps1 做暖启动测量（BENCH-A，N=$N）..."
-& $runBenchScript -N $N -MdvnExe $exePath
+& $runBenchScript -N $N -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 执行失败，退出码 $LASTEXITCODE" }
 
 $latestCsv = Get-LatestCsv
@@ -418,7 +418,7 @@ if ($warmP95 -gt $warmGateThresholdMs) {
 Write-Host ""
 Write-Host "[4/15] 运行 bench\run_bench.ps1 -Cold 做冷启动测量（N=$NCold）..."
 $csvBeforeCold = $latestCsv.FullName
-& $runBenchScript -Cold -N $NCold -MdvnExe $exePath
+& $runBenchScript -Cold -N $NCold -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 -Cold 执行失败，退出码 $LASTEXITCODE" }
 $latestCsvCold = Get-LatestCsv -afterFile $csvBeforeCold
 $rowsCold = Import-Csv -Path $latestCsvCold.FullName
@@ -437,7 +437,7 @@ Write-Host ""
 Write-Host "[5/15] exe 体积硬线门禁..."
 $exeSizeBytes = (Get-Item $exePath).Length
 $exeSizeMB = $exeSizeBytes / 1MB
-Write-Host "mdvn.exe 体积：$([Math]::Round($exeSizeMB, 4)) MB（$exeSizeBytes 字节），硬线 $ExeSizeHardLimitMB MB（出处 01§4 第5行）。"
+Write-Host "markair.exe 体积：$([Math]::Round($exeSizeMB, 4)) MB（$exeSizeBytes 字节），硬线 $ExeSizeHardLimitMB MB（出处 01§4 第5行）。"
 if ($exeSizeMB -gt $ExeSizeHardLimitMB) {
     $failures += "exe 体积超过 01§4 硬线：$([Math]::Round($exeSizeMB, 4)) MB > $ExeSizeHardLimitMB MB。"
 }
@@ -448,7 +448,7 @@ if ($exeSizeMB -gt $ExeSizeSoftLimitMB) {
 # ------------------------- 第六步：高亮体积增量硬线（T54，裁决#8①保留） -------------------------
 
 Write-Host ""
-Write-Host "[6/15] 高亮体积硬性门禁（T54）：mdvn.exe 体积 $exeSizeBytes 字节（阈值 $HighlightExeSizeThresholdBytes 字节）"
+Write-Host "[6/15] 高亮体积硬性门禁（T54）：markair.exe 体积 $exeSizeBytes 字节（阈值 $HighlightExeSizeThresholdBytes 字节）"
 if ($exeSizeBytes -gt $HighlightExeSizeThresholdBytes) {
     $failures += "exe 体积超过高亮体积硬性门禁：$exeSizeBytes 字节 > $HighlightExeSizeThresholdBytes 字节（04 的 M2 验收标准硬线：体积增量 <= 80KB）。"
 }
@@ -467,7 +467,7 @@ if ($privateBytesMB -gt $PrivateBytesProxyThresholdMB) {
 Write-Host ""
 Write-Host "[7.5/15] 空文档常驻内存门禁（01§4 第4行，权威口径 8MB）..."
 $csvBeforeEmpty = $latestCsvCold.FullName
-& $runBenchScript -Target "EMPTY" -N $NEmpty -MdvnExe $exePath
+& $runBenchScript -Target "EMPTY" -N $NEmpty -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 -Target EMPTY 执行失败，退出码 $LASTEXITCODE" }
 $latestCsvEmpty = Get-LatestCsv -afterFile $csvBeforeEmpty
 $rowsEmpty = Import-Csv -Path $latestCsvEmpty.FullName
@@ -483,7 +483,7 @@ if ($emptyPrivateBytesMB -gt $EmptyDocPrivateBytesProxyThresholdMB) {
 Write-Host ""
 Write-Host "[8/15] 运行 bench\run_bench.ps1 -Target BENCH-B 做图片密集场景内存测量（N=$NBenchB）..."
 $csvBeforeBenchB = $latestCsvEmpty.FullName
-& $runBenchScript -Target "BENCH-B" -N $NBenchB -MdvnExe $exePath
+& $runBenchScript -Target "BENCH-B" -N $NBenchB -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 -Target BENCH-B 执行失败，退出码 $LASTEXITCODE" }
 $latestCsvBenchB = Get-LatestCsv -afterFile $csvBeforeBenchB
 $rowsBenchB = Import-Csv -Path $latestCsvBenchB.FullName
@@ -505,7 +505,7 @@ if (-not (Test-Path $benchDPath)) {
     if ($LASTEXITCODE -ne 0) { throw "bench\make_bench_d.ps1 生成语料失败，退出码 $LASTEXITCODE" }
 }
 $csvBeforeBenchD = $latestCsvBenchB.FullName
-& $runBenchScript -Target "BENCH-D" -N $NBenchD -MdvnExe $exePath
+& $runBenchScript -Target "BENCH-D" -N $NBenchD -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 -Target BENCH-D 执行失败，退出码 $LASTEXITCODE" }
 $latestCsvBenchD = Get-LatestCsv -afterFile $csvBeforeBenchD
 $rowsBenchD = Import-Csv -Path $latestCsvBenchD.FullName
@@ -521,10 +521,10 @@ Write-Host ""
 if ($SkipFrameRateGate) {
     Write-Host "[10/15] -SkipFrameRateGate 已指定，跳过滚动帧率门禁（仅限本地调试使用，CI 中不应跳过）。"
 } else {
-    Write-Host "[10/15] 滚动帧率门禁（口径①：mdvn 自身重绘耗时，见脚本头部'帧率口径说明'）..."
+    Write-Host "[10/15] 滚动帧率门禁（口径①：markair 自身重绘耗时，见脚本头部'帧率口径说明'）..."
     $scrollProbe = Join-Path $benchDir "scroll_probe.ps1"
     $benchAPath = Join-Path $benchDir "BENCH-A.md"
-    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "mdvn_fps_gate_err_$([guid]::NewGuid().ToString('N')).txt")
+    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "markair_fps_gate_err_$([guid]::NewGuid().ToString('N')).txt")
     $fpsProc = Start-Process -FilePath $exePath -ArgumentList @("--bench", "`"$benchAPath`"") `
         -RedirectStandardError $stderrFile -PassThru
     try {
@@ -533,7 +533,7 @@ if ($SkipFrameRateGate) {
         # 用 EnumWindows + PostMessage(WM_CLOSE) 优雅关闭，让 window.cpp 走到
         # EmitFrameReport()（main.cpp:792）再退出，语义与 scroll_probe.ps1
         # 定位窗口的手法一致，不使用 Stop-Process 强杀（会丢失 stderr 的帧报告）。
-        Add-Type -Namespace MdvnFpsGate -Name NativeMethods -MemberDefinition @'
+        Add-Type -Namespace MarkairFpsGate -Name NativeMethods -MemberDefinition @'
 public delegate bool EnumWindowsProc(System.IntPtr hWnd, System.IntPtr lParam);
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, System.IntPtr lParam);
@@ -546,13 +546,13 @@ public static extern bool PostMessageW(System.IntPtr hWnd, uint Msg, System.IntP
         $enumCb = {
             param($h, $l)
             $sb = New-Object System.Text.StringBuilder 256
-            [void][MdvnFpsGate.NativeMethods]::GetClassNameW($h, $sb, 256)
-            if ($sb.ToString() -eq "mdvn_main_window") { $script:foundHwnd = $h; return $false }
+            [void][MarkairFpsGate.NativeMethods]::GetClassNameW($h, $sb, 256)
+            if ($sb.ToString() -eq "markair_main_window") { $script:foundHwnd = $h; return $false }
             return $true
         }
-        [void][MdvnFpsGate.NativeMethods]::EnumWindows($enumCb, [IntPtr]::Zero)
+        [void][MarkairFpsGate.NativeMethods]::EnumWindows($enumCb, [IntPtr]::Zero)
         if ($foundHwnd -ne [IntPtr]::Zero) {
-            [void][MdvnFpsGate.NativeMethods]::PostMessageW($foundHwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CLOSE
+            [void][MarkairFpsGate.NativeMethods]::PostMessageW($foundHwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CLOSE
         }
         $exited = $fpsProc.WaitForExit(5000)
         if (-not $exited) {
@@ -560,12 +560,12 @@ public static extern bool PostMessageW(System.IntPtr hWnd, uint Msg, System.IntP
         }
         $content = Get-Content -Raw -Path $stderrFile -ErrorAction SilentlyContinue
         if (-not $content -or ($content -notmatch "frame_total_p50_ms=([0-9.]+)")) {
-            $failures += "帧率门禁：未能从 mdvn.exe 的 stderr 里解析到 frame_total_p50_ms（--bench 逐帧埋点未产出报告）。"
+            $failures += "帧率门禁：未能从 markair.exe 的 stderr 里解析到 frame_total_p50_ms（--bench 逐帧埋点未产出报告）。"
         } else {
             $p50Ms = [double]$Matches[1]
             $avgFps = if ($p50Ms -gt 0) { 1000.0 / $p50Ms } else { [double]::PositiveInfinity }
-            Write-Host "mdvn 自身重绘 frame_total_p50_ms=$p50Ms ms，折算平均 FPS≈$([Math]::Round($avgFps, 1))（阈值 $MinAvgFps FPS，出处 01§4 第6行）"
-            Write-Host "口径提醒：这是 mdvn 自身重绘能力，不是 DWM 合成层实测帧率；后者（PresentMon 口径②）在无 GPU CI 虚拟机上会假红，本脚本默认不跑，复跑命令见 bench/M3-RENDER.md 第7节。"
+            Write-Host "markair 自身重绘 frame_total_p50_ms=$p50Ms ms，折算平均 FPS≈$([Math]::Round($avgFps, 1))（阈值 $MinAvgFps FPS，出处 01§4 第6行）"
+            Write-Host "口径提醒：这是 markair 自身重绘能力，不是 DWM 合成层实测帧率；后者（PresentMon 口径②）在无 GPU CI 虚拟机上会假红，本脚本默认不跑，复跑命令见 bench/M3-RENDER.md 第7节。"
             if ($avgFps -lt $MinAvgFps) {
                 $failures += "滚动帧率门禁未通过：折算平均 FPS $([Math]::Round($avgFps, 1)) < $MinAvgFps。"
             }
@@ -602,7 +602,7 @@ if ($SkipFuzz) {
 Write-Host ""
 Write-Host "[12/15] 运行 bench\run_bench.ps1 -Target BENCH-C 做高亮最坏情况场景测量（N=$NBenchC，只记录不设门禁）..."
 $csvBeforeBenchC = $latestCsvBenchD.FullName
-& $runBenchScript -Target "BENCH-C" -N $NBenchC -MdvnExe $exePath
+& $runBenchScript -Target "BENCH-C" -N $NBenchC -MarkairExe $exePath
 if ($LASTEXITCODE -ne 0) { throw "run_bench.ps1 -Target BENCH-C 执行失败，退出码 $LASTEXITCODE" }
 $latestCsvBenchC = Get-LatestCsv -afterFile $csvBeforeBenchC
 $rowsBenchC = Import-Csv -Path $latestCsvBenchC.FullName

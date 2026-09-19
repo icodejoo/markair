@@ -1,6 +1,6 @@
-# mdvn_tests 目标:独立的测试可执行文件,不链接进 mdvn.exe 主程序。
-# MDVN_TEST 的全局构造函数注册手法(见 mdvn_test.h 顶部注释)只允许存在于这里。
-add_executable(mdvn_tests
+# markair_tests 目标:独立的测试可执行文件,不链接进 markair.exe 主程序。
+# MARKAIR_TEST 的全局构造函数注册手法(见 markair_test.h 顶部注释)只允许存在于这里。
+add_executable(markair_tests
     main.cpp
     test_str.cpp
     test_encoding.cpp
@@ -89,37 +89,37 @@ add_executable(mdvn_tests
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
-target_compile_options(mdvn_tests PRIVATE ${MDVN_COMMON_COMPILE_OPTIONS})
+target_compile_options(markair_tests PRIVATE ${MARKAIR_COMMON_COMPILE_OPTIONS})
 
 # T41:test_corpus_smoke.cpp 需要知道 bench/corpus 语料目录的绝对路径——
-# ctest 的默认工作目录是 mdvn_tests.exe 所在的构建目录,不是仓库根目录,
+# ctest 的默认工作目录是 markair_tests.exe 所在的构建目录,不是仓库根目录,
 # 用 CMAKE_SOURCE_DIR 直接烘焙一份绝对路径,避免运行期猜测相对路径层数。
-target_compile_definitions(mdvn_tests PRIVATE
-    MDVN_CORPUS_DIR="${CMAKE_SOURCE_DIR}/bench/corpus")
+target_compile_definitions(markair_tests PRIVATE
+    MARKAIR_CORPUS_DIR="${CMAKE_SOURCE_DIR}/bench/corpus")
 
 # T43:test_fuzz_smoke.cpp 需要知道 bench/fuzz 语料目录的绝对路径,理由与
-# MDVN_CORPUS_DIR 一致(ctest 默认工作目录不是仓库根目录)。
-target_compile_definitions(mdvn_tests PRIVATE
-    MDVN_FUZZ_DIR="${CMAKE_SOURCE_DIR}/bench/fuzz")
+# MARKAIR_CORPUS_DIR 一致(ctest 默认工作目录不是仓库根目录)。
+target_compile_definitions(markair_tests PRIVATE
+    MARKAIR_FUZZ_DIR="${CMAKE_SOURCE_DIR}/bench/fuzz")
 
 # T62:test_outline.cpp 的性能验收用例需要加载 bench/BENCH-A.md,同样的
 # "ctest 工作目录不是仓库根目录"问题,烘焙一份绝对路径。
-target_compile_definitions(mdvn_tests PRIVATE
-    MDVN_BENCH_DIR="${CMAKE_SOURCE_DIR}/bench")
+target_compile_definitions(markair_tests PRIVATE
+    MARKAIR_BENCH_DIR="${CMAKE_SOURCE_DIR}/bench")
 
 # T81:test_licensing.cpp 需要仓库根目录的绝对路径,读取根 LICENSE /
 # THIRD-PARTY-NOTICES.md / third_party/md4c/VERSION.txt 做一致性校验。
-target_compile_definitions(mdvn_tests PRIVATE
-    MDVN_REPO_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(markair_tests PRIVATE
+    MARKAIR_REPO_ROOT_DIR="${CMAKE_SOURCE_DIR}")
 
 # test_model.cpp 通过 parser.cpp 间接依赖 md4c 的 md_parse；
 # test_font.cpp 通过 font.cpp 依赖 DirectWrite。
 # test_image.cpp 通过 CoCreateInstance 用 WIC(只需 ole32,不必链 windowscodecs.lib),
 # test_navigate.cpp 需要 shell32,remote.cpp 需要 winhttp。测试目标不做 /DELAYLOAD ——
-# 延迟/惰性加载是 mdvn.exe 的验收项,测试进程本来就是要去用这些库的。
+# 延迟/惰性加载是 markair.exe 的验收项,测试进程本来就是要去用这些库的。
 # test_navigate.cpp 的 T36 路径规范化用 PathCchCombineEx,需要 pathcch。
-target_link_libraries(mdvn_tests PRIVATE
+target_link_libraries(markair_tests PRIVATE
     md4c lunasvg dwrite psapi d2d1 ole32 winhttp shell32 pathcch)
 
 enable_testing()
-add_test(NAME mdvn_tests COMMAND mdvn_tests)
+add_test(NAME markair_tests COMMAND markair_tests)

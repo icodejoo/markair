@@ -1,10 +1,10 @@
-// mdvn 代码高亮词法器的实现(T51)。手写状态机,逐字节扫描,不使用
+// markair 代码高亮词法器的实现(T51)。手写状态机,逐字节扫描,不使用
 // std::regex/iostream/异常,不链接图形 API。
 #include "lexer.h"
 
 #include <cstring>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -457,4 +457,4 @@ LexResult LexCodeBlock(StrSlice code, const LanguageRule& rule, Arena* arena) {
     return LexResult{Span<Token>{tokens.Data(), tokens.Size()}, truncated};
 }
 
-} // namespace mdvn
+} // namespace markair

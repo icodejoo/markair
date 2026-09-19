@@ -14,7 +14,7 @@
 | VMMap | **已安装**（绿色版） | `tools\VMMap\vmmap64.exe` | 精确测量 Private Working Set / Private Bytes / Mapped File 分项，验证字体资源落在 Mapped File 而非 Private |
 | RAMMap | **已安装**（绿色版） | `tools\RAMMap\RAMMap64.exe` | `RAMMap64.exe -Et` 清空 Empty Standby List，用于模拟冷启动条件 |
 | Process Monitor | 未安装 | — | 本次未下载（M3 裁决记录 #1 只要求 VMMap/RAMMap/PresentMon 三项，Process Monitor 04 测量方法表未直接依赖，暂缓） |
-| PresentMon | **已安装** | `tools\PresentMon.exe` | 捕获 Present 帧时间序列，评估滚动时的 99 分位帧时间；⚠️ mdvn 走软件渲染无 DXGI 交换链，能否抓到帧数据待 T72 可行性探测确认 |
+| PresentMon | **已安装** | `tools\PresentMon.exe` | 捕获 Present 帧时间序列，评估滚动时的 99 分位帧时间；⚠️ markair 走软件渲染无 DXGI 交换链，能否抓到帧数据待 T72 可行性探测确认 |
 
 三者均已用 `-h` / `--help` 实跑验证，二进制未损坏、可正常执行（详见
 `bench/M3-METHOD.md` 附的实测输出）。

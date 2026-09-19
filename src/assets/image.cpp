@@ -5,7 +5,7 @@
 #include <objbase.h>
 #include <wincodec.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -225,4 +225,4 @@ DecodedImage ImageDecoder::DecodeFromFile(const wchar_t* path, ID2D1RenderTarget
     return result;
 }
 
-}  // namespace mdvn
+}  // namespace markair

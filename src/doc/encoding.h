@@ -1,11 +1,11 @@
-// mdvn 的编码嗅探:识别 BOM/无 BOM UTF-8/ANSI 回退,不实现完整通用编码检测算法。
+// markair 的编码嗅探:识别 BOM/无 BOM UTF-8/ANSI 回退,不实现完整通用编码检测算法。
 #pragma once
 
 #include "../util/arena.h"
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 嗅探得到的编码类型。
@@ -33,7 +33,7 @@ struct EncodingDetection {
  * @param bytes 文件原始字节(零拷贝切片,通常来自 FileMap::Data)。
  * @return 嗅探结果,含编码类型与跳过 BOM 后的内容偏移。
  * @example
- *   mdvn::EncodingDetection d = mdvn::DetectEncoding(fm.Data());
+ *   markair::EncodingDetection d = markair::DetectEncoding(fm.Data());
  */
 EncodingDetection DetectEncoding(StrSlice bytes);
 
@@ -47,8 +47,8 @@ EncodingDetection DetectEncoding(StrSlice bytes);
  * @param arena 输出缓冲区所在的 Arena。
  * @return 解码后的 UTF-16 切片,data 以 '\0' 结尾,len 不含该 '\0'。
  * @example
- *   mdvn::Utf16Slice text = mdvn::DecodeToUtf16(fm.Data(), d, &arena);
+ *   markair::Utf16Slice text = markair::DecodeToUtf16(fm.Data(), d, &arena);
  */
 Utf16Slice DecodeToUtf16(StrSlice bytes, EncodingDetection detection, Arena* arena);
 
-} // namespace mdvn
+} // namespace markair

@@ -8,12 +8,12 @@
 #include <cstring>
 #include <cwchar>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
 // 配置文件相对 %LOCALAPPDATA% 的固定位置。
-constexpr wchar_t kIniRelativePath[] = L"\\mdvn\\state.ini";
+constexpr wchar_t kIniRelativePath[] = L"\\markair\\state.ini";
 
 // 空白字符判定(只认 ASCII 空格/制表符,ini 不需要更复杂的规则)。
 bool IsBlank(char c) { return c == ' ' || c == '\t'; }
@@ -386,9 +386,9 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
 bool BuildStatePaths(const wchar_t* localAppData, wchar_t* dirPath, wchar_t* filePath,
                       wchar_t* tmpPath, u32 cap) {
     size_t baseLen = wcslen(localAppData);
-    if (baseLen + 5 >= cap) return false;  // "\\mdvn" = 5 字符
+    if (baseLen + 5 >= cap) return false;  // "\\markair" = 5 字符
     wcscpy_s(dirPath, cap, localAppData);
-    wcscat_s(dirPath, cap, L"\\mdvn");
+    wcscat_s(dirPath, cap, L"\\markair");
 
     if (wcslen(dirPath) + 11 >= cap) return false;  // "\\state.ini" = 11 字符
     wcscpy_s(filePath, cap, dirPath);
@@ -642,7 +642,7 @@ bool SaveAppSettings(const AppSettings& settings) {
     wchar_t tmpPath[MAX_PATH]{};
     if (!BuildStatePaths(localAppData, dirPath, filePath, tmpPath, MAX_PATH)) return false;
 
-    // 目录只有两级:%LOCALAPPDATA%(通常已存在)与其下的 mdvn 子目录。手写
+    // 目录只有两级:%LOCALAPPDATA%(通常已存在)与其下的 markair 子目录。手写
     // CreateDirectoryW 逐级建,不引入 shell32 的 SHCreateDirectoryExW(会在
     // 保存这一刻才真正拉起 shell32.dll,是一次可观的模块加载 —— 见 T55 验收注释)。
     CreateDirectoryW(localAppData, nullptr);  // 通常已存在,失败(含已存在)忽略
@@ -681,4 +681,4 @@ bool SaveAppSettings(const AppSettings& settings) {
     return ok;
 }
 
-}  // namespace mdvn
+}  // namespace markair

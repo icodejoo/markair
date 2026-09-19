@@ -1,6 +1,6 @@
 #include "hit_test.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -237,4 +237,4 @@ bool ShouldUseHandCursor(const HitResult& hit) {
            hit.kind == HitKind::CodeCopyButton;
 }
 
-}  // namespace mdvn
+}  // namespace markair

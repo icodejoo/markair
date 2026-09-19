@@ -2,7 +2,7 @@
 
 > 对应 `08-m3-tasks.md` T75、`M3 裁决记录` #1（VMMap/RAMMap 已装）、#5（时间盒 2 个
 > 工作日）。本任务**没有改动任何 C++ 代码**——归因结论表明大头是 D2D/DWrite 的系统
-> 开销，不是 mdvn 自身代码，因此不做"盲目优化"，如实上报测量结果与拆解表，交用户裁决。
+> 开销，不是 markair 自身代码，因此不做"盲目优化"，如实上报测量结果与拆解表，交用户裁决。
 
 ## 0. 结论先行
 
@@ -38,7 +38,7 @@
   `feedback_ui_screenshot_verification.md` 的既有纪律：只用真实截图，不用
   `PrintWindow`）。
 - **步骤**（EMPTY 与 BENCH-A 各一轮，均已实测，命令与产出如下）：
-  1. `build\src\Release\mdvn.exe --bench <语料文件>`，与 `run_bench.ps1` 用的启动方式
+  1. `build\src\Release\markair.exe --bench <语料文件>`，与 `run_bench.ps1` 用的启动方式
      完全一致（`--bench` 模式窗口不会自动退出，便于人工附加）；
   2. 静置 10 秒（对应 01 §4"静置 10 s"的口径）；
   3. `tools\VMMap\vmmap64.exe -accepteula -p <PID> bench\vmmap_xxx_snapshot.mtl`
@@ -55,7 +55,7 @@
 
 ## 2. 空文档（EMPTY.md）实测
 
-- 启动：`build\src\Release\mdvn.exe --bench bench\EMPTY.md`，PID 26880/24736（先后两次
+- 启动：`build\src\Release\markair.exe --bench bench\EMPTY.md`，PID 26880/24736（先后两次
   验证，数值一致）。
 - 静置 10 秒后代理指标：`PrivateMemorySize64 ≈ 9,228,288~9,359,360 字节 ≈ 8.80~8.93 MB`
   （与 `run_bench.ps1 -Target EMPTY -N 20` 的 20 轮中位数 8.97 MB 同一量级，验证了单次
@@ -82,28 +82,28 @@
 
 | 模块 | Private | Private WS | 说明 |
 |---|---|---|---|
-| `E:\workspaces\mdvn\build\src\Release\mdvn.exe` | 44 K | 28 K | mdvn 自身代码/数据段，**极小** |
+| `E:\workspaces\markair\build\src\Release\markair.exe` | 44 K | 28 K | markair 自身代码/数据段，**极小** |
 | `C:\Windows\System32\DWrite.dll` | 100 K | 108 K | 文字排版引擎，系统 DLL |
 | `C:\Windows\System32\d3d10warp.dll` | 4 K | 8 K | D3D 软件光栅化器（D2D 软件渲染路径依赖） |
 | `C:\Windows\System32\D3D11.dll` / `amd64_microsoft.windows.common-c...` | 16~20 K | 28~32 K | D3D11 运行时（D2D 软件目标底层仍走 D3D11 WARP） |
 | `C:\Windows\System32\DXCore.dll` | 20 K | 28 K | DirectX 核心枚举组件 |
 | `C:\Windows\System32\TextShaping.dll` | 4 K | 8 K | 文字整形 |
-| `C:\Windows\System32\cryptnet.dll` | 4 K | 8 K | 系统证书/网络组件（进程默认加载，非 mdvn 引入） |
+| `C:\Windows\System32\cryptnet.dll` | 4 K | 8 K | 系统证书/网络组件（进程默认加载，非 markair 引入） |
 | `C:\Program Files (x86)\Sangfor\SNAC\bin\PrinterAdapter64.dll` | 40 K | 40 K | **第三方全局注入模块**（深信服 SNAC 终端安全客户端，本机企业网络环境常驻） |
 | `C:\Program Files (x86)\Sangfor\SNAC\bin\printerhook64.dll` | 12 K | 16 K | 同上，**第三方全局注入**，与 memory.md 记录的搜狗输入法注入是同一类环境噪声 |
 
 **归因**：Image 分类总计 Private WS 只有 1,360 K（≈1.33 MB），是全部私有内存的
-**19%**；其中 mdvn.exe 自身只占 28 K，**几乎可以忽略**。d2d1.dll 在本次快照的可见
+**19%**；其中 markair.exe 自身只占 28 K，**几乎可以忽略**。d2d1.dll 在本次快照的可见
 条目里未单独出现明显私有页峰值（占用与 d3d10warp/D3D11 同一量级，均在几十 KB 级），
 说明 D2D/DWrite 的"系统开销"确实存在，但绝对值很小，不是空文档内存的主要构成。
 
-**真正的大头是 `Heap`（2,336 K/1,904 K，CRT 堆 + mdvn 自身的一次性初始化分配）与
+**真正的大头是 `Heap`（2,336 K/1,904 K，CRT 堆 + markair 自身的一次性初始化分配）与
 `Private Data`（4,232 K/3,600 K，主要是线程栈的 Thread Environment Block 与保留区，
 截图 `vmmap_summary2.png` 下半部分逐条列出的均是 `Thread Stack`/`Private Data` 类型，
-不是 mdvn 的堆数据结构）**。这两类合计 Private WS 5,504 K，占总量 7,040 K 的 **78%**，
+不是 markair 的堆数据结构）**。这两类合计 Private WS 5,504 K，占总量 7,040 K 的 **78%**，
 其中 CRT 堆与线程栈是 Windows 进程模型与 CRT 运行时的固定开销，不是"D2D/DWrite 系统
-开销"，也不是"mdvn 自身数据结构膨胀"——是**单进程 + 静态 CRT + Win32 GUI 消息循环**
-这套架构下的进程基础成本，与 mdvn 具体做了什么无关。
+开销"，也不是"markair 自身数据结构膨胀"——是**单进程 + 静态 CRT + Win32 GUI 消息循环**
+这套架构下的进程基础成本，与 markair 具体做了什么无关。
 
 第三方全局注入模块（Sangfor SNAC 的两个 DLL，合计 Private 52 K/Private WS 56 K）占比
 很小（<1%），量级远不及 M0 记录的搜狗输入法（30+ MB）那种级别，本次不构成显著噪声，
@@ -113,7 +113,7 @@
 
 ## 3. BENCH-A（100 KB 文档，静置 10 s）实测
 
-- 启动：`build\src\Release\mdvn.exe --bench bench\BENCH-A.md`，PID 33108。
+- 启动：`build\src\Release\markair.exe --bench bench\BENCH-A.md`，PID 33108。
 - 静置 10 秒后代理指标：`PrivateMemorySize64 = 16,281,600~16,642,048 字节 ≈ 15.53~15.87 MB`。
   说明：这次单次快照略高于 `run_bench.ps1 -Target BENCH-A -N 20` 的 20 轮中位数
   14.90 MB / P95 15.43 MB（`M3-METHOD.md` 第 3 节），属于单次采样的正常波动区间
@@ -138,11 +138,11 @@
   分配策略），committed 的容量比实际写入的数据略大，是**已知的、可接受的预留余量**，
   不是泄漏或膨胀。
 
-**归因**：与空文档一致，`Heap`（CRT 堆 + mdvn 文档模型/排版数据结构）与 `Private Data`
+**归因**：与空文档一致，`Heap`（CRT 堆 + markair 文档模型/排版数据结构）与 `Private Data`
 （线程栈）合计 Private WS 9,108 K，占总量 10,732 K 的 **85%**；`Image`（D2D/DWrite/
 D3D 系统 DLL 的私有页）只占 1,360 K（**13%**），且与空文档时完全相同（1,360 K），
 说明 BENCH-A 相对空文档新增的 Private WS（10,732 − 7,040 = 3,692 K）**全部来自
-mdvn 自身的文档模型/排版几何数据**（Heap 部分从 1,904 K 增至 4,452 K，增量 2,548 K；
+markair 自身的文档模型/排版几何数据**（Heap 部分从 1,904 K 增至 4,452 K，增量 2,548 K；
 Private Data 从 3,600 K 增至 4,656 K，增量 1,056 K），这是"打开一份 100 KB 文档"应有
 的、与文档大小正相关的合理内存增量，不是异常。
 
@@ -152,13 +152,13 @@ Private Data 从 3,600 K 增至 4,656 K，增量 1,056 K），这是"打开一�
 
 - **D2D/DWrite/D3D 系统 DLL 的私有页（Image 分类）**：两条内存线上都稳定在
   1,360 K（≈1.33 MB），占比 13~19%，**绝对值很小且不随文档变化**，是系统开销，
-  **mdvn 代码无法优化，也不应该为此改动**（改动系统 DLL 加载行为超出本项目范围）。
+  **markair 代码无法优化，也不应该为此改动**（改动系统 DLL 加载行为超出本项目范围）。
 - **CRT 堆 + 线程栈（Heap + Private Data，占比 78~85%）**：这是单进程 Win32 GUI
   程序的基础开销（消息循环线程栈、CRT 运行时堆初始化），BENCH-A 相对空文档的增量
-  已核实全部来自 mdvn 自身的文档模型数据，**增量本身是合理的、与文档大小成比例的**，
+  已核实全部来自 markair 自身的文档模型数据，**增量本身是合理的、与文档大小成比例的**，
   不存在"异常膨胀"。
 - **结论**：**两条内存线在权威口径（VMMap Private WS）下均已达标**，且拆解表未发现
-  mdvn 自身代码/数据结构有异常占用，因此**本任务不做任何代码改动**，也**不触发
+  markair 自身代码/数据结构有异常占用，因此**本任务不做任何代码改动**，也**不触发
   裁决 #5**——如果用户认为现行 CI 代理指标（`PrivateUsage`）应该继续沿用（因为它更
   容易脚本化批量跑、且是保守上界），可以保留现有门禁；如果想让 CI 门禁更贴近权威
   口径，可以考虑给代理指标的判定阈值留出与本文档实测差值相当的余量——**这是口径
@@ -186,10 +186,10 @@ powershell -File bench\run_bench.ps1 -Target BENCH-B -N 5
 本任务未修改任何 C++ 源码，仅做测量与文档产出。跑一遍既有测试套件确认零改动零失败：
 
 ```
-build\tests\Release\mdvn_tests.exe
+build\tests\Release\markair_tests.exe
 ```
 
-本机实测输出：`mdvn_tests: 422 test(s) run, 0 failure(s)`。
+本机实测输出：`markair_tests: 422 test(s) run, 0 failure(s)`。
 
 ---
 
@@ -261,7 +261,7 @@ build\tests\Release\mdvn_tests.exe
   indicator 序列）修复后显示为 `CN BR ES JP RU FR US DE` 字母对，**不是彩色
   旗子图案**。经核实，这是 **Windows 10（本机 10.0.19045）的已知 OS 级限制**：
   微软出于地缘政治原因，在 Windows 10 的 `Segoe UI Emoji` 里故意不提供彩色国旗
-  字形，只有 Windows 11 才有——这与 mdvn 代码无关，任何 Windows 10 应用都是这个
+  字形，只有 Windows 11 才有——这与 markair 代码无关，任何 Windows 10 应用都是这个
   结果，不是本次修复没生效。
 - 用 `bench/corpus/n8n-io-n8n-readme.md`（含 📚🔧💡🤖👥📖 等单码位彩色 emoji）
   复测，截图确认这些 emoji **修复后正常显示彩色图案**，修复前应为方框——证明
@@ -290,7 +290,7 @@ DirectWrite 惰性行为符合预期）。
 
 ### 4.5 回归确认
 
-- `mdvn_tests.exe` 429 个用例全部通过（与修复前一致，无新增/无减少），`/W4` 编译
+- `markair_tests.exe` 429 个用例全部通过（与修复前一致，无新增/无减少），`/W4` 编译
   零警告。
 - 抽查 `bench/corpus/microsoft-vscode-readme.md`、`axios-axios-readme.md`、
   `mermaid-js-mermaid-readme.md` 三份文档截图，标题/中文/链接/emoji（mermaid 里

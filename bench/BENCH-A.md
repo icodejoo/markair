@@ -1,7 +1,7 @@
-# BENCH-A：mdvn 性能基准语料
+# BENCH-A：markair 性能基准语料
 
 > 本文件由脚本生成，用于 T15 性能基准测量（暖启动/冷启动首屏、常驻内存）。
-> 内容为中英混排的合成文档文本，贴合 mdvn 实际使用场景（技术文档/设计说明），
+> 内容为中英混排的合成文档文本，贴合 markair 实际使用场景（技术文档/设计说明），
 > 含表格语法、代码块、若干行内链接，不含图片。
 
 
@@ -15,7 +15,7 @@
 
 滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。 Scrolling performance is validated separately using PresentMon frame time percentiles. 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Layout computation walks the block tree once and produces a flat list of paint commands. 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Layout computation walks the block tree once and produces a flat list of paint commands. 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。
 
 参考文档：[md4c 项目主页](https://github.com/mity/md4c) 以及 [Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap)，两者都对本节涉及的实现细节有帮助。See also [md4c 项目主页](https://github.com/mity/md4c) for the canonical reference.
 
@@ -36,7 +36,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 
 ## 第 2 节：基准语料片段
 
-内存分配器使用了简单的 arena 策略，避免频繁的堆分配带来的抖动。 Reproducible measurements depend on recording exact tool versions alongside the results. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+内存分配器使用了简单的 arena 策略，避免频繁的堆分配带来的抖动。 Reproducible measurements depend on recording exact tool versions alongside the results. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。 Mixed CJK and Latin text wrapping is one of the trickiest correctness problems in this project. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
 
@@ -49,7 +49,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 2，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -105,7 +105,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 4，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -161,7 +161,7 @@ DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行
 - 要点三：本节编号 6，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -215,7 +215,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 8，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -263,7 +263,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 
 性能预算是 M0 阶段的第一优先级，功能完整性反而是次要目标。 Code blocks are rendered with a fixed-width font to preserve column alignment. 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。
 
-DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 The arena allocator trades flexibility for predictable, low-overhead allocation patterns. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 The arena allocator trades flexibility for predictable, low-overhead allocation patterns. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 参考文档：[CommonMark 规范](https://spec.commonmark.org/0.30/) 以及 [DirectWrite 文本度量](https://learn.microsoft.com/windows/win32/directwrite/)，两者都对本节涉及的实现细节有帮助。See also [CommonMark 规范](https://spec.commonmark.org/0.30/) for the canonical reference.
 
@@ -272,7 +272,7 @@ DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行
 - 要点三：本节编号 10，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -289,7 +289,7 @@ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。
 
-文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。 Feature scope for M0 explicitly excludes tables of contents, theming, and file association. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。 Feature scope for M0 explicitly excludes tables of contents, theming, and file association. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 参考文档：[md4c 项目主页](https://github.com/mity/md4c) 以及 [Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap)，两者都对本节涉及的实现细节有帮助。See also [md4c 项目主页](https://github.com/mity/md4c) for the canonical reference.
 
@@ -304,7 +304,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 ## 第 12 节：基准语料片段
 
-行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。 This corpus intentionally interleaves short and long sentences to resemble real documentation. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。 This corpus intentionally interleaves short and long sentences to resemble real documentation. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 性能预算是 M0 阶段的第一优先级，功能完整性反而是次要目标。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. 代码块的渲染需要保证等宽字体和正确的语法高亮边界，即便高亮本身不在 M0 范围内。
 
@@ -321,7 +321,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 12，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -371,7 +371,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 
 冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。 Layout computation walks the block tree once and produces a flat list of paint commands. 行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 A read-only viewer can make aggressive assumptions that a full editor cannot. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 A read-only viewer can make aggressive assumptions that a full editor cannot. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
 
 参考文档：[Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap) 以及 [QueryPerformanceCounter 文档](https://learn.microsoft.com/windows/win32/api/profileapi/)，两者都对本节涉及的实现细节有帮助。See also [Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap) for the canonical reference.
 
@@ -380,7 +380,7 @@ mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚�
 - 要点三：本节编号 14，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -389,7 +389,7 @@ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
 ## 第 15 节：基准语料片段
 
-滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。 The benchmark harness captures five timestamps plus one memory counter per run. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。 The benchmark harness captures five timestamps plus one memory counter per run. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 渲染管线基于 Direct2D，窗口首次绘制的时间被内置埋点精确记录。 Markdown parsing is delegated to md4c, a small and fast CommonMark-compliant C parser. 冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。
 
@@ -428,7 +428,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 16，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -482,7 +482,7 @@ DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行
 - 要点三：本节编号 18，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -502,7 +502,7 @@ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
 性能预算是 M0 阶段的第一优先级，功能完整性反而是次要目标。 Markdown parsing is delegated to md4c, a small and fast CommonMark-compliant C parser. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Layout computation walks the block tree once and produces a flat list of paint commands. 冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Layout computation walks the block tree once and produces a flat list of paint commands. 冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。
 
 参考文档：[WM_DPICHANGED 消息](https://learn.microsoft.com/windows/win32/hidpi/wm-dpichanged) 以及 [Direct2D 官方文档](https://learn.microsoft.com/windows/win32/direct2d/direct2d-portal)，两者都对本节涉及的实现细节有帮助。See also [WM_DPICHANGED 消息](https://learn.microsoft.com/windows/win32/hidpi/wm-dpichanged) for the canonical reference.
 
@@ -521,7 +521,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。
 
-DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 参考文档：[CommonMark 规范](https://spec.commonmark.org/0.30/) 以及 [DirectWrite 文本度量](https://learn.microsoft.com/windows/win32/directwrite/)，两者都对本节涉及的实现细节有帮助。See also [CommonMark 规范](https://spec.commonmark.org/0.30/) for the canonical reference.
 
@@ -530,7 +530,7 @@ DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行
 - 要点三：本节编号 20，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -591,7 +591,7 @@ DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行
 - 要点三：本节编号 22，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -629,7 +629,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。 Code blocks are rendered with a fixed-width font to preserve column alignment. 性能基准语料应当贴近真实使用场景，而不是刻意堆砌极端案例。
 
-行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。 Layout computation walks the block tree once and produces a flat list of paint commands. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。 Layout computation walks the block tree once and produces a flat list of paint commands. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 参考文档：[Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap) 以及 [QueryPerformanceCounter 文档](https://learn.microsoft.com/windows/win32/api/profileapi/)，两者都对本节涉及的实现细节有帮助。See also [Sysinternals VMMap](https://learn.microsoft.com/sysinternals/downloads/vmmap) for the canonical reference.
 
@@ -638,7 +638,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 24，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -697,7 +697,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 26，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -738,7 +738,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。 Percentile reporting, especially P95, matters more than the mean for interactive latency budgets. 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Inline links are styled distinctly from body text but remain non-interactive in this milestone. 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Inline links are styled distinctly from body text but remain non-interactive in this milestone. 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。
 
 为了让测量可复现，所有 Sysinternals 工具都需要记录版本号。 Cold start measurements require clearing the standby list to avoid file cache warm effects. 性能基准语料应当贴近真实使用场景，而不是刻意堆砌极端案例。
 
@@ -749,7 +749,7 @@ mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚�
 - 要点三：本节编号 28，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -759,7 +759,7 @@ void mdvn::bench::MarkFirstPresent() {
 
 ## 第 29 节：基准语料片段
 
-窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。 Window creation and first present are tracked as two distinct phases in the timeline. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。 Window creation and first present are tracked as two distinct phases in the timeline. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 性能预算是 M0 阶段的第一优先级，功能完整性反而是次要目标。 Layout computation walks the block tree once and produces a flat list of paint commands. 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。
 
@@ -803,7 +803,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 30，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -819,7 +819,7 @@ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
 ## 第 31 节：基准语料片段
 
-DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 Scrolling performance is validated separately using PresentMon frame time percentiles. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 Scrolling performance is validated separately using PresentMon frame time percentiles. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 DirectWrite 的 zh-cn locale 设置会影响标点符号与连续汉字的换行策略。 Inline links are styled distinctly from body text but remain non-interactive in this milestone. 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。
 
@@ -844,7 +844,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 性能基准语料应当贴近真实使用场景，而不是刻意堆砌极端案例。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. 代码块的渲染需要保证等宽字体和正确的语法高亮边界，即便高亮本身不在 M0 范围内。
 
-冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。 The benchmark harness captures five timestamps plus one memory counter per run. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。 The benchmark harness captures five timestamps plus one memory counter per run. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. 行内链接的样式应当与正文有明显区分，但点击行为在 M0 阶段暂不实现。
 
@@ -855,7 +855,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 32，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -914,7 +914,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 34，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -925,7 +925,7 @@ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
 为了让测量可复现，所有 Sysinternals 工具都需要记录版本号。 Markdown parsing is delegated to md4c, a small and fast CommonMark-compliant C parser. 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Feature scope for M0 explicitly excludes tables of contents, theming, and file association. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Feature scope for M0 explicitly excludes tables of contents, theming, and file association. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
 
 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。
 
@@ -955,7 +955,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 36，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -1012,7 +1012,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 38，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -1049,7 +1049,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 ## 第 40 节：基准语料片段
 
-常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。 Private bytes should stay below the twenty megabyte ceiling for a mid-sized document. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。 Private bytes should stay below the twenty megabyte ceiling for a mid-sized document. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。 The benchmark harness captures five timestamps plus one memory counter per run. 任务列表、图片、超链接点击等功能被有意推迟到 M1 及以后的版本。
 
@@ -1062,7 +1062,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 40，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -1116,7 +1116,7 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 - 要点三：本节编号 42，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -1168,7 +1168,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 - 要点三：本节编号 44，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -1212,11 +1212,11 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 
 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。 Mixed CJK and Latin text wrapping is one of the trickiest correctness problems in this project. 窗口拖动到不同 DPI 的显示器之间时，D2D 资源需要在 WM_DPICHANGED 时重建。
 
-在高 DPI 屏幕上，文本度量必须重新计算，否则会出现锯齿或错位。 A read-only viewer can make aggressive assumptions that a full editor cannot. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+在高 DPI 屏幕上，文本度量必须重新计算，否则会出现锯齿或错位。 A read-only viewer can make aggressive assumptions that a full editor cannot. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. 任务列表、图片、超链接点击等功能被有意推迟到 M1 及以后的版本。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. 代码块的渲染需要保证等宽字体和正确的语法高亮边界，即便高亮本身不在 M0 范围内。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 Table layout requires a two-pass algorithm: measure column widths, then paint rows. 代码块的渲染需要保证等宽字体和正确的语法高亮边界，即便高亮本身不在 M0 范围内。
 
 参考文档：[PresentMon 项目](https://github.com/GameTechDev/PresentMon) 以及 [WM_DPICHANGED 消息](https://learn.microsoft.com/windows/win32/hidpi/wm-dpichanged)，两者都对本节涉及的实现细节有帮助。See also [PresentMon 项目](https://github.com/GameTechDev/PresentMon) for the canonical reference.
 
@@ -1225,7 +1225,7 @@ mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚�
 - 要点三：本节编号 46，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -1259,7 +1259,7 @@ t_process_to_parse_ms=3.265 t_parse_to_layout_ms=0.012 t_layout_to_window_ms=7.2
 
 中英混排文本的断行位置是本项目的一个高风险项，需要在 T10 阶段重点验证。 Reproducible measurements depend on recording exact tool versions alongside the results. 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. 滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 High DPI awareness means recomputing text metrics whenever the effective scale factor changes. 滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。
 
 滚动时的重排开销是另一个需要用 PresentMon 抓帧来验证的风险点。 The rendering pipeline targets a first-frame latency budget well under one hundred milliseconds. 渲染管线基于 Direct2D，窗口首次绘制的时间被内置埋点精确记录。
 
@@ -1270,7 +1270,7 @@ mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚�
 - 要点三：本节编号 48，用于人工核对语料生成是否重复。
 
 ```cpp
-void mdvn::bench::MarkFirstPresent() {
+void markair::bench::MarkFirstPresent() {
     if (!g_enabled || g_firstPresentRecorded) return;
     g_tFirstPresent = NowCounter();
     g_firstPresentRecorded = true;
@@ -1316,13 +1316,13 @@ GetProcessMemoryInfo(GetCurrentProcess(),
 
 ## 第 50 节：基准语料片段
 
-渲染管线基于 Direct2D，窗口首次绘制的时间被内置埋点精确记录。 This corpus intentionally interleaves short and long sentences to resemble real documentation. mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
+渲染管线基于 Direct2D，窗口首次绘制的时间被内置埋点精确记录。 This corpus intentionally interleaves short and long sentences to resemble real documentation. markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。
 
 文档解析完成后立即进入布局阶段，两者之间的耗时会被单独记录一条指标。 Markdown parsing is delegated to md4c, a small and fast CommonMark-compliant C parser. 表格语法在 Markdown 中较为特殊，需要单独的表格布局器来处理列宽与对齐。
 
 冷启动场景下，操作系统的 standby list 会显著影响首次页面命中的耗时。 Layout computation walks the block tree once and produces a flat list of paint commands. 解析阶段使用 md4c 作为底层库，布局阶段由自研的块级布局引擎完成。
 
-mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 The benchmark harness captures five timestamps plus one memory counter per run. 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。
+markair 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚动。 The benchmark harness captures five timestamps plus one memory counter per run. 常驻内存必须控制在 20MB 以内，字体资源应当映射为 Mapped File 而不是 Private Bytes。
 
 参考文档：[CommonMark 规范](https://spec.commonmark.org/0.30/) 以及 [DirectWrite 文本度量](https://learn.microsoft.com/windows/win32/directwrite/)，两者都对本节涉及的实现细节有帮助。See also [CommonMark 规范](https://spec.commonmark.org/0.30/) for the canonical reference.
 
@@ -1331,7 +1331,7 @@ mdvn 是一个只读的 Markdown 查看器，专注于快速打开与流畅滚�
 - 要点三：本节编号 50，用于人工核对语料生成是否重复。
 
 ```powershell
-$p = Start-Process -FilePath $MdvnExe -ArgumentList "--bench", $BenchFile `
+$p = Start-Process -FilePath $MarkairExe -ArgumentList "--bench", $BenchFile `
     -RedirectStandardError $errFile -PassThru
 Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue

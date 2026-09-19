@@ -1,4 +1,4 @@
-// mdvn 的剪贴板模块(T45 代码块复制按钮):代码块纯文本拼接 + 系统剪贴板写入。
+// markair 的剪贴板模块(T45 代码块复制按钮):代码块纯文本拼接 + 系统剪贴板写入。
 //
 // 分成两层是刻意的:`CodeBlockPlainTextUtf8` 是不碰任何 Win32 API 的纯函数,
 // 可以直接单测(见 tests/test_code_copy.cpp);真正的 OpenClipboard/
@@ -12,7 +12,7 @@
 #include "../doc/model.h"
 #include "../util/arena.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 拼出一个围栏/缩进代码块的纯文本(UTF-8),原样保留行首缩进与换行,
@@ -27,9 +27,9 @@ namespace mdvn {
  * @param cap `out` 的容量(字节),`out` 为 nullptr 时应传 0。
  * @return 该代码块纯文本的完整字节数(不含结尾 '\0')。
  * @example
- *   u32 need = mdvn::CodeBlockPlainTextUtf8(doc, idx, nullptr, 0);
+ *   u32 need = markair::CodeBlockPlainTextUtf8(doc, idx, nullptr, 0);
  *   char* buf = static_cast<char*>(arena.Alloc(need + 1, 1));
- *   mdvn::CodeBlockPlainTextUtf8(doc, idx, buf, need);
+ *   markair::CodeBlockPlainTextUtf8(doc, idx, buf, need);
  */
 u32 CodeBlockPlainTextUtf8(const Document& doc, u32 blockIndex, char* out, u32 cap);
 
@@ -44,7 +44,7 @@ u32 CodeBlockPlainTextUtf8(const Document& doc, u32 blockIndex, char* out, u32 c
  * @param text 待写入的文本,非空;函数自行补结尾 '\0'。
  * @param len 文本长度(UTF-16 code unit 个数,不含结尾 '\0')。
  * @return 写入成功返回 true;分配失败/剪贴板被其他进程占用时返回 false。
- * @example mdvn::SetClipboardUnicodeText(hwnd, L"hello", 5);
+ * @example markair::SetClipboardUnicodeText(hwnd, L"hello", 5);
  */
 bool SetClipboardUnicodeText(HWND owner, const wchar_t* text, u32 len);
 
@@ -57,8 +57,8 @@ bool SetClipboardUnicodeText(HWND owner, const wchar_t* text, u32 len);
  * @param scratch 拼接用的临时 Arena,非空;函数入口会整体 Reset,调用方不应
  *                在其上保存需要跨调用存活的数据。
  * @return 复制成功返回 true;块非法/空代码块/剪贴板不可用时返回 false。
- * @example if (mdvn::CopyCodeBlockToClipboard(hwnd, doc, blockIndex, &scratch)) { / * 进入已复制反馈态 * / }
+ * @example if (markair::CopyCodeBlockToClipboard(hwnd, doc, blockIndex, &scratch)) { / * 进入已复制反馈态 * / }
  */
 bool CopyCodeBlockToClipboard(HWND owner, const Document& doc, u32 blockIndex, Arena* scratch);
 
-}  // namespace mdvn
+}  // namespace markair

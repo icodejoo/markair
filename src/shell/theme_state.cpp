@@ -1,6 +1,6 @@
 #include "theme_state.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * Cycle between Light and Dark theme: Light <-> Dark. Pure function.
@@ -59,4 +59,4 @@ bool DetectSystemIsDark() {
     return AppsUseLightThemeValueToIsDark(value);
 }
 
-}  // namespace mdvn
+}  // namespace markair

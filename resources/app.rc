@@ -1,0 +1,3 @@
+// 应用图标资源：把 icon.jpg 转出的多尺寸 app.ico 绑进 exe，
+// 资源 ID 用 1，Windows 默认取 ID 最小的图标作为 exe/任务栏图标。
+1 ICON "app.ico"

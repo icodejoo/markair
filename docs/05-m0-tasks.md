@@ -39,7 +39,7 @@ cl /nologo /EHsc /O2 /W4 spikes\s02_font_probe.cpp /link dwrite.lib psapi.lib
 | **T0** | 构建系统 | `CMakeLists.txt`、`src/CMakeLists.txt`、`.gitignore`、`.editorconfig` | CMake ≥ 3.20 + MSVC;`/MT` 静态 CRT;`/EHs-c-`(禁异常)、`/GR-`(禁 RTTI)、`/O2 /GL /Gy /Gw`;链接 `/OPT:REF /OPT:ICF /LTCG`。**不引入 vcpkg/conan**。Debug/Release 两配置均能从干净目录一次配置成功 |
 | **T1** | vendored md4c | `third_party/md4c/{md4c.c,md4c.h,LICENSE,VERSION.txt}` | 直接拷贝源码,不做 submodule;`VERSION.txt` 记录采用的上游版本与提交哈希。编译无警告(允许对该目录关闭 `/W4`) |
 | **T2** | 编码规范文档 | `CONTRIBUTING.md` 或 `docs/coding-rules.md` | 把技术选型 §1 的硬性约束写成可检查条目:禁异常/RTTI/iostream/`std::regex`/全局构造函数;**禁止调用 `GetSystemFontCollection`**(裁决 #10 的代码评审检查项) |
-| **T3** | 极简测试框架 | `tests/mdvn_test.h`、`tests/main.cpp` | `[裁决 #11]` 自写约 80 行:`MDVN_TEST(name)` 注册宏 + `MDVN_CHECK` / `MDVN_CHECK_EQ` / `MDVN_CHECK_STREQ`。产出 `mdvn_tests.exe`,失败时返回非零退出码(供 CI 用)。**不引入 gtest/catch2** |
+| **T3** | 极简测试框架 | `tests/markair_test.h`、`tests/main.cpp` | `[裁决 #11]` 自写约 80 行:`MARKAIR_TEST(name)` 注册宏 + `MARKAIR_CHECK` / `MARKAIR_CHECK_EQ` / `MARKAIR_CHECK_STREQ`。产出 `markair_tests.exe`,失败时返回非零退出码(供 CI 用)。**不引入 gtest/catch2** |
 | **T4** | Arena 分配器 | `src/util/arena.h` / `arena.cpp` | `VirtualAlloc` 预留 + 按需提交;`Alloc(size, align)` / `Reset()`;对齐正确、跨页边界正确、耗尽时返回 `nullptr` 而非崩溃。**测试**:`tests/test_arena.cpp` 覆盖对齐、越界、reset 复用 |
 | **T5** | 字符串切片与小容器 | `src/util/str.h`、`src/util/span.h` | `StrSlice{const char*, u32}`(零拷贝,指向内存映射);UTF-8↔UTF-16 转换;`Vec<T>` 基于 arena 的追加数组。**测试**:UTF-8 边界、代理对、非法序列 |
 
@@ -63,7 +63,7 @@ cl /nologo /EHsc /O2 /W4 spikes\s02_font_probe.cpp /link dwrite.lib psapi.lib
 | **T10** | 块级布局 | `src/layout/layout.h/.cpp` | 文档模型 → 行盒/块盒;视口宽度变化只重跑布局不重解析;**只为可见区域 ± 1 屏生成 `IDWriteTextLayout`**,其余淘汰(架构 §5)。列表缩进、引用竖线、代码块背景区域的几何计算 |
 | **T11** | D2D 渲染 | `src/render/renderer.h/.cpp` | 设备/交换链管理;硬件加速失败回退 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`;`D2DERR_RECREATE_TARGET` 重建资源保留布局;引用竖线与分割线用 D2D 几何图元画,**不用图标字体**(架构 §4 第 5 条) |
 | **T12** | 窗口与消息循环 | `src/shell/window.h/.cpp` | **标准 Windows 标题栏,不自绘** `[裁决 #9]`;Per-Monitor V2 DPI 感知;滚轮 / PageUp / PageDown / Home / End / `Ctrl+W` / `Esc`;窗口背景色设为主题背景以避免白闪(架构 §6) |
-| **T13** | 进程入口 | `src/app/main.cpp` | 命令行解析(`mdvn <file>`);**每个文件一个独立窗口,不做单实例复用** `[裁决 #6]`;命名互斥体仅用于"同一文件重复双击时 `SetForegroundWindow` 前置已有窗口";无有副作用的全局构造函数 |
+| **T13** | 进程入口 | `src/app/main.cpp` | 命令行解析(`markair <file>`);**每个文件一个独立窗口,不做单实例复用** `[裁决 #6]`;命名互斥体仅用于"同一文件重复双击时 `SetForegroundWindow` 前置已有窗口";无有副作用的全局构造函数 |
 
 ---
 
@@ -71,9 +71,9 @@ cl /nologo /EHsc /O2 /W4 spikes\s02_font_probe.cpp /link dwrite.lib psapi.lib
 
 | # | 任务 | 要创建的文件 | 验收标准 |
 |---|---|---|---|
-| **T14** | 内置 `--bench` 埋点 | `src/app/bench.h/.cpp` | `QueryPerformanceCounter` 记录:进程入口 → 窗口创建 → 解析完成 → 布局完成 → **第一次 `Present` 返回**;`GetProcessMemoryInfo` 的 `PrivateUsage`。`mdvn --bench <file>` 以机器可读的单行 KV 输出到 stderr(便于脚本采集) |
+| **T14** | 内置 `--bench` 埋点 | `src/app/bench.h/.cpp` | `QueryPerformanceCounter` 记录:进程入口 → 窗口创建 → 解析完成 → 布局完成 → **第一次 `Present` 返回**;`GetProcessMemoryInfo` 的 `PrivateUsage`。`markair --bench <file>` 以机器可读的单行 KV 输出到 stderr(便于脚本采集) |
 | **T15** | 基准语料与测量脚本 | `bench/BENCH-A.md`、`bench/run_bench.ps1` | `BENCH-A.md` ≈ 100 KB 纯文本 Markdown(含表格、代码块、若干行内链接,无图片);脚本跑 20 次取中位数与 P95,输出 CSV。冷启动模式调用 RAMMap 清 standby list |
-| **T16** | CI 性能门禁 | `.github/workflows/ci.yml` 或 `ci/check_budget.ps1` | 构建 + 跑 `mdvn_tests.exe` + 跑 `run_bench.ps1`,对**首屏时间、PrivateUsage、exe 体积**三项做阈值门禁,超标即失败 |
+| **T16** | CI 性能门禁 | `.github/workflows/ci.yml` 或 `ci/check_budget.ps1` | 构建 + 跑 `markair_tests.exe` + 跑 `run_bench.ps1`,对**首屏时间、PrivateUsage、exe 体积**三项做阈值门禁,超标即失败 |
 | **T17** | 中英混排视觉回归语料 | `bench/mixed-cjk.md` | 中英混排 + 长 URL + 长代码行 + 嵌套列表的样例,供人工视觉比对(M0 风险项:断行位置) |
 
 ---
@@ -88,9 +88,9 @@ cl /nologo /EHsc /O2 /W4 spikes\s02_font_probe.cpp /link dwrite.lib psapi.lib
 | BENCH-A 冷启动首屏 | ≤ 250 ms(目标)/ 400 ms(上限) | 内置埋点 + RAMMap | `RAMMap64.exe -Et`(清 Empty Standby List)后跑单次,重复 10 轮 |
 | Private Working Set(打开 BENCH-A 静置 10s) | ≤ **20 MB**(M3 收紧到 15 MB) | **VMMap** 为准,`PrivateUsage` 为自动化代理 | VMMap 附加进程,记录 Private Working Set / Private Bytes / **Mapped File** 三项分项 —— 必须能看到字体落在 Mapped File 而非 Private |
 | 空文档常驻内存 | ≤ 8 MB(目标)/ 12 MB(上限) | 同上 | 不传文件参数启动 |
-| exe 体积 | 记录基线即可(M3 才门禁 1.5 MB) | 构建产物 | `link /dump /headers mdvn.exe`;CI 中做趋势记录 |
-| 滚动帧率 | 肉眼无卡顿 + 抽查 | **PresentMon** | `PresentMon.exe -process_name mdvn.exe -timed 15`,滚动期间采样,看 99 分位帧时间 |
-| 单元测试 | 编码嗅探 / arena / 文档模型三块全绿 | `mdvn_tests.exe` | 退出码为 0 |
+| exe 体积 | 记录基线即可(M3 才门禁 1.5 MB) | 构建产物 | `link /dump /headers markair.exe`;CI 中做趋势记录 |
+| 滚动帧率 | 肉眼无卡顿 + 抽查 | **PresentMon** | `PresentMon.exe -process_name markair.exe -timed 15`,滚动期间采样,看 99 分位帧时间 |
+| 单元测试 | 编码嗅探 / arena / 文档模型三块全绿 | `markair_tests.exe` | 退出码为 0 |
 | 内存泄漏 | 反复打开关闭无单调上升 | Application Verifier + CRT 调试堆 | 脚本连开 100 个文档,前后对比 `PrivateUsage` |
 
 > 所有 Sysinternals 工具(VMMap / RAMMap / Process Monitor)与 PresentMon 均需在开工前装好并记录版本号,写进 `bench/TOOLS.md`,保证测量可复现。

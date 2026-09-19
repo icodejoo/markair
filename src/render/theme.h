@@ -1,11 +1,11 @@
-// mdvn 调色板模块(T46):把散落在 renderer.cpp 里的颜色常量集中到一处,
+// markair 调色板模块(T46):把散落在 renderer.cpp 里的颜色常量集中到一处,
 // 为后续主题切换(T49)打基础——Renderer 只持有一个 `const Palette*`,
 // 切换主题时只改指针,不做任何其他事。
 #pragma once
 
 #include <d2d1.h>
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 把一个 0xRRGGBB 十六进制常量换算成 `D2D1_COLOR_F`,换算公式与
@@ -14,7 +14,7 @@ namespace mdvn {
  * @param rgb 形如 0xRRGGBB 的颜色值。
  * @param alpha 不透明度,默认 1.0(不透明)。
  * @return 对应的 `D2D1_COLOR_F`。
- * @example constexpr D2D1_COLOR_F white = mdvn::MakeColor(0xFFFFFFu);
+ * @example constexpr D2D1_COLOR_F white = markair::MakeColor(0xFFFFFFu);
  */
 constexpr D2D1_COLOR_F MakeColor(UINT32 rgb, float alpha = 1.0f) {
     return D2D1_COLOR_F{
@@ -224,7 +224,7 @@ inline constexpr Palette kDarkPalette{
  * 纯数字函数,不依赖任何 D2D 设备,可脱离渲染上下文单测。
  * @param c 单个颜色通道,取值 [0, 1]。
  * @return 线性化后的通道值,取值 [0, 1]。
- * @example float lin = mdvn::LinearizeChannel(0.5f);
+ * @example float lin = markair::LinearizeChannel(0.5f);
  */
 float LinearizeChannel(float c);
 
@@ -234,8 +234,8 @@ float LinearizeChannel(float c);
  * @param a 颜色 A(忽略 alpha,按不透明处理)。
  * @param b 颜色 B(忽略 alpha,按不透明处理)。
  * @return 对比度,取值范围 [1, 21],数值越大对比越强。
- * @example float ratio = mdvn::ContrastRatio(mdvn::kDarkPalette.background, mdvn::kDarkPalette.text);
+ * @example float ratio = markair::ContrastRatio(markair::kDarkPalette.background, markair::kDarkPalette.text);
  */
 float ContrastRatio(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b);
 
-}  // namespace mdvn
+}  // namespace markair

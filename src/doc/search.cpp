@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -155,4 +155,4 @@ bool MatchToTextRange(const Document& doc, const Match& m, u32* outPosition, u32
     return true;
 }
 
-}  // namespace mdvn
+}  // namespace markair

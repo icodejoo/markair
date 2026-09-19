@@ -1,4 +1,4 @@
-// mdvn 的命中测试(T35):屏幕坐标 →(滚动偏移换算)→ 块下标 → inline run →
+// markair 的命中测试(T35):屏幕坐标 →(滚动偏移换算)→ 块下标 → inline run →
 // 链接目标 / 图片下标。
 //
 // 与 `shell/scroll.h` 同样的设计口径:**不依赖 HWND、不依赖 D2D**,全部是可脱离
@@ -10,7 +10,7 @@
 #include "../layout/layout.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 一次命中测试的结果种类。 */
 enum class HitKind : u8 {
@@ -42,7 +42,7 @@ struct DocPoint {
  * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
  * @param scrollY 当前纵向滚动偏移(DIP)。
  * @return 文档坐标系下的点。
- * @example mdvn::DocPoint p = mdvn::ClientToDocument(120, 80, 1.5f, 200.0f); // {80, 253.33}
+ * @example markair::DocPoint p = markair::ClientToDocument(120, 80, 1.5f, 200.0f); // {80, 253.33}
  */
 DocPoint ClientToDocument(int clientX, int clientY, float dipScale, float scrollY);
 
@@ -53,7 +53,7 @@ DocPoint ClientToDocument(int clientX, int clientY, float dipScale, float scroll
  *
  * @param type 块类型。
  * @return 是内容块返回 true。
- * @example bool ok = mdvn::IsContentBlockType(mdvn::BlockType::Paragraph); // true
+ * @example bool ok = markair::IsContentBlockType(markair::BlockType::Paragraph); // true
  */
 bool IsContentBlockType(BlockType type);
 
@@ -68,7 +68,7 @@ bool IsContentBlockType(BlockType type);
  * @param docX 文档坐标 x(DIP)。
  * @param docY 文档坐标 y(DIP)。
  * @return 命中的块下标;落在块间隙/文档之外返回 `kInvalidIndex`。
- * @example u32 b = mdvn::FindContentBlockAt(geoms, n, 10.0f, 42.0f);
+ * @example u32 b = markair::FindContentBlockAt(geoms, n, 10.0f, 42.0f);
  */
 u32 FindContentBlockAt(const BlockGeometry* geometries, u32 count, float docX, float docY);
 
@@ -80,7 +80,7 @@ u32 FindContentBlockAt(const BlockGeometry* geometries, u32 count, float docX, f
  * @param docX 文档坐标 x(DIP)。
  * @param docY 文档坐标 y(DIP)。
  * @return 命中的图片下标;没命中返回 `kInvalidIndex`。
- * @example u32 i = mdvn::FindImageBoxAt(g.imageBoxes.data, g.imageBoxes.len, x, y);
+ * @example u32 i = markair::FindImageBoxAt(g.imageBoxes.data, g.imageBoxes.len, x, y);
  */
 u32 FindImageBoxAt(const ImageBox* boxes, u32 count, float docX, float docY);
 
@@ -95,7 +95,7 @@ u32 FindImageBoxAt(const ImageBox* boxes, u32 count, float docX, float docY);
  * @param docX 文档坐标 x(DIP)。
  * @param docY 文档坐标 y(DIP)。
  * @return 命中的代码块下标;没命中返回 `kInvalidIndex`。
- * @example u32 b = mdvn::FindCodeCopyButtonAt(&layout.Geometry(0), layout.BlockCount(), x, y);
+ * @example u32 b = markair::FindCodeCopyButtonAt(&layout.Geometry(0), layout.BlockCount(), x, y);
  */
 u32 FindCodeCopyButtonAt(const BlockGeometry* geometries, u32 count, float docX, float docY);
 
@@ -109,7 +109,7 @@ u32 FindCodeCopyButtonAt(const BlockGeometry* geometries, u32 count, float docX,
  * @param count 数组长度。
  * @param textPosition 待判定的 UTF-16 位置。
  * @return 命中的链接目标下标(`LinkBox::linkTargetIdx`);没命中返回 `kInvalidIndex`。
- * @example u32 t = mdvn::LinkTargetAtTextPosition(g.linkBoxes.data, g.linkBoxes.len, 7);
+ * @example u32 t = markair::LinkTargetAtTextPosition(g.linkBoxes.data, g.linkBoxes.len, 7);
  */
 u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition);
 
@@ -124,8 +124,8 @@ u32 LinkTargetAtTextPosition(const LinkBox* boxes, u32 count, u32 textPosition);
  * @param docY 文档坐标 y(DIP)。
  * @return 命中结果;没命中任何可交互内容时 `kind == HitKind::None`。
  * @example
- *   mdvn::DocPoint p = mdvn::ClientToDocument(x, y, scale, scrollY);
- *   mdvn::HitResult hit = mdvn::HitTestDocument(layout, p.x, p.y);
+ *   markair::DocPoint p = markair::ClientToDocument(x, y, scale, scrollY);
+ *   markair::HitResult hit = markair::HitTestDocument(layout, p.x, p.y);
  */
 HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float docY);
 
@@ -139,7 +139,7 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
  * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
  * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
  * @return 点落在侧栏区域内返回 true。
- * @example bool inPanel = mdvn::IsPointInOutlinePanel(50, 1.5f, 220.0f); // true
+ * @example bool inPanel = markair::IsPointInOutlinePanel(50, 1.5f, 220.0f); // true
  */
 bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip);
 
@@ -153,7 +153,7 @@ bool IsPointInOutlinePanel(int clientX, float dipScale, float panelWidthDip);
  * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
  * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
  * @return 点落在蒙层区域内返回 true。
- * @example bool inMask = mdvn::IsPointInOutlineOverlayMask(500, 1.5f, 220.0f); // true
+ * @example bool inMask = markair::IsPointInOutlineOverlayMask(500, 1.5f, 220.0f); // true
  */
 bool IsPointInOutlineOverlayMask(int clientX, float dipScale, float panelWidthDip);
 
@@ -169,7 +169,7 @@ bool IsPointInOutlineOverlayMask(int clientX, float dipScale, float panelWidthDi
  * @param panelWidthDip 侧栏宽度(DIP),调用方传入 `kOutlinePanelWidthDip`。
  * @param clientHeightDip 客户区高度(DIP)。
  * @return 点落在侧栏矩形内返回 true。
- * @example bool inPanel = mdvn::IsPointInOutlinePanelRect(50, 300, 1.5f, 220.0f, 600.0f);
+ * @example bool inPanel = markair::IsPointInOutlinePanelRect(50, 300, 1.5f, 220.0f, 600.0f);
  */
 bool IsPointInOutlinePanelRect(int clientX, int clientY, float dipScale, float panelWidthDip,
                                 float clientHeightDip);
@@ -192,7 +192,7 @@ constexpr float kOutlinePanelResizeHandleWidthDip = 6.0f;
  * @param dipScale DPI 缩放系数(实际 DPI / 96),须大于 0;非正数按 1.0 处理。
  * @param panelWidthDip 侧栏当前宽度(DIP)。
  * @return 点落在抓手范围内返回 true。
- * @example bool onHandle = mdvn::IsPointInOutlinePanelResizeHandle(220, 1.5f, 220.0f);
+ * @example bool onHandle = markair::IsPointInOutlinePanelResizeHandle(220, 1.5f, 220.0f);
  */
 bool IsPointInOutlinePanelResizeHandle(int clientX, float dipScale, float panelWidthDip);
 
@@ -223,8 +223,8 @@ struct DocTextHit {
  * @return 命中的文本位置;整份文档都没有可选文本(没有任何块持有
  *         `textLayout`)时 `valid` 为 false。
  * @example
- *   mdvn::DocPoint p = mdvn::ClientToDocument(x, y, scale, scrollY);
- *   mdvn::DocTextHit hit = mdvn::HitTestTextPosition(layout, p.x, p.y);
+ *   markair::DocPoint p = markair::ClientToDocument(x, y, scale, scrollY);
+ *   markair::DocTextHit hit = markair::HitTestTextPosition(layout, p.x, p.y);
  */
 DocTextHit HitTestTextPosition(const BlockLayoutEngine& layout, float docX, float docY);
 
@@ -232,8 +232,8 @@ DocTextHit HitTestTextPosition(const BlockLayoutEngine& layout, float docX, floa
  * 命中结果是否应当显示手型光标(链接、可点击的图片/占位块、代码块复制按钮)。
  * @param hit 命中结果。
  * @return 需要手型光标返回 true。
- * @example if (mdvn::ShouldUseHandCursor(hit)) SetCursor(handCursor);
+ * @example if (markair::ShouldUseHandCursor(hit)) SetCursor(handCursor);
  */
 bool ShouldUseHandCursor(const HitResult& hit);
 
-}  // namespace mdvn
+}  // namespace markair

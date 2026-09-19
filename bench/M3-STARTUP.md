@@ -56,7 +56,7 @@ module_uxtheme_loaded_at_first_present=1
   `CMakeLists.txt:61-70` 已经写明的预期行为，不是本次新发现的问题，验证
   结果与文档一致。
 
-额外用 `Get-Process.Modules` 对运行中的 mdvn.exe 做了一次全量快照
+额外用 `Get-Process.Modules` 对运行中的 markair.exe 做了一次全量快照
 （进程存活 800ms 后），按体积排序前列：
 
 | 模块 | 大小(KB) | 备注 |
@@ -91,7 +91,7 @@ CreateHwndRenderTarget`）无论渲染目标类型是硬件还是软件，底层
 主进程注释"避免触发 Intel iGPU 的着色器编译器"）时会退化到 WARP
 (`D3D10Warp.dll`)。这一条 DLL 组合的映射/首次访问耗时，就是
 `window_to_present` 里去掉几毫秒 DirectWrite 文本布局创建之后剩下的大头，
-**是 Direct2D API 本身的强制行为，不是 mdvn 代码里可以绕开的一次性初始化
+**是 Direct2D API 本身的强制行为，不是 markair 代码里可以绕开的一次性初始化
 浪费**。
 
 ## 4. 已尝试的优化（均在允许范围内）与结果
@@ -103,7 +103,7 @@ CreateHwndRenderTarget`）无论渲染目标类型是硬件还是软件，底层
 | 3 | 复核 `/DELAYLOAD` 4 个 DLL 是否真的延后 | **winhttp/shell32 确认真延后；dwmapi/uxtheme 确认按文档已知方式提前**（见第2节新增的运行期诊断），未发现回归，未发现"名不副实"的新问题。 |
 | 4 | 惰性初始化排查：`findArena`/`findScratch`/`clipboardScratch` 等在首帧前的 `Arena::Init` 调用是否可延后 | 排查后确认这些 `Init` 只是 `VirtualAlloc` **保留**地址空间（不提交物理页），耗时在微秒级，且均已在 `main.cpp` 里以"用到才 Init"的原则组织（大纲侧栏 `outlineArena` 已经是首帧后按需 Init 的先例）；未发现可继续往后挪且不改变行为的候选，未改动。 |
 | 5 | `RunArenaSmokeTest`/`RunMd4cSmokeTest`（`main.cpp:443-444`） | 这两个烟雾测试在每次启动无条件跑一次，属于 `process_to_parse` 之前的极小固定开销（微秒级，被 `t_process_to_parse_ms` 的中位数 3~8ms 掩盖），排查后判断不是本次瓶颈来源，为避免引入"验证途径消失"的回归风险，本次未删除/未改动。 |
-| 6 | 尝试把 `EnsureRenderTarget` 的调用点从"首次 WM_PAINT"提前到"CreateMainWindow 刚返回"（意图与 dwmapi/uxtheme 的加载窗口重叠） | **评估后未实施**：mdvn 是单线程架构（`04-delivery-plan.md` §8 单线程约束，`T77` 验收标准里也重申"严禁引入后台线程"），单线程下重排调用顺序不能产生任何并行重叠收益，总耗时不变，反而增加代码复杂度，判定为无效优化，未落地。 |
+| 6 | 尝试把 `EnsureRenderTarget` 的调用点从"首次 WM_PAINT"提前到"CreateMainWindow 刚返回"（意图与 dwmapi/uxtheme 的加载窗口重叠） | **评估后未实施**：markair 是单线程架构（`04-delivery-plan.md` §8 单线程约束，`T77` 验收标准里也重申"严禁引入后台线程"），单线程下重排调用顺序不能产生任何并行重叠收益，总耗时不变，反而增加代码复杂度，判定为无效优化，未落地。 |
 | 7 | 尝试用后台线程预热 D3D11/DXGI/WARP 模块（`LoadLibraryW` 提前触发分页） | **判定为禁止手段，未实施**：这本质是"预加载"（08-m3-tasks.md T74 明文禁止"预加载/常驻进程/后台预热服务"），且会引入线程，与单线程架构承诺冲突，直接放弃这个方向，未做任何代码改动。 |
 
 **结论：本任务在允许的优化手段范围内，未找到可进一步压缩
@@ -131,7 +131,7 @@ DXGI/WARP 呈现通道所致的模块加载与首次设备创建，这是架构�
 
 ## 6. 验收复核
 
-- `mdvn_tests.exe`：**422 个测试全部通过，0 失败**（本次改动只在
+- `markair_tests.exe`：**422 个测试全部通过，0 失败**（本次改动只在
   `src/app/bench.cpp::EmitReport` 新增了 4 行只在 `--bench` 模式下生效的
   诊断输出，`g_enabled` 为 false 时零开销，不影响任何现有测试路径）。
 - 本任务对产品代码的唯一改动：`src/app/bench.cpp` 新增

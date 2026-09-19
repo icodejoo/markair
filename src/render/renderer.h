@@ -1,4 +1,4 @@
-// mdvn 的 D2D 渲染模块(T11):设备/渲染目标管理 + 把 BlockLayoutEngine 的
+// markair 的 D2D 渲染模块(T11):设备/渲染目标管理 + 把 BlockLayoutEngine 的
 // 布局结果画到窗口上。渲染目标默认软件光栅化(架构决策,见 memory.md),
 // 本模块不做"硬件优先、失败再降级"的运行时探测。
 #pragma once
@@ -14,7 +14,7 @@
 #include "../util/recent_files.h"
 #include "theme.h"
 
-namespace mdvn {
+namespace markair {
 
 class Renderer;
 
@@ -30,10 +30,10 @@ constexpr u32 kBottomBarButtonCountRender = 8;
  * 覆盖一次 `RenderFrame` 调用。所有字段都允许为空/为 0,全空时等价于不画叠加层。
  *
  * @example
- *   mdvn::ShellOverlay overlay{find.Matches().data, find.MatchCount(),
+ *   markair::ShellOverlay overlay{find.Matches().data, find.MatchCount(),
  *                               find.CurrentIndex(), &doc, find.Visible(),
  *                               find.Query(), nullptr,
- *                               mdvn::kInvalidIndex, mdvn::kInvalidIndex};
+ *                               markair::kInvalidIndex, markair::kInvalidIndex};
  *   renderer.RenderFrame(hwnd, layout, scrollY, 12.0f, &overlay);
  */
 struct ShellOverlay {
@@ -128,7 +128,7 @@ struct ShellOverlay {
  * Renderer::RenderFrame 里。
  * @param hr 某次 D2D 调用(通常是 EndDraw)返回的 HRESULT。
  * @return hr 等于 D2DERR_RECREATE_TARGET 时返回 true。
- * @example if (mdvn::ShouldRecreateRenderTarget(hr)) { / * 释放旧目标 * / }
+ * @example if (markair::ShouldRecreateRenderTarget(hr)) { / * 释放旧目标 * / }
  */
 inline bool ShouldRecreateRenderTarget(HRESULT hr) {
     return hr == D2DERR_RECREATE_TARGET;
@@ -140,14 +140,14 @@ inline bool ShouldRecreateRenderTarget(HRESULT hr) {
  *
  * @param status 图片状态。
  * @return 以 '\0' 结尾的静态宽字符串,状态为 Ok 时返回空串(不画占位块)。
- * @example const wchar_t* t = mdvn::ImagePlaceholderText(mdvn::ImageStatus::Unsupported);
+ * @example const wchar_t* t = markair::ImagePlaceholderText(markair::ImageStatus::Unsupported);
  */
 const wchar_t* ImagePlaceholderText(ImageStatus status);
 
 /**
  * 降采样提示标签(T33 追加)的文案:图片被 T30 缩小过时,在其右下角显示。
  * @return 以 '\0' 结尾的静态宽字符串。
- * @example const wchar_t* tag = mdvn::DownsampledBadgeText();
+ * @example const wchar_t* tag = markair::DownsampledBadgeText();
  */
 const wchar_t* DownsampledBadgeText();
 
@@ -165,7 +165,7 @@ const wchar_t* DownsampledBadgeText();
  *   - `ReleaseResident`:调用 `ImageCache::ReleaseBitmap`,只丢位图、保留尺寸。
  *
  * @example
- *   mdvn::ImageResidencyManager residency;
+ *   markair::ImageResidencyManager residency;
  *   residency.Init(&renderer, &cache, &scratchArena, docDir);
  *   layout.UpdateVisibleRange(top, bottom, fonts, &residency);
  */
@@ -228,7 +228,7 @@ private:
  * `Relayout`,调用方按原样传入同一个布局引擎即可继续渲染。
  *
  * @example
- *   mdvn::Renderer renderer;
+ *   markair::Renderer renderer;
  *   renderer.Init(d2dFactory);
  *   renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f);
  */
@@ -345,7 +345,7 @@ public:
      * @param palette 新调色板,生命周期须覆盖本对象(通常传 `&kLightPalette`
      *                或 `&kDarkPalette` 这类静态常量);传 nullptr 时忽略,
      *                保持当前调色板不变。
-     * @example renderer.SetPalette(&mdvn::kDarkPalette);
+     * @example renderer.SetPalette(&markair::kDarkPalette);
      */
     void SetPalette(const Palette* palette);
 
@@ -664,4 +664,4 @@ private:
     bool outlineScratchInited_;
 };
 
-}  // namespace mdvn
+}  // namespace markair

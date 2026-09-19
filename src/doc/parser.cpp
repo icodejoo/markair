@@ -1,4 +1,4 @@
-// mdvn 的 md4c SAX 回调 -> 文档模型转换器(T8,M1 扩展 GFM 表格/脚注/链接)实现。
+// markair 的 md4c SAX 回调 -> 文档模型转换器(T8,M1 扩展 GFM 表格/脚注/链接)实现。
 #include "parser.h"
 
 #include "attr.h"
@@ -6,7 +6,7 @@
 
 #include "../../third_party/md4c/md4c.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -70,7 +70,7 @@ struct ParseContext {
     }
 };
 
-// md4c 的 MD_ALIGN -> mdvn::CellAlign 映射。
+// md4c 的 MD_ALIGN -> markair::CellAlign 映射。
 CellAlign ToCellAlign(MD_ALIGN a) {
     switch (a) {
         case MD_ALIGN_LEFT: return CellAlign::Left;
@@ -81,7 +81,7 @@ CellAlign ToCellAlign(MD_ALIGN a) {
     }
 }
 
-// md4c 的 MD_BLOCKTYPE -> mdvn::BlockType 映射;level 仅 MD_BLOCK_H 有意义,由调用方另行填充。
+// md4c 的 MD_BLOCKTYPE -> markair::BlockType 映射;level 仅 MD_BLOCK_H 有意义,由调用方另行填充。
 BlockType ToBlockType(MD_BLOCKTYPE t) {
     switch (t) {
         case MD_BLOCK_DOC: return BlockType::Document;
@@ -547,4 +547,4 @@ Document ParseMarkdown(StrSlice source, Arena* arena) {
     return doc;
 }
 
-} // namespace mdvn
+} // namespace markair

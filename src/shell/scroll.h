@@ -1,6 +1,6 @@
-// mdvn 的滚动位置计算(T12):把"滚轮增量 / 翻页 / 首尾跳转 -> 新的滚动偏移"
+// markair 的滚动位置计算(T12):把"滚轮增量 / 翻页 / 首尾跳转 -> 新的滚动偏移"
 // 这部分纯数字逻辑从窗口过程里剥离出来,不依赖 HWND、不 include <windows.h>,
-// 因此可以直接链进 mdvn_tests.exe 做单元测试(见 tests/test_scroll.cpp)。
+// 因此可以直接链进 markair_tests.exe 做单元测试(见 tests/test_scroll.cpp)。
 //
 // 约定:滚动偏移 scrollY 的单位是 DIP,0 表示文档顶部对齐视口顶部,
 // 取值恒被夹在 [0, MaxScrollOffset()] 区间内。
@@ -12,7 +12,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 一次标准滚轮刻度的增量(等同 Win32 的 WHEEL_DELTA;这里自定义常量以免本头文件依赖 windows.h)。
 constexpr int kWheelDeltaUnit = 120;
@@ -33,7 +33,7 @@ constexpr float kContentPaddingDip = 12.0f;
  * @param clientWidthDip 客户区宽度(DIP)。
  * @return `max(0, clientWidthDip - 2 * kContentPaddingDip)`;极窄窗口下夹到 0,
  *         避免传给 `Relayout` 负数换行宽度。
- * @example float w = mdvn::ContentWidthDip(800.0f); // 得 776
+ * @example float w = markair::ContentWidthDip(800.0f); // 得 776
  */
 inline float ContentWidthDip(float clientWidthDip) {
     float w = clientWidthDip - 2.0f * kContentPaddingDip;
@@ -48,7 +48,7 @@ inline float ContentWidthDip(float clientWidthDip) {
  * 平移覆盖,不需要在这里体现)。
  * @param clientHeightDip 客户区高度(DIP)。
  * @return `max(0, clientHeightDip - 2 * kContentPaddingDip)`。
- * @example float h = mdvn::UsableViewportHeightDip(600.0f); // 得 576
+ * @example float h = markair::UsableViewportHeightDip(600.0f); // 得 576
  */
 inline float UsableViewportHeightDip(float clientHeightDip) {
     float h = clientHeightDip - 2.0f * kContentPaddingDip;
@@ -73,7 +73,7 @@ enum class ScrollCommand {
  * @param totalHeight 文档总高度(DIP)。
  * @param viewportHeight 视口高度(DIP)。
  * @return `max(0, totalHeight - viewportHeight)`;文档比视口短时返回 0。
- * @example float maxY = mdvn::MaxScrollOffset(layout.TotalHeight(), 600.0f); // 文档 1000 时得 400
+ * @example float maxY = markair::MaxScrollOffset(layout.TotalHeight(), 600.0f); // 文档 1000 时得 400
  */
 inline float MaxScrollOffset(float totalHeight, float viewportHeight) {
     float maxScroll = totalHeight - viewportHeight;
@@ -86,7 +86,7 @@ inline float MaxScrollOffset(float totalHeight, float viewportHeight) {
  * @param totalHeight 文档总高度(DIP)。
  * @param viewportHeight 视口高度(DIP)。
  * @return 夹取后的合法滚动偏移(DIP)。
- * @example float y = mdvn::ClampScrollOffset(-50.0f, 1000.0f, 600.0f); // 得 0
+ * @example float y = markair::ClampScrollOffset(-50.0f, 1000.0f, 600.0f); // 得 0
  */
 inline float ClampScrollOffset(float scrollY, float totalHeight, float viewportHeight) {
     float maxScroll = MaxScrollOffset(totalHeight, viewportHeight);
@@ -104,7 +104,7 @@ inline float ClampScrollOffset(float scrollY, float totalHeight, float viewportH
  * @param totalHeight 文档总高度(DIP)。
  * @param viewportHeight 视口高度(DIP)。
  * @return 夹取后的新滚动偏移(DIP)。
- * @example float y = mdvn::ScrollByWheel(0.0f, -120, 1000.0f, 600.0f); // 向下滚一刻度,得 60
+ * @example float y = markair::ScrollByWheel(0.0f, -120, 1000.0f, 600.0f); // 向下滚一刻度,得 60
  */
 inline float ScrollByWheel(float scrollY, int wheelDelta, float totalHeight, float viewportHeight) {
     float notches = static_cast<float>(wheelDelta) / static_cast<float>(kWheelDeltaUnit);
@@ -121,7 +121,7 @@ inline float ScrollByWheel(float scrollY, int wheelDelta, float totalHeight, flo
  * @param totalHeight 文档总高度(DIP)。
  * @param viewportHeight 视口高度(DIP)。
  * @return 夹取后的新滚动偏移(DIP)。
- * @example float y = mdvn::ApplyScrollCommand(0.0f, mdvn::ScrollCommand::End, 1000.0f, 600.0f); // 得 400
+ * @example float y = markair::ApplyScrollCommand(0.0f, markair::ScrollCommand::End, 1000.0f, 600.0f); // 得 400
  */
 inline float ApplyScrollCommand(float scrollY, ScrollCommand command,
                                 float totalHeight, float viewportHeight) {
@@ -159,7 +159,7 @@ constexpr int kSbBottom = 7;
  * `ScrollCommandFromScrollBarCode` 的映射,需要调用方另外取滑块位置处理。
  * @param code `LOWORD(wParam)`。
  * @return 是 `SB_THUMBTRACK`/`SB_THUMBPOSITION` 之一返回 true。
- * @example if (mdvn::IsThumbScrollCode(LOWORD(wParam))) { / * 读 nTrackPos * / }
+ * @example if (markair::IsThumbScrollCode(LOWORD(wParam))) { / * 读 nTrackPos * / }
  */
 inline bool IsThumbScrollCode(int code) {
     return code == kSbThumbTrack || code == kSbThumbPosition;
@@ -179,9 +179,9 @@ inline bool IsThumbScrollCode(int code) {
  * @param out 命中时写入对应的 `ScrollCommand`;不命中时不修改。
  * @return 成功映射返回 true。
  * @example
- *   mdvn::ScrollCommand cmd;
- *   if (mdvn::ScrollCommandFromScrollBarCode(LOWORD(wParam), &cmd)) {
- *       float y = mdvn::ApplyScrollCommand(scrollY, cmd, totalHeight, viewportHeight);
+ *   markair::ScrollCommand cmd;
+ *   if (markair::ScrollCommandFromScrollBarCode(LOWORD(wParam), &cmd)) {
+ *       float y = markair::ApplyScrollCommand(scrollY, cmd, totalHeight, viewportHeight);
  *   }
  */
 inline bool ScrollCommandFromScrollBarCode(int code, ScrollCommand* out) {
@@ -205,11 +205,11 @@ inline bool ScrollCommandFromScrollBarCode(int code, ScrollCommand* out) {
  * @param topBlockIdx 重载前视口顶部对应的块下标。
  * @param newBlockCount 重载后新文档的块总数。
  * @return `newBlockCount == 0` 时返回 0;否则 `min(topBlockIdx, newBlockCount - 1)`。
- * @example mdvn::ClampReloadTopBlockIndex(5, 3); // 新文档只剩 3 块,得 2
+ * @example markair::ClampReloadTopBlockIndex(5, 3); // 新文档只剩 3 块,得 2
  */
 inline u32 ClampReloadTopBlockIndex(u32 topBlockIdx, u32 newBlockCount) {
     if (newBlockCount == 0) return 0;
     return (topBlockIdx < newBlockCount) ? topBlockIdx : (newBlockCount - 1);
 }
 
-}  // namespace mdvn
+}  // namespace markair

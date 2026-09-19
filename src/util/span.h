@@ -1,18 +1,18 @@
-// mdvn 的通用小容器:非拥有型 Span<T> 视图 + 基于 Arena 的追加数组 Vec<T>。
+// markair 的通用小容器:非拥有型 Span<T> 视图 + 基于 Arena 的追加数组 Vec<T>。
 // 都不使用 STL 容器,配合 Arena 的"一次性用完丢弃"生命周期。
 #pragma once
 
 #include "arena.h"
 #include "types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 非拥有型连续内存视图,不做深拷贝,不负责释放。
  *
  * @example
  *   int arr[3] = {1, 2, 3};
- *   mdvn::Span<int> s{arr, 3};
+ *   markair::Span<int> s{arr, 3};
  *   int first = s[0];
  */
 template <typename T>
@@ -25,14 +25,14 @@ struct Span {
 };
 
 /**
- * 基于 mdvn::Arena 的追加数组,替代 std::vector。
+ * 基于 markair::Arena 的追加数组,替代 std::vector。
  * 容量不足时从 Arena 重新分配更大块并拷贝旧数据;旧块不回收,
  * 符合"解析一次性用完整体丢弃"的生命周期,不追求单块内存复用。
  *
  * @example
- *   mdvn::Arena arena;
+ *   markair::Arena arena;
  *   arena.Init(1 * 1024 * 1024);
- *   mdvn::Vec<int> v(&arena);
+ *   markair::Vec<int> v(&arena);
  *   v.Push(1);
  *   v.Push(2);
  *   int total = v[0] + v[1]; // 3
@@ -79,4 +79,4 @@ private:
     u32 capacity_;
 };
 
-} // namespace mdvn
+} // namespace markair

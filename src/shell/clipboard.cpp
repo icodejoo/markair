@@ -2,7 +2,7 @@
 
 #include "../util/str.h"
 
-namespace mdvn {
+namespace markair {
 
 u32 CodeBlockPlainTextUtf8(const Document& doc, u32 blockIndex, char* out, u32 cap) {
     if (blockIndex >= doc.blocks.Size()) return 0;
@@ -68,4 +68,4 @@ bool CopyCodeBlockToClipboard(HWND owner, const Document& doc, u32 blockIndex, A
     return SetClipboardUnicodeText(owner, wide.data, wide.len);
 }
 
-}  // namespace mdvn
+}  // namespace markair

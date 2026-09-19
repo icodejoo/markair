@@ -1,6 +1,6 @@
 # M1 可执行任务清单(基础 GFM)
 
-> **状态**:**已全部完成**(阶段 F~J,T18~T44,含新增的 T36b,2026-09-17)。`mdvn_tests.exe` 186 个用例全绿,已提交并推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)。本文档是 [04-delivery-plan.md](04-delivery-plan.md) 中 M1 阶段的细化,**不引入任何新的范围决策** —— 做什么 / 不做什么全部沿用 04 与 [01-requirements.md §6 / §8](01-requirements.md#6-gfm-支持范围-已裁决-2026-09-16全节定稿) 已裁决的结论。
+> **状态**:**已全部完成**(阶段 F~J,T18~T44,含新增的 T36b,2026-09-17)。`markair_tests.exe` 186 个用例全绿,已提交并推送至 [github.com/icodejoo/markair](https://github.com/icodejoo/markair)。本文档是 [04-delivery-plan.md](04-delivery-plan.md) 中 M1 阶段的细化,**不引入任何新的范围决策** —— 做什么 / 不做什么全部沿用 04 与 [01-requirements.md §6 / §8](01-requirements.md#6-gfm-支持范围-已裁决-2026-09-16全节定稿) 已裁决的结论。
 >
 > 拆解到文件级过程中新暴露出来的 7 个歧义点,已于 **2026-09-17** 由用户授权按"**内存占用为第一目的,怎么省内存怎么来**"这一原则裁决完毕,结论与论证见文末「M1 歧义点裁决记录」。以下任务表已按裁决结论写死,不再是"见文末待裁决"的占位。
 >
@@ -70,10 +70,10 @@
 |---|---|---|---|
 | **T35** | 命中测试 | 新增 `src/shell/hit_test.h/.cpp`(纯函数部分)或并入 `src/layout/layout.cpp` | 屏幕坐标 →(滚动偏移换算)→ 块下标 →(`HitTestPoint`)→ inline run → `linkTargetIdx` / 图片 idx。鼠标移到链接/可点击占位块上时 `SetCursor(IDC_HAND)`。命中计算与 Win32 解耦,像 `scroll.h` 一样可单测。**验收**:`tests/test_hit_test.cpp` 断言边界条件(块间隙、行尾空白、滚动后坐标) |
 | **T36** | 链接点击行为 | 新增 `src/shell/navigate.h/.cpp`;改 `src/shell/window.cpp`、`src/app/main.cpp` | 三类目标各自行为:① `http(s)://` → `ShellExecuteW(nullptr, L"open", ...)` 调系统默认浏览器,**不内嵌任何浏览**;② 相对/绝对 `.md` 路径 → 用 `PathCchCombineEx` + `PathCchCanonicalize` 规范化后打开,**在当前窗口内替换文档**(裁决,见文末 #6:不新开进程)——释放旧文档的解析/布局/渲染状态(`Document`/`BlockLayoutEngine`/图片缓存全部重建)后加载新文档,避免"点几个链接跳几个进程"导致内存随点击次数累积;路径不存在时窗口内提示、不弹 MessageBox(架构 §9);③ `#锚点` → 在当前文档的标题块里按 GitHub 式 slug 规则匹配,滚动到该块顶部。**安全边界**:非 `http/https/mailto/file` 的 scheme(如 `javascript:`)一律拒绝执行。**验收**:`tests/test_navigate.cpp` 覆盖 scheme 判定、slug 生成、路径穿越(`../../`)、锚点未命中;外链行为人工验证一次 |
-| **T36b** | 图片点击查看原图(2026-09-17 新增) | 改 `src/shell/navigate.h/.cpp`、`src/shell/window.cpp` | **默认行为**(不额外画"查看原图"按钮,直接复用图片点击手势,符合 §9"内容区保持极简"):点击任意已加载图片 → 打开其原始数据。本地路径图片直接 `ShellExecuteW` 打开原文件路径;`data:` URI 图片将 base64 payload 解码写入 `%TEMP%\mdvn\` 下一个会话内自增编号的临时文件后 `ShellExecuteW` 打开;网络图片(T34)沿用同一模式,用已下载的原始字节写临时文件。**临时文件生命周期裁决**:不追踪外部查看器进程是否退出(`CreateProcess` + 候退线程对单实例转发型看图工具会误判"已关闭"导致过早删除、看图窗口报错或白图,弊大于利);改为进程内维护一个"本次会话创建过的临时文件路径"清单,`wWinMain` 正常退出前统一 `DeleteFileW` 清理,异常终止的残留由 %TEMP% 系统级清理兜底,不做额外保证。被降采样的图片查看到的是原始未降采样数据(因为打开的是原文件/原始 payload,不是解码后的位图),天然满足"降采样只影响内存占用、不影响用户能看到原图"的诉求。**验收**:`tests/test_navigate.cpp` 补充用例覆盖本地路径/data URI 两种打开分支与临时文件清单登记;人工验证一次"点击 PNG 图片能拉起系统照片查看器看到原图" |
+| **T36b** | 图片点击查看原图(2026-09-17 新增) | 改 `src/shell/navigate.h/.cpp`、`src/shell/window.cpp` | **默认行为**(不额外画"查看原图"按钮,直接复用图片点击手势,符合 §9"内容区保持极简"):点击任意已加载图片 → 打开其原始数据。本地路径图片直接 `ShellExecuteW` 打开原文件路径;`data:` URI 图片将 base64 payload 解码写入 `%TEMP%\markair\` 下一个会话内自增编号的临时文件后 `ShellExecuteW` 打开;网络图片(T34)沿用同一模式,用已下载的原始字节写临时文件。**临时文件生命周期裁决**:不追踪外部查看器进程是否退出(`CreateProcess` + 候退线程对单实例转发型看图工具会误判"已关闭"导致过早删除、看图窗口报错或白图,弊大于利);改为进程内维护一个"本次会话创建过的临时文件路径"清单,`wWinMain` 正常退出前统一 `DeleteFileW` 清理,异常终止的残留由 %TEMP% 系统级清理兜底,不做额外保证。被降采样的图片查看到的是原始未降采样数据(因为打开的是原文件/原始 payload,不是解码后的位图),天然满足"降采样只影响内存占用、不影响用户能看到原图"的诉求。**验收**:`tests/test_navigate.cpp` 补充用例覆盖本地路径/data URI 两种打开分支与临时文件清单登记;人工验证一次"点击 PNG 图片能拉起系统照片查看器看到原图" |
 | **T37** | `Ctrl+F` 查找 | 新增 `src/shell/find.h/.cpp`(UI/消息)+ `src/doc/search.h/.cpp`(纯算法) | 算法层:在 `Document` 的 inline 文本上做**大小写不敏感**的子串查找(裁决,见文末 #7:范围含正文/代码块/链接 URL/图片 alt,均直接复用已有的 `Inline`/`LinkTarget` 数据做一次性扫描,**不额外建索引缓冲**,零常驻内存增量;不含 front matter,因其未进入模型;**不做全字匹配/大小写开关**,省一份 UI 状态和分支),返回 `Vec<Match{blockIdx, byteOffset, byteLen}>`。**禁止 `std::regex`**(硬性约束),用朴素/Boyer-Moore 手写。UI 层:顶部浮出的轻量查找条(无菜单栏/工具栏,§9 #9 已定),增量输入即时重搜、`Enter` / `Shift+Enter` / `F3` 跳上一个/下一个、`Esc` 关闭。**验收**:`tests/test_search.cpp` 覆盖中英混排、跨 inline run 的匹配、空串、超长关键词;10MB 文档上一次全文搜索 ≤ 50ms |
 | **T38** | 查找结果高亮与跳转 | 改 `src/layout/layout.cpp`、`src/render/renderer.cpp`、`src/shell/window.cpp` | 命中处用 `HitTestTextRange` 拿矩形,渲染时在文本**下方**画半透明填充(不改文本颜色,避免与链接色冲突);当前命中用另一种底色区分。跳转到命中项时若目标块不在"可见 ± 1 屏"内,需**先滚动再等虚拟化补齐 layout**,不得为此破坏虚拟化策略(架构 §5)。**验收**:在 BENCH-A 上连续按 50 次 `F3` 跨全文跳转,`PrivateUsage` 增量 ≤ 1MB(证明没有把全文 layout 都实例化了) |
-| **T39** | `state.ini` 配置模块 | 新增 `src/util/ini.h/.cpp`;改 `src/app/main.cpp` | 自写约 20 行 KV 解析(02-tech-stack §5 已定,不引 JSON/TOML 库),路径 `%LOCALAPPDATA%\mdvn\state.ini`。M1 需要的键:`load_remote_images`(默认 0)、`font_body_*` / `font_mono_*` 族名覆盖 `[裁决 #10]`。**不含 `image_cache_mb`**(2026-09-17 随 T32 二次裁决作废:图片缓存改为"跟随可见区域走",不再有一个需要配置的总量上限)。**不含 `zoom` 键**(裁决,见文末 #4:M1 缩放不持久化,`zoom` 键留给 M2)。**启动期一次性读完、单次 < 1KB**(架构 §6),文件不存在按默认值走、**不创建目录也不写盘**(除非确有需要持久化的值)。**验收**:`tests/test_ini.cpp` 覆盖缺失文件、非法值、超范围值钳制、注释行、尾随空白 |
+| **T39** | `state.ini` 配置模块 | 新增 `src/util/ini.h/.cpp`;改 `src/app/main.cpp` | 自写约 20 行 KV 解析(02-tech-stack §5 已定,不引 JSON/TOML 库),路径 `%LOCALAPPDATA%\markair\state.ini`。M1 需要的键:`load_remote_images`(默认 0)、`font_body_*` / `font_mono_*` 族名覆盖 `[裁决 #10]`。**不含 `image_cache_mb`**(2026-09-17 随 T32 二次裁决作废:图片缓存改为"跟随可见区域走",不再有一个需要配置的总量上限)。**不含 `zoom` 键**(裁决,见文末 #4:M1 缩放不持久化,`zoom` 键留给 M2)。**启动期一次性读完、单次 < 1KB**(架构 §6),文件不存在按默认值走、**不创建目录也不写盘**(除非确有需要持久化的值)。**验收**:`tests/test_ini.cpp` 覆盖缺失文件、非法值、超范围值钳制、注释行、尾随空白 |
 
 ---
 
@@ -81,7 +81,7 @@
 
 | # | 任务 | 要创建/修改的文件 | 验收标准 |
 |---|---|---|---|
-| **T40** | GFM 快照测试 | 新增 `tests/test_model_gfm.cpp`、`test_attr.cpp`、`test_front_matter.cpp`、`test_table.cpp`、`test_search.cpp`、`test_navigate.cpp`、`test_hit_test.cpp`、`test_image.cpp`、`test_data_uri.cpp`、`test_cache.cpp`、`test_ini.cpp`;改 `tests/CMakeLists.txt` | 沿用 `tests/mdvn_test.h` 的自写断言宏 `[裁决 #11]`,**不引入 gtest/catch2**。快照口径与 M0 一致:块类型序列 + 行内 flag 序列 + 新增的 detail 字段。**验收**:`mdvn_tests.exe` 退出码 0,用例总数从 61 增长到 ≥ 110,且 M0 的 61 个用例**一个都不许改动**(改动即意味着破坏了向后兼容,需要在 PR 里单独说明) |
+| **T40** | GFM 快照测试 | 新增 `tests/test_model_gfm.cpp`、`test_attr.cpp`、`test_front_matter.cpp`、`test_table.cpp`、`test_search.cpp`、`test_navigate.cpp`、`test_hit_test.cpp`、`test_image.cpp`、`test_data_uri.cpp`、`test_cache.cpp`、`test_ini.cpp`;改 `tests/CMakeLists.txt` | 沿用 `tests/markair_test.h` 的自写断言宏 `[裁决 #11]`,**不引入 gtest/catch2**。快照口径与 M0 一致:块类型序列 + 行内 flag 序列 + 新增的 detail 字段。**验收**:`markair_tests.exe` 退出码 0,用例总数从 61 增长到 ≥ 110,且 M0 的 61 个用例**一个都不许改动**(改动即意味着破坏了向后兼容,需要在 PR 里单独说明) |
 | **T41** | 真实文档回归语料 | 新增 `bench/corpus/*.md`(≥ 20 份)、`bench/corpus/SOURCES.md`、`bench/M1-REGRESSION.md` | 从知名开源项目取 ≥ 20 份 README/CHANGELOG(覆盖:宽表格、任务列表、徽章图片、脚注、自动链接、front matter、HTML 片段、mermaid 代码块各至少 2 份)。`SOURCES.md` 记录每份的来源 URL、抓取日期与许可,**不得改动原文**(改了就不是回归语料)。`M1-REGRESSION.md` 是比对记录表:`文件 / 差异描述 / 分类(可接受 / 必修)/ 处理状态`。**验收**:20 份全部打开不崩溃,差异逐条分类完毕,"必修"项全部关闭 |
 | **T42** | 图片密集语料 | 新增 `bench/BENCH-B.md` + `bench/images/`(50 张 PNG)、改 `bench/run_bench.ps1`(加 `-Target` 参数) | 50 张本地 PNG + 若干 `data:` URI + 若干网络图片 URL(用于验证"默认不加载")+ 1 张 SVG + 1 张多帧 GIF + 1 张超 4096 尺寸图。**验收**见下方验收线表 |
 | **T43** | 畸形文档语料与稳健性 | 新增 `bench/fuzz/*.md`、`ci/run_fuzz.ps1` | 手工构造 + 脚本生成:超深嵌套(> 64 层,触发已有的 `kMaxNestingDepth` 截断)、百万级链接(触发 `kMaxDocumentNodeCount`)、超长单行(10MB 无换行)、未闭合表格/围栏/front matter、非法 UTF-8 混入、伪造的超大 `data:` URI、图片路径穿越(`![](../../../windows/system32/...)`)。**验收**:全部**不崩溃、不卡死(单文件处理 ≤ 3s)、不越界**;在 clang-cl ASAN 配置下跑一遍零报告(ASAN 只用于这条验证,不进正式构建) |
@@ -95,16 +95,16 @@
 
 | 指标 | M1 门槛 | 测量工具 | 具体命令 / 操作 | 产出物 |
 |---|---|---|---|---|
-| 真实文档回归 | 20 份语料逐项人工比对 GitHub 网页版,差异全部分类,"必修"项清零 | 人工 + 截图 | 逐份 `mdvn.exe bench\corpus\<name>.md`,与浏览器打开的 GitHub 渲染结果并排比对 | `bench/M1-REGRESSION.md`(比对记录表)、`bench/corpus/SOURCES.md` |
-| 图片密集文档峰值内存 | **≤ 80MB**(50 张 PNG 全部滚过一遍,`kMaxDecodedDimension` 已下调为低默认值) | `--bench` 的 `PrivateUsage`(自动化代理)+ **VMMap**(权威值) | `mdvn.exe --bench bench\BENCH-B.md`,滚到底部后读数;VMMap 附加进程记录 Private Working Set / Private Bytes / Mapped File 三项 | CSV(`run_bench.ps1 -Target BENCH-B`)+ VMMap 截图 |
+| 真实文档回归 | 20 份语料逐项人工比对 GitHub 网页版,差异全部分类,"必修"项清零 | 人工 + 截图 | 逐份 `markair.exe bench\corpus\<name>.md`,与浏览器打开的 GitHub 渲染结果并排比对 | `bench/M1-REGRESSION.md`(比对记录表)、`bench/corpus/SOURCES.md` |
+| 图片密集文档峰值内存 | **≤ 80MB**(50 张 PNG 全部滚过一遍,`kMaxDecodedDimension` 已下调为低默认值) | `--bench` 的 `PrivateUsage`(自动化代理)+ **VMMap**(权威值) | `markair.exe --bench bench\BENCH-B.md`,滚到底部后读数;VMMap 附加进程记录 Private Working Set / Private Bytes / Mapped File 三项 | CSV(`run_bench.ps1 -Target BENCH-B`)+ VMMap 截图 |
 | ~~图片滚走后内存回落~~(2026-09-17 裁决作废) | T32 已改为"降采样后永久缓存、不做淘汰"([裁决,见 T32])，不存在"滚走后回落"这件事,本行验收线不再适用,不需要验证 | — | — | — |
 | 滚动不跳动 | 滚动位置不因图片加载完成后的一次性重排而变化(T33"先有尺寸再有位图"仍然有效;这条现在只需验证首次解码这一次性重排不产生跳动,不再涉及淘汰/重新加载场景) | 录屏 + 滚动偏移日志 | `BENCH-B` 从顶滚到底再滚回,记录每帧 `scrollY`,不应出现非用户触发的突变 | 录屏文件 + 日志(放 `bench/` 下,不进 git) |
-| 解析→模型一致性 | 快照测试全绿,M0 的 61 个用例零改动 | `mdvn_tests.exe` | `build\Release\mdvn_tests.exe`,退出码 0 | 控制台输出 |
+| 解析→模型一致性 | 快照测试全绿,M0 的 61 个用例零改动 | `markair_tests.exe` | `build\Release\markair_tests.exe`,退出码 0 | 控制台输出 |
 | BENCH-A 暖启动首屏(不回退) | **≤ 80ms 中位数**(与 M0 同线,新功能不得吃掉预算) | 内置埋点 | `powershell -File bench\run_bench.ps1 -Warm -N 20` | CSV + 中位数/P95 |
 | BENCH-A 常驻内存(不回退) | **≤ 20MB**(M0 实测 ~11MB,M1 后不应显著抬升) | 同上 | 同上 | 同上 |
-| exe 体积 | 记录 M1 新基线并写入 `ci/check_budget.ps1`(M3 才门禁 1.5MB) | 构建产物 | `link /dump /headers build\Release\mdvn.exe` | CI 日志的趋势记录 |
-| 零网络行为 | `load_remote_images=0` 且不点击时,无任何出站连接、`winhttp.dll` 未加载 | Process Monitor + `Get-Process.Modules` | 打开含网络图片的语料,ProcMon 过滤 `mdvn.exe` 的 Network 类事件应为空 | ProcMon 导出的 CSV |
-| 无图文档零 WIC 开销 | 打开 BENCH-A 时 `windowscodecs.dll` 未被加载 | `Get-Process.Modules` | `(Get-Process mdvn).Modules \| Where-Object { $_.ModuleName -like '*codecs*' }` 应为空 | 控制台输出 |
+| exe 体积 | 记录 M1 新基线并写入 `ci/check_budget.ps1`(M3 才门禁 1.5MB) | 构建产物 | `link /dump /headers build\Release\markair.exe` | CI 日志的趋势记录 |
+| 零网络行为 | `load_remote_images=0` 且不点击时,无任何出站连接、`winhttp.dll` 未加载 | Process Monitor + `Get-Process.Modules` | 打开含网络图片的语料,ProcMon 过滤 `markair.exe` 的 Network 类事件应为空 | ProcMon 导出的 CSV |
+| 无图文档零 WIC 开销 | 打开 BENCH-A 时 `windowscodecs.dll` 未被加载 | `Get-Process.Modules` | `(Get-Process markair).Modules \| Where-Object { $_.ModuleName -like '*codecs*' }` 应为空 | 控制台输出 |
 | 畸形文档稳健性 | 不崩溃 / 不卡死(≤ 3s)/ ASAN 零报告 | `ci/run_fuzz.ps1` + clang-cl ASAN | 逐份打开 `bench/fuzz/*.md`,超时即判失败 | 脚本退出码 + 日志 |
 | 内存泄漏 | 反复打开关闭无单调上升 | 脚本 + `PrivateUsage` | 沿用 M0 手法:连续开关 30 次,比较前 5 次与后 5 次均值 | 控制台统计 |
 
@@ -137,7 +137,7 @@ T40~T44(测试/语料/门禁)与阶段 F/G 并行开工,不排在最后
 3. **T39(`state.ini`)要早于 T32/T34** —— 缓存上限与网络开关都从它读;否则这两个任务只能先写死常量,回头再改一遍。
 4. **T40~T44 与开发并行**,理由同 M0 的 T14/T15:语料越早到位,每个任务合并时就能立刻看到自己在真实文档上的效果与代价,而不是到阶段末尾再事后归因。
 5. **T37 的算法层(`src/doc/search.h/.cpp`)只依赖文档模型**,不依赖布局/渲染,可以在 T23~T28 还在做的时候就并行完成并单测。
-6. M0 的 61 个测试是本阶段的**回归护栏**:任何一次改动后先跑 `mdvn_tests.exe`,红了就不要继续往下叠功能。
+6. M0 的 61 个测试是本阶段的**回归护栏**:任何一次改动后先跑 `markair_tests.exe`,红了就不要继续往下叠功能。
 
 ---
 
@@ -174,7 +174,7 @@ T40~T44(测试/语料/门禁)与阶段 F/G 并行开工,不排在最后
    这是本轮对内存影响最直接的一条:按压缩文件大小计量会被"小 JPEG 解码出巨幅位图"击穿预算,按解码后像素字节数计才是软件渲染架构下的真实私有内存口径。同时不等解码完再判断超限,而是解码阶段就用 `IWICBitmapScaler` 边解码边缩小到 `kMaxDecodedDimension`,用固定上限严格封死单张图片的最坏内存,而不是靠事后淘汰兜底。
 
 6. **相对 `.md` 链接跳转 —— 复用当前窗口(不新开进程)**
-   本轮对内存影响第二大的一条:新开进程意味着内存随点击次数线性累积(在互相链接的文档集里点几次链接就是几个 mdvn 进程同时占着内存);复用当前窗口在跳转时释放旧文档的 `Document`/`BlockLayoutEngine`/图片缓存,任意时刻只有一份文档状态常驻。**这不推翻裁决 #6**:裁决 #6 讲的是"从资源管理器双击文件"这个入口场景,继续保持每次双击一个独立窗口/进程;本条只管"已经打开的文档内部点链接跳转"这一种更细的场景,两者并存不冲突,顺带让 M2 的"历史前进后退"有了明确的落地对象(单窗口内的导航栈)。
+   本轮对内存影响第二大的一条:新开进程意味着内存随点击次数线性累积(在互相链接的文档集里点几次链接就是几个 markair 进程同时占着内存);复用当前窗口在跳转时释放旧文档的 `Document`/`BlockLayoutEngine`/图片缓存,任意时刻只有一份文档状态常驻。**这不推翻裁决 #6**:裁决 #6 讲的是"从资源管理器双击文件"这个入口场景,继续保持每次双击一个独立窗口/进程;本条只管"已经打开的文档内部点链接跳转"这一种更细的场景,两者并存不冲突,顺带让 M2 的"历史前进后退"有了明确的落地对象(单窗口内的导航栈)。
 
 7. **`Ctrl+F` 查找范围 —— 正文/代码块/链接 URL/alt 文本均参与,大小写不敏感且无开关**
    这几类文本都已经在 `Inline`/`LinkTarget` 里,查找是一次性扫描不建索引,参与与否对内存**零差异**;选"参与"是因为这样更符合"查找找得到"的直觉,而不是省内存的结果。真正体现"怎么省内存怎么来"的是后半句:**不做全字匹配/区分大小写的开关**——省一份 UI 状态和一次分支判断,也符合 §9"内容区保持极简"的口径。YAML front matter 因为从未进入文档模型,天然不参与,不需要额外处理。

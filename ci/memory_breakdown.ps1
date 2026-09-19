@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    mdvn 私有内存构成诊断脚本(纯诊断,不设门禁)。
+    markair 私有内存构成诊断脚本(纯诊断,不设门禁)。
 
 .DESCRIPTION
     2026-09-19 内存调研的第一条建议落地:排查 private_bytes 超标前先搞清楚
     "钱花在哪",而不是凭直觉去改 Arena/渲染目标之类的代码。
     GetProcessMemoryInfo 的 PrivateUsage 只是一个总数,看不出细分——这个
     脚本用 cdb.exe(Windows SDK 自带的 Debugging Tools,`!address -summary`)
-    对一个正在运行的 mdvn.exe 进程做私有/映像/映射内存的分类汇总,输出到
+    对一个正在运行的 markair.exe 进程做私有/映像/映射内存的分类汇总,输出到
     控制台,供人工分析,不接入 check_budget.ps1 的门禁判定。
 
     cdb.exe 是"Debugging Tools for Windows"组件(随 Windows SDK 可选安装,
@@ -15,7 +15,7 @@
     确认预装),找不到就跳过并提示,不算失败——这是诊断工具，不是验收项。
 
 .PARAMETER ExePath
-    要诊断的 mdvn.exe 路径，默认 build\src\Release\mdvn.exe（相对仓库根目录）。
+    要诊断的 markair.exe 路径，默认 build\src\Release\markair.exe（相对仓库根目录）。
 
 .PARAMETER BenchFile
     启动时打开的文档，默认 bench\EMPTY.md（空文档场景，对应 01§4 第4行
@@ -43,7 +43,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $ExePath) {
-    $ExePath = Join-Path $repoRoot "build\src\Release\mdvn.exe"
+    $ExePath = Join-Path $repoRoot "build\src\Release\markair.exe"
 }
 if (-not $BenchFile) {
     $BenchFile = Join-Path $repoRoot "bench\EMPTY.md"

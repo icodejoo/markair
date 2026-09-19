@@ -1,6 +1,6 @@
-# Helper script to launch mdvn on user's interactive desktop (WinSta0\Default)
+# Helper script to launch markair on user's interactive desktop (WinSta0\Default)
 param(
-    [string]$FilePath = "D:\workspaces\mdvn\bench\demo.md"
+    [string]$FilePath = "D:\workspaces\markair\bench\demo.md"
 )
 
 Add-Type @"
@@ -67,10 +67,10 @@ public class DesktopLauncher {
 }
 "@
 
-$exePath = "D:\workspaces\mdvn\build\src\Release\mdvn.exe"
+$exePath = "D:\workspaces\markair\build\src\Release\markair.exe"
 $pid = [DesktopLauncher]::Launch($exePath, $FilePath)
 if ($pid -gt 0) {
-    Write-Host "mdvn 已在用户交互桌面 (WinSta0\Default) 成功启动！PID: $pid"
+    Write-Host "markair 已在用户交互桌面 (WinSta0\Default) 成功启动！PID: $pid"
 } else {
     Write-Host "启动失败，错误码: $pid"
 }

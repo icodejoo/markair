@@ -3,7 +3,7 @@
 #include "types.h"
 #include "str.h"
 
-namespace mdvn {
+namespace markair {
 
 // Maximum number of recent file entries kept in history.
 //
@@ -138,9 +138,9 @@ void AddRecentFile(RecentFiles* list, const wchar_t* path);
 bool RemoveRecentFileAt(RecentFiles* list, u32 index);
 
 /**
- * Load recent files from %LOCALAPPDATA%\mdvn\history.txt.
+ * Load recent files from %LOCALAPPDATA%\markair\history.txt.
  *
- * 从 %LOCALAPPDATA%\mdvn\history.txt 加载最近打开文件记录。
+ * 从 %LOCALAPPDATA%\markair\history.txt 加载最近打开文件记录。
  *
  * @param out Pointer to RecentFiles struct to populate.
  *
@@ -153,9 +153,9 @@ bool RemoveRecentFileAt(RecentFiles* list, u32 index);
 bool LoadRecentFiles(RecentFiles* out);
 
 /**
- * Save recent files to %LOCALAPPDATA%\mdvn\history.txt atomically.
+ * Save recent files to %LOCALAPPDATA%\markair\history.txt atomically.
  *
- * 将最近打开文件记录原子写入 %LOCALAPPDATA%\mdvn\history.txt。
+ * 将最近打开文件记录原子写入 %LOCALAPPDATA%\markair\history.txt。
  *
  * @param list RecentFiles struct to save.
  *
@@ -167,4 +167,4 @@ bool LoadRecentFiles(RecentFiles* out);
  */
 bool SaveRecentFiles(const RecentFiles& list);
 
-}  // namespace mdvn
+}  // namespace markair

@@ -51,7 +51,7 @@ powershell -File bench\make_bench_d.ps1
 
 **触发了**。新增的冒烟测试 `tests/test_benchd_smoke.cpp`（复刻
 `test_corpus_smoke.cpp` 的"打开 -> 编码嗅探 -> 跳过 front matter -> 解析 -> 布局"
-链路，注册进 `tests/CMakeLists.txt` 的 `mdvn_tests` 目标）实测输出：
+链路，注册进 `tests/CMakeLists.txt` 的 `markair_tests` 目标）实测输出：
 
 ```
 benchd_smoke: file_bytes=10499788 blocks=33299 truncated=true(触发kMaxDocumentNodeCount上限截断)

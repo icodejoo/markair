@@ -1,4 +1,4 @@
-// mdvn 窗口状态记忆(T56):恢复/钳制窗口矩形 + 多开层叠偏移的纯几何逻辑。
+// markair 窗口状态记忆(T56):恢复/钳制窗口矩形 + 多开层叠偏移的纯几何逻辑。
 // 裁决 #8 定死"全局一份 + 层叠偏移":state.ini 只存一份窗口矩形,新窗口默认
 // 出现在上次记住的位置;同位置已有本程序窗口时按 kCascadeOffsetDip 层叠。
 //
@@ -10,7 +10,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 窗口尺寸下限(物理像素),防止存进去一个几乎不可见的窗口再也打不开。
 constexpr i32 kMinWindowWidth = 300;
@@ -40,7 +40,7 @@ struct RectI {
  * @param a 矩形 A。
  * @param b 矩形 B。
  * @return 有非空重叠区域返回 true。
- * @example mdvn::RectsOverlap({0,0,100,100}, {50,50,150,150});  // true
+ * @example markair::RectsOverlap({0,0,100,100}, {50,50,150,150});  // true
  */
 inline bool RectsOverlap(const RectI& a, const RectI& b) {
     return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
@@ -65,8 +65,8 @@ struct MonitorRect {
  * @param monitorCount 列表长度。
  * @return 命中的显示器下标;一个都不重叠(显示器被拔掉/分辨率变小等)返回 -1。
  * @example
- *   mdvn::MonitorRect mons[] = {{{0,0,1920,1080}, {0,0,1920,1040}}};
- *   mdvn::FindMonitorContaining({100,100,900,700}, mons, 1);  // 0
+ *   markair::MonitorRect mons[] = {{{0,0,1920,1080}, {0,0,1920,1040}}};
+ *   markair::FindMonitorContaining({100,100,900,700}, mons, 1);  // 0
  */
 inline i32 FindMonitorContaining(const RectI& rect, const MonitorRect* monitors, u32 monitorCount) {
     for (u32 i = 0; i < monitorCount; ++i) {
@@ -81,7 +81,7 @@ inline i32 FindMonitorContaining(const RectI& rect, const MonitorRect* monitors,
  * @param minWidth 宽度下限。
  * @param minHeight 高度下限。
  * @return 尺寸不低于下限的矩形。
- * @example mdvn::ClampMinimumSize({0,0,10,10}, 300, 200);  // {0,0,300,200}
+ * @example markair::ClampMinimumSize({0,0,10,10}, 300, 200);  // {0,0,300,200}
  */
 inline RectI ClampMinimumSize(const RectI& rect, i32 minWidth, i32 minHeight) {
     RectI out = rect;
@@ -107,9 +107,9 @@ inline RectI ClampMinimumSize(const RectI& rect, i32 minWidth, i32 minHeight) {
  * @return 钳制后的合法窗口矩形。`monitorCount == 0` 时只做最小尺寸钳制,
  *         原样返回位置(极端情况下的兜底,不应在真实系统上发生)。
  * @example
- *   mdvn::MonitorRect mons[] = {{{0,0,1920,1080}, {0,0,1920,1040}}};
+ *   markair::MonitorRect mons[] = {{{0,0,1920,1080}, {0,0,1920,1040}}};
  *   // 副屏被拔掉后,原矩形整体落在 (2000,0) 之外的地方 -> 钳到主屏中心
- *   mdvn::ClampWindowRectToMonitors({2000,0,2800,600}, mons, 1, 0);
+ *   markair::ClampWindowRectToMonitors({2000,0,2800,600}, mons, 1, 0);
  */
 inline RectI ClampWindowRectToMonitors(const RectI& rect, const MonitorRect* monitors,
                                         u32 monitorCount, u32 primaryIndex) {
@@ -160,8 +160,8 @@ inline bool SameOrigin(const RectI& a, const RectI& b) {
  * @param offset 单次层叠的偏移量(物理像素,水平/垂直相同)。
  * @return 层叠后的矩形;无同位窗口时原样返回 `baseRect`。
  * @example
- *   mdvn::RectI existing[] = {{100,100,900,700}};
- *   mdvn::RectI cascaded = mdvn::ApplyCascadeOffset(
+ *   markair::RectI existing[] = {{100,100,900,700}};
+ *   markair::RectI cascaded = markair::ApplyCascadeOffset(
  *       {100,100,900,700}, existing, 1, {0,0,1920,1040}, 24);
  *   // cascaded == {124,124,924,724}
  */
@@ -194,4 +194,4 @@ inline RectI ApplyCascadeOffset(const RectI& baseRect, const RectI* existingOrig
     return candidate;
 }
 
-}  // namespace mdvn
+}  // namespace markair

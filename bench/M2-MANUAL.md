@@ -1,6 +1,6 @@
 # M2 人工回归清单
 
-本文档记录 M2 阶段无法自动化的验收项。**2026-09-18 补充**：此前误判"当前 AI 执行环境不具备真实 Windows GUI/多屏条件"——实际本会话运行在真实 Windows 10 Pro（Build 19045）双屏（2560×1440 × 2，均 100% DPI）主机上，已用 PowerShell 驱动真实 `mdvn.exe` 进程 + `Graphics.CopyFromScreen` 截图（非 `PrintWindow`）完成①~④⑦⑧的实测，仅⑤⑥两项因风险/资源限制仍是待办。截图见 `bench/screenshots/`。
+本文档记录 M2 阶段无法自动化的验收项。**2026-09-18 补充**：此前误判"当前 AI 执行环境不具备真实 Windows GUI/多屏条件"——实际本会话运行在真实 Windows 10 Pro（Build 19045）双屏（2560×1440 × 2，均 100% DPI）主机上，已用 PowerShell 驱动真实 `markair.exe` 进程 + `Graphics.CopyFromScreen` 截图（非 `PrintWindow`）完成①~④⑦⑧的实测，仅⑤⑥两项因风险/资源限制仍是待办。截图见 `bench/screenshots/`。
 
 ---
 
@@ -26,7 +26,7 @@
 
 **状态**: ✅ 已实测通过
 
-验证方式：mdvn 设为"跟随系统"，改 `HKCU\...\Personalize\AppsUseLightTheme` 并广播 `WM_SETTINGCHANGE`（`ImmersiveColorSet`），无需重启 mdvn，对比切换前后截图（`08_system_before_toggle.png` → `09_system_after_toggle.png`）：背景/文字/标题栏颜色实时跟随切换，滚动位置不变，未观察到闪烁或白屏。
+验证方式：markair 设为"跟随系统"，改 `HKCU\...\Personalize\AppsUseLightTheme` 并广播 `WM_SETTINGCHANGE`（`ImmersiveColorSet`），无需重启 markair，对比切换前后截图（`08_system_before_toggle.png` → `09_system_after_toggle.png`）：背景/文字/标题栏颜色实时跟随切换，滚动位置不变，未观察到闪烁或白屏。
 
 ---
 
@@ -34,7 +34,7 @@
 
 **状态**: ✅ 已实测通过（用高频截图代替录屏，非 60fps 专业录屏工具）
 
-验证方式：系统主题为深色时启动新 mdvn 进程，每 20ms 截图一次连续 14 帧（`10_flash_frame_1.png` ~ `_14.png`），逐帧计算平均像素亮度：全部帧亮度在 36~43（0~255 量程）区间，**没有任何一帧出现亮度跳变到接近 255 的白闪**。
+验证方式：系统主题为深色时启动新 markair 进程，每 20ms 截图一次连续 14 帧（`10_flash_frame_1.png` ~ `_14.png`），逐帧计算平均像素亮度：全部帧亮度在 36~43（0~255 量程）区间，**没有任何一帧出现亮度跳变到接近 255 的白闪**。
 
 **顺带观察到一个现象（非白闪，但如实记录）**：第 1 帧存在明显的 DWM 窗口打开动画合成残影（右侧能看到桌面/旧窗口内容与新窗口内容叠加），2~3 帧后完全消失。这不是白闪问题，但如果未来做启动性能优化，这是一个可以关注的视觉细节。
 
@@ -75,7 +75,7 @@ Win10 部分已在 T61 完成过一轮自动化验证（`ci/verify_assoc.ps1`，
 **状态**: ✅ 已完成（声明 + 截图）
 
 - README.md 已声明"暂不支持 Windows 高对比度模式"
-- 实测：`SystemParametersInfo(SPI_SETHIGHCONTRAST)` 开启高对比度后截图（`14_high_contrast.png`）——**mdvn 未采用系统高对比度配色，仍用自己的浅色调色板渲染**，文字仍可读、未破损/乱码，只是确实没有跟随，与声明一致，不存在"表面说不支持、实际会崩/花屏"的落差。
+- 实测：`SystemParametersInfo(SPI_SETHIGHCONTRAST)` 开启高对比度后截图（`14_high_contrast.png`）——**markair 未采用系统高对比度配色，仍用自己的浅色调色板渲染**，文字仍可读、未破损/乱码，只是确实没有跟随，与声明一致，不存在"表面说不支持、实际会崩/花屏"的落差。
 
 ---
 
@@ -87,20 +87,20 @@ Win10 部分已在 T61 完成过一轮自动化验证（`ci/verify_assoc.ps1`，
 
 **未能按预期场景验证，原因是发现了一个更根本的问题**：
 
-mdvn 用内存映射文件做零拷贝解析（`src/doc/file_map.cpp` 的 `CreateFileW` 只给 `FILE_SHARE_READ`，映射在文档整个显示期间持续打开，这是文本零拷贝架构的直接后果）。实测：
+markair 用内存映射文件做零拷贝解析（`src/doc/file_map.cpp` 的 `CreateFileW` 只给 `FILE_SHARE_READ`，映射在文档整个显示期间持续打开，这是文本零拷贝架构的直接后果）。实测：
 
 1. **外部编辑器原地覆写**（如记事本默认保存方式，`GENERIC_WRITE` 打开）→ 失败，`ERROR_SHARING_VIOLATION`（错误码 32）
-2. **外部编辑器"写临时文件+原子替换"**（如 VS Code 的保存方式，`MoveFileEx` + `MOVEFILE_REPLACE_EXISTING`）→ 失败，`ERROR_ACCESS_DENIED`（错误码 5，因为 mdvn 的 `CreateFileW` 没有 `FILE_SHARE_DELETE`）
+2. **外部编辑器"写临时文件+原子替换"**（如 VS Code 的保存方式，`MoveFileEx` + `MOVEFILE_REPLACE_EXISTING`）→ 失败，`ERROR_ACCESS_DENIED`（错误码 5，因为 markair 的 `CreateFileW` 没有 `FILE_SHARE_DELETE`）
 3. **外部删除该文件**（模拟"文件被删"场景）→ 失败，`ERROR_SHARING_VIOLATION`（Bash 层面报 "Device or resource busy"）
 
-**也就是说：只要 mdvn 正在显示某个文档，外部进程用几乎所有常见方式都无法修改或删除那个文件**——包括 T68⑧-b 想验证的"文件被删后 F5 降级提示"这个场景本身，在文档仍打开的情况下根本无法触发（因为文件删不掉）。
+**也就是说：只要 markair 正在显示某个文档，外部进程用几乎所有常见方式都无法修改或删除那个文件**——包括 T68⑧-b 想验证的"文件被删后 F5 降级提示"这个场景本身，在文档仍打开的情况下根本无法触发（因为文件删不掉）。
 
 这直接削弱了 F5 功能的实际意义：F5 存在的前提是"外部编辑器改了文件，用户手动刷新看新内容"，但如果外部编辑器保存不了，这个场景不会发生。
 
 **这是架构取舍问题（零拷贝 vs 允许外部写入），不是我能自行决定修的范围，需要你来定**——可能的方向（仅供参考，我没有做任何代码改动）：
-- 给 `FileMap::Open` 的 `CreateFileW` 加上 `FILE_SHARE_WRITE | FILE_SHARE_DELETE`，允许外部读写/删除，但这样"文件被外部替换后 mdvn 仍持有旧映射"要额外处理（旧映射内容不会自动更新，F5 时需要重新 Open 一次全新映射，这个逻辑 T70 应该已经做了，因为它是"重新走一遍打开流程"）
+- 给 `FileMap::Open` 的 `CreateFileW` 加上 `FILE_SHARE_WRITE | FILE_SHARE_DELETE`，允许外部读写/删除，但这样"文件被外部替换后 markair 仍持有旧映射"要额外处理（旧映射内容不会自动更新，F5 时需要重新 Open 一次全新映射，这个逻辑 T70 应该已经做了，因为它是"重新走一遍打开流程"）
 - 或者接受现状，把 F5 的实际用途改为"文件被外部工具重命名后再放回原路径"这种边缘场景，但这样功能价值大幅缩水
-- 我没有测试"mdvn 只读打开、不持有映射到文档关闭"的替代设计是否可行——如果零拷贝设计要求映射必须常驻，这可能是个必须接受的固有限制
+- 我没有测试"markair 只读打开、不持有映射到文档关闭"的替代设计是否可行——如果零拷贝设计要求映射必须常驻，这可能是个必须接受的固有限制
 
 **F5 在"关闭旧文档→打开新文档"这个替换场景下本身没问题**：单测（`ClampReloadTopBlockIndex`、`ReloadCurrentDocument` 走 `openDocumentInPlace`）已经验证过重载流程本身能跑通、不崩溃、能恢复滚动位置——问题是外部修改这个文件的动作本身被 Windows 拒绝了，压根走不到 F5 那一步。
 

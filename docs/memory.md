@@ -25,7 +25,7 @@
 | T4 | Arena 分配器 | smoke test 通过 |
 | T13(精简) | 窗口入口骨架 | 弹窗正常 |
 | T2 | 编码规范文档 `docs/coding-rules.md` | — |
-| T3 | 极简测试框架 `tests/mdvn_test.h` | `mdvn_tests.exe` 机制可用 |
+| T3 | 极简测试框架 `tests/markair_test.h` | `markair_tests.exe` 机制可用 |
 | T5 | `StrSlice`/UTF-8↔UTF-16/`Vec<T>` | 9 个测试 |
 | T6 | 文件映射 `src/doc/file_map.*` | 15 个测试(含T7) |
 | T7 | 编码嗅探 `src/doc/encoding.*` | 同上 |
@@ -39,28 +39,28 @@
 
 ## 用完整功能(非骨架)做的正式验收测量(2026-09-16)
 
-T14 埋点接好后,我自己生成了一份 ~130KB 的真实中英混排 markdown(标题/段落/列表/引用/代码块齐全,不是 spike 里的空壳窗口),用 `mdvn.exe --bench <file>` 跑了 5 轮:
+T14 埋点接好后,我自己生成了一份 ~130KB 的真实中英混排 markdown(标题/段落/列表/引用/代码块齐全,不是 spike 里的空壳窗口),用 `markair.exe --bench <file>` 跑了 5 轮:
 
 | 指标 | 5 轮实测范围 | 本次 `/loop` 验收线 |
 |---|---|---|
 | Private Bytes(首次 Present 时) | 10.9~11.4 MB | ≤30MB ✅ |
 | 进程入口→首次 Present | 80~248ms(1 次因系统抖动到 248ms,其余 4 次 80~116ms) | ≤500ms ✅(全部 5 轮都过) |
 
-**结论:走完整的"打开文件→解析→布局→渲染"链路(不是最小骨架、不是 spike),验收线依然稳定达标。** `mdvn_tests.exe` 53 个测试全绿。
+**结论:走完整的"打开文件→解析→布局→渲染"链路(不是最小骨架、不是 spike),验收线依然稳定达标。** `markair_tests.exe` 53 个测试全绿。
 
 M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排视觉回归语料),以及 VMMap/RAMMap/PresentMon 等 Sysinternals 工具链的正式接入(目前都是我在对话里用 PowerShell 临时测的,没有固化成脚本)。项目文档自己的严格线(暖启动 80ms/冷启动 250ms/常驻 20MB)还没专门去逼近,当前测的是"进程入口→Present"这个更宽的区间,不是文档定义的"暖启动"(暖启动通常指第二次及以后启动、文件系统缓存已热的场景,需要 `run_bench.ps1` 按文档方法跑 20 次取中位数才算数)。
 
 ## T15~T17 + M0 收尾验证(2026-09-16,持续同一轮 /loop)
 
-- **T15** `bench/BENCH-A.md`(~100KB 语料)+ `bench/run_bench.ps1`(暖启动/冷启动测量脚本,输出 CSV+中位数/P95,冷启动模式检测不到 RAMMap64.exe 会优雅降级不崩)。我自己跑了 N=3/N=8 两轮验证,脚本工作正常,跑完无残留 `mdvn.exe` 进程。
+- **T15** `bench/BENCH-A.md`(~100KB 语料)+ `bench/run_bench.ps1`(暖启动/冷启动测量脚本,输出 CSV+中位数/P95,冷启动模式检测不到 RAMMap64.exe 会优雅降级不崩)。我自己跑了 N=3/N=8 两轮验证,脚本工作正常,跑完无残留 `markair.exe` 进程。
 - **T16** `ci/check_budget.ps1` + `.github/workflows/ci.yml`。门禁口径:P95(比中位数更保守),阈值取 M0 表格"上限"档(首屏≤400ms、内存≤12MB),exe 体积只记录基线+5MB 宽松安全网。脚本诚实注明"测的口径比文档严格暖启动定义更宽"。我自己跑了一遍(N=8):**exit=0,首屏 P95 334.9ms、内存 P95 10.7MB,均达标**;子代理还验证过故意调低阈值触发失败路径(exit=1)。
 - **T17** `bench/mixed-cjk.md`(中英混排+长URL+长代码行+嵌套列表)。我自己打开验证:`Responding=True`,不崩溃。
 
 **至此 `05-m0-tasks.md` 阶段 A~E(T0~T17)全部有对应实现,且逐项由我本人重新编译/测试/实测验证过,不是只采信子代理自报数字。**
 
 **额外做的 M0 验收线收尾检查(仍在文档既定范围内,不是新加范围)**:
-- 内存泄漏检查:连续开关 `mdvn.exe bench\BENCH-A.md` 30 次(每次独立进程,符合裁决 #6"一文件一窗口"架构本身就是这个测法),Private Memory 前 5 次均值与后 5 次均值都在 ~11.2MB,min 10.8MB / max 11.7MB,**波动是噪声,没有单调上升趋势**。
-- Debug 配置:`cmake --build build --config Debug` 编译成功,`mdvn_tests.exe`(Debug)53 个测试同样全过。T0 验收标准"Debug/Release 两配置均能一次配置成功"已满足。
+- 内存泄漏检查:连续开关 `markair.exe bench\BENCH-A.md` 30 次(每次独立进程,符合裁决 #6"一文件一窗口"架构本身就是这个测法),Private Memory 前 5 次均值与后 5 次均值都在 ~11.2MB,min 10.8MB / max 11.7MB,**波动是噪声,没有单调上升趋势**。
+- Debug 配置:`cmake --build build --config Debug` 编译成功,`markair_tests.exe`(Debug)53 个测试同样全过。T0 验收标准"Debug/Release 两配置均能一次配置成功"已满足。
 
 **还没做、且做起来需要新的用户决策的部分**:
 1. VMMap/RAMMap/PresentMon 这三个 Sysinternals/微软工具本机都没装(`bench/TOOLS.md` 里已如实记录),M0 表格里"权威值"(不是自动化代理指标)必须靠它们才能测。要不要现在装,是我不该单方面决定的一步(涉及往系统装外部工具)。
@@ -99,7 +99,7 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 
 - Win32 有个通用机制:只要窗口能接收键盘输入,TSF 就会把**系统当前默认输入法**的模块当 COM 组件加载进本进程,与自己的代码无关。这台机器默认输入法是搜狗拼音。
 - 在裸窗口里加一行 `ImmDisableIME((DWORD)-1)`(进程级禁用 IME 激活)做对照:裸窗口 Private Bytes 从 **32MB 降到 1.75MB**。确认:那 30MB 基本全部来自搜狗,不是我们自己代码的开销。
-- 因为 mdvn 是只读查看器,本来就不需要文字输入,"禁用 IME"不是测试特例,是可以直接带进正式代码的免费优化——已经补进 `spikes/s01_d2d_baseline.cpp`。
+- 因为 markair 是只读查看器,本来就不需要文字输入,"禁用 IME"不是测试特例,是可以直接带进正式代码的免费优化——已经补进 `spikes/s01_d2d_baseline.cpp`。
 - 再叠加"默认走软件 D2D 渲染目标"(避免硬件路径触发 Intel iGPU 的 shader 编译器 `igc64.dll`,这部分是硬件/软件渲染两版之间 ~28MB 差值的主因),三次重复测量结果稳定:
 
 | 版本 | Private Bytes | 首次 Present 耗时 |
@@ -128,26 +128,26 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 
 ## 待写入正式文档的架构决策(建议在 T0 开工前一并落地,而不是留在 spike 里)
 
-1. **进程级禁用 IME**(`ImmDisableIME((DWORD)-1)`):mdvn 是只读查看器不需要文字输入,禁用后可避免第三方输入法的 TSF 模块被动注入(本机实测能省 ~30MB)。写入 T12(窗口与消息循环)或 T13(进程入口)的实现要求。
+1. **进程级禁用 IME**(`ImmDisableIME((DWORD)-1)`):markair 是只读查看器不需要文字输入,禁用后可避免第三方输入法的 TSF 模块被动注入(本机实测能省 ~30MB)。写入 T12(窗口与消息循环)或 T13(进程入口)的实现要求。
 2. **D2D 渲染目标默认走软件光栅化**(`D2D1_RENDER_TARGET_TYPE_SOFTWARE`),而不是默认硬件加速:本机 Intel iGPU 的 shader 编译器 `igc64.dll` 会让硬件路径多吃 ~28MB。这条要写入 T11 的验收标准,而且要注意:架构文档原有的"硬件加速失败回退软件"逻辑要反过来或调整为"默认软件,除非明确判定硬件更省"——**这一条改变了 T11 原定的实现方向,值得在动手写 T11 之前跟用户过一遍**,尤其还没有验证软件光栅化对真实滚动帧率的影响(那是 T10/T11 之后才能测的)。
 3. 已把上述两条实现进 `spikes/s01_d2d_baseline.cpp` 并重复三次验证稳定:**9.0~9.4MB / 76~113ms**,通过本次 `/loop` 的 30MB/0.5s 验收线;还没打到项目严格线(8MB/40ms),但性质是"可继续调优"而非"环境死局"。
 
 ## 产出文件(本轮新增,均未纳入正式工程,只是 spike/vendor)
 
-- `spikes/s01_d2d_baseline.cpp`:D2D+DirectWrite 空壳窗口,内置 QPC 埋点,支持 `MDVN_D2D_SOFTWARE` 宏切换软件渲染路径,已加 `ImmDisableIME`。
+- `spikes/s01_d2d_baseline.cpp`:D2D+DirectWrite 空壳窗口,内置 QPC 埋点,支持 `MARKAIR_D2D_SOFTWARE` 宏切换软件渲染路径,已加 `ImmDisableIME`。
 - `spikes/s01b_bare_window.cpp` / `spikes/s01c_no_ime.cpp`:裸 Win32 窗口对照组 + 禁 IME 对照组,用于隔离"Win32/环境开销"与"D2D/DirectWrite 开销"与"第三方 IME 注入开销"三者。
 - `spikes/s02_font_probe.cpp`:已跑通,数据见上。
 - `spikes/s03_md4c.cpp` + `third_party/md4c/{md4c.c,md4c.h,LICENSE,VERSION.txt}`:md4c 已 vendor 进来(官方仓库 depth-1 clone 后只拷贝 `src/md4c.{c,h}`,commit hash 记在 `VERSION.txt`)。
 
 ## M1 阶段 F~J(T18~T44)完成(2026-09-17)
 
-`06-m1-tasks.md` 全部任务已实现、测试、提交并推送至 [github.com/icodejoo/mdvn](https://github.com/icodejoo/mdvn)(12 个 commit,`mdvn_tests.exe` 186 个用例全绿)。概要:
+`06-m1-tasks.md` 全部任务已实现、测试、提交并推送至 [github.com/icodejoo/markair](https://github.com/icodejoo/markair)(12 个 commit,`markair_tests.exe` 186 个用例全绿)。概要:
 
 - **阶段 F~I**(T18~T39+T36b):md4c 扩展、文档模型扩展(链接/图片/表格/脚注/任务列表)、富行内样式、表格渲染、图片资源管理(WIC 解码/data URI/占位块/点图查看原图)、命中测试/链接跳转/Ctrl+F 查找/state.ini 配置。
 - **阶段 J**(T40~T44):GFM 快照测试补漏(181→184)、39 份真实开源文档回归语料(`bench/corpus/`)、图片密集语料 BENCH-B(50 张 PNG+SVG+GIF+超大图)、9 份畸形文档语料 + clang-cl ASAN 验证(零报告)、CI 门禁扩展(`ci/check_budget.ps1` 新增 BENCH-B 内存门禁 + fuzz 门禁)。
 - **收尾修复**:T42 引入的"--bench 强制全量解码"标志曾误伤 BENCH-A(未按语料区分),导致内存门禁一度虚高到 29MB;已修复为仅 BENCH-B 生效,BENCH-A 回落至 ~13.75MB。`PrivateBytesThresholdMB` 按 exe 体积基线的先例重记为 M1 新基线 16MB(诚实注明非同一基线)。
 
-已知遗留(非阻塞,记录以便后续跟进):VMMap/RAMMap/PresentMon 仍未装(权威内存值暂用 `--bench` 代理指标);全量 `mdvn_tests.exe` 在 ASAN 下有 2 类已确认的工具链假阳性(MSVC ABI 字符串字面量折叠导致的 odr-violation,非真实内存问题);嵌套列表以外的少数验收线(录屏级滚动验证等)沿用既有单测替代,未做真机肉眼验证。
+已知遗留(非阻塞,记录以便后续跟进):VMMap/RAMMap/PresentMon 仍未装(权威内存值暂用 `--bench` 代理指标);全量 `markair_tests.exe` 在 ASAN 下有 2 类已确认的工具链假阳性(MSVC ABI 字符串字面量折叠导致的 odr-violation,非真实内存问题);嵌套列表以外的少数验收线(录屏级滚动验证等)沿用既有单测替代,未做真机肉眼验证。
 
 下一步:M2(热重载 + 语法高亮,具体范围见 `04-delivery-plan.md`)或用户指定的其他方向。
 
@@ -163,5 +163,5 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 
 ## M3收尾后的两个bug修复(2026-09-19,不属于M3任务表,独立完成)
 
-1. **彩色emoji方框bug**:`bench/corpus/electron-electron-readme.md`等文档里的emoji显示成方框。根因两层——①`src/render/renderer.cpp`全部9处`DrawTextLayout`调用缺`D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT`标志(已修);②`src/text/font.cpp`的`BuildBodyFallback`字体回退链(裁决#10锁定范围)里没有emoji字体,已在末尾追加`Segoe UI Emoji`(经用户确认,只追加不改动前4个字体顺序)。实测:无emoji文档内存增量≈0,含emoji文档增量≈+2.5MB(一次性字体加载成本)。**已知限制**:国旗类emoji(🇨🇳等)在Win10上仍显示为字母对(`CN`/`BR`等),这是微软Win10系统级不提供彩色国旗字形的限制,Win11才有,与mdvn代码无关。429测试全绿。
+1. **彩色emoji方框bug**:`bench/corpus/electron-electron-readme.md`等文档里的emoji显示成方框。根因两层——①`src/render/renderer.cpp`全部9处`DrawTextLayout`调用缺`D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT`标志(已修);②`src/text/font.cpp`的`BuildBodyFallback`字体回退链(裁决#10锁定范围)里没有emoji字体,已在末尾追加`Segoe UI Emoji`(经用户确认,只追加不改动前4个字体顺序)。实测:无emoji文档内存增量≈0,含emoji文档增量≈+2.5MB(一次性字体加载成本)。**已知限制**:国旗类emoji(🇨🇳等)在Win10上仍显示为字母对(`CN`/`BR`等),这是微软Win10系统级不提供彩色国旗字形的限制,Win11才有,与markair代码无关。429测试全绿。
 2. **文本选择+Ctrl+C复制**(新功能,原本完全没有,只有T45代码块复制按钮):新增`src/shell/selection.h/.cpp`(`DocTextPos`+`SelectionState`状态机)、`hit_test.cpp`的`HitTestTextPosition`、`Palette`新增`selectionHighlight`槏位、`renderer.cpp`的`DrawSelectionHighlights`(只画可见±1屏范围,不额外实例化layout)。支持跨块选择(段落/标题/代码块/表格都能连续选中),不做右键菜单,只做`Ctrl+C`。442测试全绿(新增13个),性能无退化。

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    mdvn Release 构建物验收脚本（M3 T80）。
+    markair Release 构建物验收脚本（M3 T80）。
 
 .DESCRIPTION
     把 T80 验收标准里可自动化的三项一次性跑完：
@@ -17,7 +17,7 @@
        verify_release.ps1 尚不存在这一环，两份许可文件也还没产出，故当时
        跳过，现补齐）。
     ⑤（T83 补充）子进程数恒为 0（01 §4 第 8 行）的自动化子集：正常启动 +
-       静置 3 秒场景，用 Get-CimInstance Win32_Process 轮询 mdvn.exe 的
+       静置 3 秒场景，用 Get-CimInstance Win32_Process 轮询 markair.exe 的
        ParentProcessId，出现任何子进程即失败。其余五个人工场景（打开
        BENCH-B/D、点外链、点图片、F5、--register）仍以 T80 的人工记录
        （bench\M3-RELEASE.md）为准，不在此重复自动化。
@@ -35,14 +35,14 @@
     （CONSOLE）来触发失败。两个开关只用于自检，正式验收不应加。
 
 .PARAMETER ExePath
-    待验收的 mdvn.exe 路径，默认 build\src\Release\mdvn.exe（相对仓库根目录）。
+    待验收的 markair.exe 路径，默认 build\src\Release\markair.exe（相对仓库根目录）。
 
 .PARAMETER InjectForbiddenDllFault
     自检用：把 kernel32.dll 加入禁止名单，制造一次必然失败，验证脚本的
     "导入 DLL 名单越界即失败"这条判断确实生效（反向证明脚本不是摆设）。
 
 .PARAMETER InjectSubsystemFault
-    自检用：把期望子系统改成 CONSOLE（mdvn 实际是 WINDOWS），制造一次
+    自检用：把期望子系统改成 CONSOLE（markair 实际是 WINDOWS），制造一次
     必然失败，验证子系统判断确实生效。
 
 .PARAMETER InjectPackagingFault
@@ -75,7 +75,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $ExePath) {
-    $ExePath = Join-Path $repoRoot "build\src\Release\mdvn.exe"
+    $ExePath = Join-Path $repoRoot "build\src\Release\markair.exe"
 }
 
 $failed = $false
@@ -255,11 +255,11 @@ if ($suspiciousSections) {
 } else {
     Ok "未检测到已知加壳/压缩工具的段名特征"
 }
-Write-Host "声明：本次验收流程未对 mdvn.exe 执行任何可执行文件压缩或加壳操作（构建产物直接来自 MSVC 链接器输出）。"
+Write-Host "声明：本次验收流程未对 markair.exe 执行任何可执行文件压缩或加壳操作（构建产物直接来自 MSVC 链接器输出）。"
 
 # ---------------------------------------------------------------------------
 # 步骤 5（T81 补充，T80 当时缺失的一环）：发布物打包清单校验。
-# "绿色单 exe"实际分发形态是一个 zip（04/T81 明文）：里面除 mdvn.exe 外
+# "绿色单 exe"实际分发形态是一个 zip（04/T81 明文）：里面除 markair.exe 外
 # 须含根 LICENSE 与 THIRD-PARTY-NOTICES.md（MIT 许可落地，T81 已产出这两份
 # 文件本体）。本步骤把 exe + 两份许可文件打进一个 zip，再解开清单逐项核对，
 # 证明"打包"这一步不是只存在于文档里的口头约定。
@@ -277,7 +277,7 @@ if (-not (Test-Path $licensePath)) {
     if (-not (Test-Path $artifactsDir)) {
         New-Item -ItemType Directory -Path $artifactsDir | Out-Null
     }
-    $zipPath = Join-Path $artifactsDir "mdvn-release.zip"
+    $zipPath = Join-Path $artifactsDir "markair-release.zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
     Info "打包 $ExePath + LICENSE + THIRD-PARTY-NOTICES.md -> $zipPath"
@@ -285,7 +285,7 @@ if (-not (Test-Path $licensePath)) {
 
     # 发布物打包清单：zip 内必须一个不多一个不少地含这三个文件（按文件名，
     # 不含目录层级——Compress-Archive 默认把三者都放在 zip 根目录）。
-    $requiredEntries = @("mdvn.exe", "LICENSE", "THIRD-PARTY-NOTICES.md")
+    $requiredEntries = @("markair.exe", "LICENSE", "THIRD-PARTY-NOTICES.md")
     if ($InjectPackagingFault) {
         Info "（自检模式）在打包清单里塞进一个必然不存在于 zip 内的文件名，制造一次必然失败"
         $requiredEntries += "THIS-FILE-DOES-NOT-EXIST-IN-ZIP.txt"
@@ -311,7 +311,7 @@ if (-not (Test-Path $licensePath)) {
 
 # ---------------------------------------------------------------------------
 # 步骤 6（T83 新增，01 §4 第 8 行"子进程数：恒为 0"）：自动化子集——正常启动
-# 打开一份语料，静置期间轮询 Win32_Process 找有没有以 mdvn.exe 的 PID 为
+# 打开一份语料，静置期间轮询 Win32_Process 找有没有以 markair.exe 的 PID 为
 # ParentProcessId 的子进程。T80 当时是人工按 Get-CimInstance 轮询做的（覆盖
 # 打开 BENCH-A/B/D、点外链、点图片、F5、--register 六个场景，见
 # bench\M3-RELEASE.md），本步骤只把其中最基础、最容易自动化复跑的一个场景
@@ -330,15 +330,15 @@ if ($SkipSubprocessCheck) {
         $proc = Start-Process -FilePath $ExePath -ArgumentList @("--bench", "`"$benchCorpus`"") -PassThru
         try {
             Start-Sleep -Milliseconds 500
-            # 自检：故意让本脚本自己启动一个子进程挂在 mdvn 的 PID 下，证明
+            # 自检：故意让本脚本自己启动一个子进程挂在 markair 的 PID 下，证明
             # 下面这条 Win32_Process 轮询确实是活的判断逻辑，不是空壳。
             $injectedChild = $null
             if ($InjectSubprocessFault) {
-                Info "（自检模式）故意启动一个挂在 mdvn.exe PID 下的子进程，制造一次必然失败"
+                Info "（自检模式）故意启动一个挂在 markair.exe PID 下的子进程，制造一次必然失败"
                 $injectedChild = Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "ping", "-n", "3", "127.0.0.1") -PassThru
                 # Win32_Process 的 ParentProcessId 只是记录创建时刻的父进程 PID，
-                # 不要求真的由 mdvn 发起 CreateProcess——这里用 WMI 直接改写
-                # 不现实，因此改用同名字段核对逻辑：临时把 mdvn 的 PID 当作
+                # 不要求真的由 markair 发起 CreateProcess——这里用 WMI 直接改写
+                # 不现实，因此改用同名字段核对逻辑：临时把 markair 的 PID 当作
                 # "预期父 PID"，但检查目标进程改成刚启动的这个 cmd 自身的父进程
                 # （PowerShell 宿主）——这条自检改成直接断言"任意非空子进程列表"
                 # 会失败，等价地验证了判断分支，见下方 $forcedChildPids。
@@ -354,7 +354,7 @@ if ($SkipSubprocessCheck) {
                 # 子进程即不通过"这条判据分支被执行到（而不是被短路跳过）。
                 Fail "（自检模式）强制判定子进程数检查失败，以验证判断逻辑存在（真实子进程 PID 列表：$($childPids -join ', ')）"
             } elseif ($childPids.Count -gt 0) {
-                Fail "检测到 mdvn.exe（PID $($proc.Id)）存在子进程：$($childPids -join ', ')（01 §4：子进程数恒为 0，出现任何子进程即不通过）"
+                Fail "检测到 markair.exe（PID $($proc.Id)）存在子进程：$($childPids -join ', ')（01 §4：子进程数恒为 0，出现任何子进程即不通过）"
             } else {
                 Ok "静置 3 秒内未发现任何子进程（PID $($proc.Id)）"
             }

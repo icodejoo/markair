@@ -16,7 +16,7 @@
 
 #include "../src/util/types.h"
 
-namespace mdvn_test {
+namespace markair_test {
 
 /**
  * 测试用的 WIC + D2D 环境:COM、WIC 工厂、D2D 工厂,以及一个 WIC 位图渲染目标
@@ -84,11 +84,11 @@ struct ImageTestEnv {
  * @param outCap 输出缓冲容量(字节)。
  * @return 实际写入的字节数;失败返回 0。
  * @example
- *   mdvn::u32 n = EncodeTestImage(env.wic, GUID_ContainerFormatPng, 8, 8, 1, buf, sizeof(buf));
+ *   markair::u32 n = EncodeTestImage(env.wic, GUID_ContainerFormatPng, 8, 8, 1, buf, sizeof(buf));
  */
-inline mdvn::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerFormat,
-                                  mdvn::u32 width, mdvn::u32 height, mdvn::u32 frameCount,
-                                  mdvn::u8* out, mdvn::u32 outCap) {
+inline markair::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerFormat,
+                                  markair::u32 width, markair::u32 height, markair::u32 frameCount,
+                                  markair::u8* out, markair::u32 outCap) {
     if (!wic || !out || outCap == 0 || width == 0 || height == 0 || frameCount == 0) return 0;
 
     IWICStream* stream = nullptr;
@@ -107,7 +107,7 @@ inline mdvn::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerF
     }
 
     bool ok = true;
-    for (mdvn::u32 f = 0; f < frameCount && ok; ++f) {
+    for (markair::u32 f = 0; f < frameCount && ok; ++f) {
         // 先把这一帧画进一张 32bppBGRA 的 WIC 位图,再用 WriteSource 交给编码器。
         // 走 WriteSource 而不是 WritePixels,是因为 GIF 编码器只接受 8bppIndexed,
         // WriteSource 会自动完成格式转换(配合下面按帧生成的调色板)。
@@ -128,9 +128,9 @@ inline mdvn::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerF
         BYTE* pixels = nullptr;
         if (SUCCEEDED(lock->GetStride(&stride)) &&
             SUCCEEDED(lock->GetDataPointer(&bufferSize, &pixels)) && pixels) {
-            for (mdvn::u32 y = 0; y < height; ++y) {
+            for (markair::u32 y = 0; y < height; ++y) {
                 BYTE* row = pixels + static_cast<size_t>(y) * stride;
-                for (mdvn::u32 x = 0; x < width; ++x) {
+                for (markair::u32 x = 0; x < width; ++x) {
                     // 渐变纹样:让 JPEG 这类有损编码器也有可压缩的内容,
                     // 不同帧之间加一点偏移,便于区分"只解了第 0 帧"。
                     row[x * 4 + 0] = static_cast<BYTE>((x + f * 37u) & 0xFF);
@@ -181,11 +181,11 @@ inline mdvn::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerF
 
     if (ok && FAILED(encoder->Commit())) ok = false;
 
-    mdvn::u32 written = 0;
+    markair::u32 written = 0;
     if (ok) {
         STATSTG stat{};
         if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME))) {
-            written = static_cast<mdvn::u32>(stat.cbSize.QuadPart);
+            written = static_cast<markair::u32>(stat.cbSize.QuadPart);
         }
     }
 
@@ -194,4 +194,4 @@ inline mdvn::u32 EncodeTestImage(IWICImagingFactory* wic, const GUID& containerF
     return written;
 }
 
-}  // namespace mdvn_test
+}  // namespace markair_test

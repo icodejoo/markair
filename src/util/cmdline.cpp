@@ -1,6 +1,6 @@
 #include "cmdline.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -101,4 +101,4 @@ Vec<wchar_t*> ParseCommandLine(const wchar_t* commandLine, Arena* arena) {
     return argv;
 }
 
-}  // namespace mdvn
+}  // namespace markair

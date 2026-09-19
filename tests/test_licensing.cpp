@@ -8,7 +8,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-#include "mdvn_test.h"
+#include "markair_test.h"
 
 #include <cstdio>
 #include <cstring>
@@ -44,44 +44,44 @@ bool ExtractCommitLine(const char* content, char* out, size_t outSize) {
 
 // 用例:VERSION.txt 里的 commit hash 必须逐字出现在 THIRD-PARTY-NOTICES.md 中,
 // 防止版本号被手抄错。
-MDVN_TEST(Licensing_ThirdPartyNoticesMatchesVersionTxt) {
+MARKAIR_TEST(Licensing_ThirdPartyNoticesMatchesVersionTxt) {
     static char versionContent[4096];
     static char noticesContent[16384];
 
-    bool okVersion = ReadWholeFile(MDVN_REPO_ROOT_DIR "/third_party/md4c/VERSION.txt",
+    bool okVersion = ReadWholeFile(MARKAIR_REPO_ROOT_DIR "/third_party/md4c/VERSION.txt",
                                     versionContent, sizeof(versionContent));
-    MDVN_CHECK(okVersion);
+    MARKAIR_CHECK(okVersion);
     if (!okVersion) return;
 
-    bool okNotices = ReadWholeFile(MDVN_REPO_ROOT_DIR "/THIRD-PARTY-NOTICES.md",
+    bool okNotices = ReadWholeFile(MARKAIR_REPO_ROOT_DIR "/THIRD-PARTY-NOTICES.md",
                                     noticesContent, sizeof(noticesContent));
-    MDVN_CHECK(okNotices);
+    MARKAIR_CHECK(okNotices);
     if (!okNotices) return;
 
     char commitHash[256];
     bool okExtract = ExtractCommitLine(versionContent, commitHash, sizeof(commitHash));
-    MDVN_CHECK(okExtract);
+    MARKAIR_CHECK(okExtract);
     if (!okExtract) return;
 
-    MDVN_CHECK(std::strstr(noticesContent, commitHash) != nullptr);
+    MARKAIR_CHECK(std::strstr(noticesContent, commitHash) != nullptr);
 }
 
 // 用例:根 LICENSE 的版权行必须是裁决 #7①拍板的 "Copyright (c) 2026 cassian"。
-MDVN_TEST(Licensing_RootLicenseHasDecidedCopyrightLine) {
+MARKAIR_TEST(Licensing_RootLicenseHasDecidedCopyrightLine) {
     static char licenseContent[8192];
-    bool ok = ReadWholeFile(MDVN_REPO_ROOT_DIR "/LICENSE", licenseContent, sizeof(licenseContent));
-    MDVN_CHECK(ok);
+    bool ok = ReadWholeFile(MARKAIR_REPO_ROOT_DIR "/LICENSE", licenseContent, sizeof(licenseContent));
+    MARKAIR_CHECK(ok);
     if (!ok) return;
-    MDVN_CHECK(std::strstr(licenseContent, "Copyright (c) 2026 cassian") != nullptr);
+    MARKAIR_CHECK(std::strstr(licenseContent, "Copyright (c) 2026 cassian") != nullptr);
 }
 
 // 用例:THIRD-PARTY-NOTICES.md 必须引用 third_party/md4c/LICENSE 的许可全文
 // (以 md4c 上游版权行 "Martin Mit" 前缀出现为判据,避免只写引用路径不抄全文)。
-MDVN_TEST(Licensing_ThirdPartyNoticesEmbedsMd4cLicenseText) {
+MARKAIR_TEST(Licensing_ThirdPartyNoticesEmbedsMd4cLicenseText) {
     static char noticesContent[16384];
-    bool ok = ReadWholeFile(MDVN_REPO_ROOT_DIR "/THIRD-PARTY-NOTICES.md",
+    bool ok = ReadWholeFile(MARKAIR_REPO_ROOT_DIR "/THIRD-PARTY-NOTICES.md",
                              noticesContent, sizeof(noticesContent));
-    MDVN_CHECK(ok);
+    MARKAIR_CHECK(ok);
     if (!ok) return;
-    MDVN_CHECK(std::strstr(noticesContent, "Martin Mit") != nullptr);
+    MARKAIR_CHECK(std::strstr(noticesContent, "Martin Mit") != nullptr);
 }

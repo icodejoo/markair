@@ -1,4 +1,4 @@
-// mdvn 的正文文本拖选状态(T80):鼠标拖选 + Ctrl+C 复制纯文本。
+// markair 的正文文本拖选状态(T80):鼠标拖选 + Ctrl+C 复制纯文本。
 //
 // 与 `shell/find.h` 同一口径:**不 include windows.h**,只维护"起点/终点两个
 // 文档位置标记"这套轻量状态机,真正的鼠标/键盘消息翻译留在 window.cpp,
@@ -16,7 +16,7 @@
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 文档里的一个文本位置:块下标 + 该块自身文本内的 UTF-16 偏移。 */
 struct DocTextPos {
@@ -32,7 +32,7 @@ struct DocTextPos {
  * @param a 位置 A。
  * @param b 位置 B。
  * @return A 严格早于 B 返回 true。
- * @example bool earlier = mdvn::PositionLess({2, 5}, {3, 0}); // true
+ * @example bool earlier = markair::PositionLess({2, 5}, {3, 0}); // true
  */
 inline bool PositionLess(const DocTextPos& a, const DocTextPos& b) {
     if (a.blockIndex != b.blockIndex) return a.blockIndex < b.blockIndex;
@@ -51,7 +51,7 @@ struct SelectionRange {
  * @param a 一个端点(通常是拖选起点/锚点)。
  * @param b 另一个端点(通常是当前鼠标位置/焦点)。
  * @return 排好序的选区。
- * @example mdvn::SelectionRange r = mdvn::NormalizeSelection(anchor, focus);
+ * @example markair::SelectionRange r = markair::NormalizeSelection(anchor, focus);
  */
 inline SelectionRange NormalizeSelection(const DocTextPos& a, const DocTextPos& b) {
     return PositionLess(b, a) ? SelectionRange{b, a} : SelectionRange{a, b};
@@ -74,7 +74,7 @@ inline bool SelectionEmpty(const SelectionRange& r) {
  * @param out 输出缓冲区,可为 nullptr(此时只统计长度)。
  * @param cap `out` 的容量(字节),`out` 为 nullptr 时应传 0。
  * @return 该块直属文本的完整字节数(不含结尾 '\0')。
- * @example u32 need = mdvn::BlockOwnPlainTextUtf8(doc, idx, nullptr, 0);
+ * @example u32 need = markair::BlockOwnPlainTextUtf8(doc, idx, nullptr, 0);
  */
 u32 BlockOwnPlainTextUtf8(const Document& doc, u32 blockIndex, char* out, u32 cap);
 
@@ -100,7 +100,7 @@ u32 BlockOwnPlainTextUtf8(const Document& doc, u32 blockIndex, char* out, u32 ca
  * @return 提取结果切片(UTF-8,零结尾,`data` 指向 `arena` 上的内存);
  *         选区为空或 `arena` 为空时 `data` 为 `nullptr`、`len` 为 0。
  * @example
- *   mdvn::StrSlice text = mdvn::SelectionPlainTextUtf8(doc, range, &scratch);
+ *   markair::StrSlice text = markair::SelectionPlainTextUtf8(doc, range, &scratch);
  *   if (text.data) { / * 转 UTF-16 写剪贴板 * / }
  */
 StrSlice SelectionPlainTextUtf8(const Document& doc, const SelectionRange& range, Arena* arena);
@@ -110,7 +110,7 @@ StrSlice SelectionPlainTextUtf8(const Document& doc, const SelectionRange& range
  * 与 `FindSession` 同一口径:纯状态,不含任何 Win32/D2D 调用,可直接单测。
  *
  * @example
- *   mdvn::SelectionState sel;
+ *   markair::SelectionState sel;
  *   sel.Begin({0, 3});
  *   sel.Update({2, 1});
  *   if (sel.HasSelection()) { / * 画高亮 / Ctrl+C 时取 sel.Range() * / }
@@ -166,4 +166,4 @@ private:
     bool active_;        // 左键是否仍按住(拖选进行中)
 };
 
-}  // namespace mdvn
+}  // namespace markair

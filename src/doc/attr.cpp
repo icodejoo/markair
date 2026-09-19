@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -138,4 +138,4 @@ LinkTargetKind ClassifyLinkTarget(StrSlice href) {
     return LinkTargetKind::RelativePath;
 }
 
-} // namespace mdvn
+} // namespace markair

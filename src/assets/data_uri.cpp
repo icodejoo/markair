@@ -1,6 +1,6 @@
 #include "data_uri.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -159,4 +159,4 @@ const wchar_t* ExtensionForMime(StrSlice mime) {
     return L".bin";
 }
 
-}  // namespace mdvn
+}  // namespace markair

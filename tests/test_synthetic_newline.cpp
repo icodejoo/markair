@@ -9,25 +9,25 @@
 // 这里在不依赖真实 IDWriteTextLayout 的前提下,直接在文档模型层面验证:
 // 每个源码行之间都应该有且仅有一个带 kInlineFlagSyntheticNewline 标记、
 // textLen == 1 的 Inline run,且 InlineTextBytes() 对它返回的字节确实是 '\n'。
-#include "mdvn_test.h"
+#include "markair_test.h"
 #include "../src/util/arena.h"
 #include "../src/util/str.h"
 #include "../src/doc/model.h"
 #include "../src/doc/parser.h"
 
-using mdvn::Arena;
-using mdvn::Block;
-using mdvn::BlockType;
-using mdvn::Document;
-using mdvn::Inline;
-using mdvn::InlineTextBytes;
-using mdvn::kInlineFlagSyntheticNewline;
-using mdvn::kInlineFlagSyntheticSpaces;
-using mdvn::ParseMarkdown;
-using mdvn::StrSlice;
-using mdvn::u32;
+using markair::Arena;
+using markair::Block;
+using markair::BlockType;
+using markair::Document;
+using markair::Inline;
+using markair::InlineTextBytes;
+using markair::kInlineFlagSyntheticNewline;
+using markair::kInlineFlagSyntheticSpaces;
+using markair::ParseMarkdown;
+using markair::StrSlice;
+using markair::u32;
 
-#define MDVN_MAKE_TEST_ARENA() Arena arena; arena.Init(1 * 1024 * 1024)
+#define MARKAIR_MAKE_TEST_ARENA() Arena arena; arena.Init(1 * 1024 * 1024)
 
 namespace {
 
@@ -39,7 +39,7 @@ u32 FindBlockOfType(const Document& doc, BlockType type, u32 occurrence) {
             ++seen;
         }
     }
-    return mdvn::kInvalidIndex;
+    return markair::kInvalidIndex;
 }
 
 // 数一数某个块的直属 inline 里,带 kInlineFlagSyntheticNewline 标记的个数。
@@ -72,8 +72,8 @@ void AppendBlockText(const Document& doc, const Block& b, char* out, u32 cap, u3
 // md_process_verbatim_block_contents 对每一行(含最后一行)都会补一个终止
 // 换行,所以合成换行数直接等于源码行数,而不是"行数 - 1"。
 // 每个合成换行 textLen == 1、InlineTextBytes 返回 '\n'。
-MDVN_TEST(SyntheticNewline_FencedCodeBlockPreservesLineBreaks) {
-    MDVN_MAKE_TEST_ARENA();
+MARKAIR_TEST(SyntheticNewline_FencedCodeBlockPreservesLineBreaks) {
+    MARKAIR_MAKE_TEST_ARENA();
     const char src[] =
         "```\n"
         "line one\n"
@@ -81,28 +81,28 @@ MDVN_TEST(SyntheticNewline_FencedCodeBlockPreservesLineBreaks) {
         "line three\n"
         "```\n";
     Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
-    MDVN_CHECK(!doc.truncated);
+    MARKAIR_CHECK(!doc.truncated);
 
     u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
-    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+    MARKAIR_CHECK(codeIdx != markair::kInvalidIndex);
     const Block& code = doc.blocks[codeIdx];
 
-    MDVN_CHECK_EQ(CountSyntheticNewlines(doc, code), 3u);
+    MARKAIR_CHECK_EQ(CountSyntheticNewlines(doc, code), 3u);
 
     for (u32 i = 0; i < code.inlineCount; ++i) {
         const Inline& in = doc.inlines[code.firstInlineIdx + i];
         if (in.flags & kInlineFlagSyntheticNewline) {
-            MDVN_CHECK_EQ(in.textLen, 1u);
+            MARKAIR_CHECK_EQ(in.textLen, 1u);
             const char* bytes = InlineTextBytes(in, doc);
-            MDVN_CHECK(bytes != nullptr);
-            if (bytes) MDVN_CHECK(bytes[0] == '\n');
+            MARKAIR_CHECK(bytes != nullptr);
+            if (bytes) MARKAIR_CHECK(bytes[0] == '\n');
         }
     }
 }
 
 // 用例 2:五行代码应产生 5 个合成换行——换行数与源码行数一一对应。
-MDVN_TEST(SyntheticNewline_FencedCodeBlockLineCountMatchesSource) {
-    MDVN_MAKE_TEST_ARENA();
+MARKAIR_TEST(SyntheticNewline_FencedCodeBlockLineCountMatchesSource) {
+    MARKAIR_MAKE_TEST_ARENA();
     const char src[] =
         "```text\n"
         "a\n"
@@ -112,42 +112,42 @@ MDVN_TEST(SyntheticNewline_FencedCodeBlockLineCountMatchesSource) {
         "eeeee\n"
         "```\n";
     Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
-    MDVN_CHECK(!doc.truncated);
+    MARKAIR_CHECK(!doc.truncated);
 
     u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
-    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+    MARKAIR_CHECK(codeIdx != markair::kInvalidIndex);
     const Block& code = doc.blocks[codeIdx];
 
-    MDVN_CHECK_EQ(CountSyntheticNewlines(doc, code), 5u);
+    MARKAIR_CHECK_EQ(CountSyntheticNewlines(doc, code), 5u);
 }
 
 // 用例 3:硬换行(行尾两个空格)在段落里同样应该合成为一个换行 Inline,
 // 而不是被彻底吞掉——这不是代码块专属场景。
-MDVN_TEST(SyntheticNewline_HardBreakInParagraphIsPreserved) {
-    MDVN_MAKE_TEST_ARENA();
+MARKAIR_TEST(SyntheticNewline_HardBreakInParagraphIsPreserved) {
+    MARKAIR_MAKE_TEST_ARENA();
     const char src[] = "first line  \nsecond line\n";
     Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
-    MDVN_CHECK(!doc.truncated);
+    MARKAIR_CHECK(!doc.truncated);
 
     u32 pIdx = FindBlockOfType(doc, BlockType::Paragraph, 0);
-    MDVN_CHECK(pIdx != mdvn::kInvalidIndex);
+    MARKAIR_CHECK(pIdx != markair::kInvalidIndex);
     const Block& p = doc.blocks[pIdx];
 
-    MDVN_CHECK_EQ(CountSyntheticNewlines(doc, p), 1u);
+    MARKAIR_CHECK_EQ(CountSyntheticNewlines(doc, p), 1u);
 }
 
 // 用例 4:单行代码块应恰好产生 1 个合成换行(该行结尾的终止换行)。
-MDVN_TEST(SyntheticNewline_SingleLineCodeBlockHasExactlyOne) {
-    MDVN_MAKE_TEST_ARENA();
+MARKAIR_TEST(SyntheticNewline_SingleLineCodeBlockHasExactlyOne) {
+    MARKAIR_MAKE_TEST_ARENA();
     const char src[] = "```\nonly one line\n```\n";
     Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
-    MDVN_CHECK(!doc.truncated);
+    MARKAIR_CHECK(!doc.truncated);
 
     u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
-    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+    MARKAIR_CHECK(codeIdx != markair::kInvalidIndex);
     const Block& code = doc.blocks[codeIdx];
 
-    MDVN_CHECK_EQ(CountSyntheticNewlines(doc, code), 1u);
+    MARKAIR_CHECK_EQ(CountSyntheticNewlines(doc, code), 1u);
 }
 
 // Bug 3 覆盖测试(2026-09-17,用户实测发现):围栏代码块每行的前导缩进
@@ -156,8 +156,8 @@ MDVN_TEST(SyntheticNewline_SingleLineCodeBlockHasExactlyOne) {
 // run 落进"不在 source 里就归零"的兜底分支,导致缩进整体丢失,多层缩进
 // (如 Python 的嵌套 for 循环)全部拉平。这里重建整个代码块的文本,断言
 // 缩进空格数与源码一致。
-MDVN_TEST(SyntheticSpaces_FencedCodeBlockPreservesIndentation) {
-    MDVN_MAKE_TEST_ARENA();
+MARKAIR_TEST(SyntheticSpaces_FencedCodeBlockPreservesIndentation) {
+    MARKAIR_MAKE_TEST_ARENA();
     const char src[] =
         "```\n"
         "def f():\n"
@@ -166,10 +166,10 @@ MDVN_TEST(SyntheticSpaces_FencedCodeBlockPreservesIndentation) {
         "    return a\n"
         "```\n";
     Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
-    MDVN_CHECK(!doc.truncated);
+    MARKAIR_CHECK(!doc.truncated);
 
     u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
-    MDVN_CHECK(codeIdx != mdvn::kInvalidIndex);
+    MARKAIR_CHECK(codeIdx != markair::kInvalidIndex);
     const Block& code = doc.blocks[codeIdx];
 
     // 至少应该出现带 kInlineFlagSyntheticSpaces 标记的 run(4 空格与 8 空格
@@ -181,18 +181,18 @@ MDVN_TEST(SyntheticSpaces_FencedCodeBlockPreservesIndentation) {
             break;
         }
     }
-    MDVN_CHECK(sawSyntheticSpaces);
+    MARKAIR_CHECK(sawSyntheticSpaces);
 
     char buf[256] = {};
     u32 len = 0;
     AppendBlockText(doc, code, buf, sizeof(buf), &len);
     const char expected[] = "def f():\n    a = 1\n        b = 2\n    return a\n";
-    MDVN_CHECK_EQ(len, static_cast<u32>(sizeof(expected) - 1));
+    MARKAIR_CHECK_EQ(len, static_cast<u32>(sizeof(expected) - 1));
     bool matches = len == sizeof(expected) - 1;
     if (matches) {
         for (u32 i = 0; i < len; ++i) {
             if (buf[i] != expected[i]) { matches = false; break; }
         }
     }
-    MDVN_CHECK(matches);
+    MARKAIR_CHECK(matches);
 }

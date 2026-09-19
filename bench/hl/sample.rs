@@ -14,7 +14,7 @@ impl<'a> Greeter<'a> {
 
     // 生成中文问候语
     fn greet(&self) -> String {
-        format!("你好,{}!欢迎使用 mdvn", self.name)
+        format!("你好,{}!欢迎使用 markair", self.name)
     }
 }
 

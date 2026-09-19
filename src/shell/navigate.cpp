@@ -3,7 +3,7 @@
 #include <pathcch.h>
 #include <shellapi.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -97,10 +97,10 @@ u32 PercentDecode(StrSlice s, char* out, u32 cap) {
 }
 
 // %TEMP% 下专属子目录名,所有会话临时文件都放在这里,便于用户/系统识别与清理。
-constexpr wchar_t kTempSubdirectory[] = L"mdvn";
+constexpr wchar_t kTempSubdirectory[] = L"markair";
 
-// 临时文件名前缀,配合会话内自增编号拼成 mdvn_0001.png 这样的名字。
-constexpr wchar_t kTempFilePrefix[] = L"mdvn_";
+// 临时文件名前缀,配合会话内自增编号拼成 markair_0001.png 这样的名字。
+constexpr wchar_t kTempFilePrefix[] = L"markair_";
 
 // 扩展名缺省值。
 constexpr wchar_t kDefaultExtension[] = L".bin";
@@ -361,7 +361,7 @@ const wchar_t* TempFileRegistry::WriteTempFile(const void* bytes, u32 len,
     DWORD rootLen = GetTempPathW(MAX_PATH, tempRoot);
     if (rootLen == 0 || rootLen >= MAX_PATH) return nullptr;
 
-    // 拼 %TEMP%\mdvn\ 并确保目录存在(已存在时 CreateDirectoryW 返回 ERROR_ALREADY_EXISTS)。
+    // 拼 %TEMP%\markair\ 并确保目录存在(已存在时 CreateDirectoryW 返回 ERROR_ALREADY_EXISTS)。
     wchar_t dir[MAX_PATH]{};
     u32 cursor = 0;
     if (!AppendWide(dir, MAX_PATH, &cursor, tempRoot, static_cast<u32>(rootLen))) return nullptr;
@@ -481,4 +481,4 @@ ImageOpenResult OpenImageOriginal(StrSlice href, LinkTargetKind kind,
     return ImageOpenResult::Opened;
 }
 
-}  // namespace mdvn
+}  // namespace markair

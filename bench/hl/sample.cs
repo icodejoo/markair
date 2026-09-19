@@ -6,7 +6,7 @@ class Greeter
     // 打印中文问候,含插值字符串
     public static void Greet(string name)
     {
-        string msg = $"你好,{name}!欢迎使用 mdvn";
+        string msg = $"你好,{name}!欢迎使用 markair";
         Console.WriteLine(msg);
     }
 

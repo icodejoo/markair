@@ -8,11 +8,11 @@
 ## 0. 测量环境
 
 - 机器：本机（Windows 10 Pro 10.0.19045）。
-- 构建：`cmake --build build --config Release --target mdvn`，clean 后重新构建
-  一次，确保 `build/src/Release/mdvn.exe` 是当前代码（含 T58/T59）的产物。
-- exe 路径：`build/src/Release/mdvn.exe`。
-- 验证前先手动确认 `HKCU\Software\Classes\mdvn.md` 及五个扩展名的
-  `OpenWithProgids\mdvn.md` 均不存在（基线干净，不是从残留状态开始测）。
+- 构建：`cmake --build build --config Release --target markair`，clean 后重新构建
+  一次，确保 `build/src/Release/markair.exe` 是当前代码（含 T58/T59）的产物。
+- exe 路径：`build/src/Release/markair.exe`。
+- 验证前先手动确认 `HKCU\Software\Classes\markair.md` 及五个扩展名的
+  `OpenWithProgids\markair.md` 均不存在（基线干净，不是从残留状态开始测）。
 
 ## 1. 脚本层验收（`ci/verify_assoc.ps1`）
 
@@ -35,7 +35,7 @@
 但该值是 `REG_NONE` 空字节数组，PowerShell 的 `-ne` 在左操作数为数组时会做
 逐元素比较，空数组比较结果也是空数组，在 `if()` 里被当假，导致误判"值不存在"。
 修正为把 `$null` 放在左边（`$null -ne $value`）强制走标量比较。另外发现用
-`& $ExePath --register` 调用后，PowerShell 有时会在 `mdvn.exe`（WIN32 子系统
+`& $ExePath --register` 调用后，PowerShell 有时会在 `markair.exe`（WIN32 子系统
 程序）真正完成注册表写入并退出之前就拿回控制权，导致紧跟着的 `Test-Path`
 读到旧状态；改用 `Start-Process -Wait -PassThru` 后未再复现。
 
@@ -44,17 +44,17 @@
 脚本两次运行结束后，另外手动执行以下检查，确认最终状态干净：
 
 ```powershell
-Test-Path "HKCU:\Software\Classes\mdvn.md"                     # False
-# 五个扩展名的 OpenWithProgids\mdvn.md 值均不存在（逐一 GetValue 检查为 $null）
+Test-Path "HKCU:\Software\Classes\markair.md"                     # False
+# 五个扩展名的 OpenWithProgids\markair.md 值均不存在（逐一 GetValue 检查为 $null）
 ```
 
-结果：`mdvn.md` 子树不存在；`.md` / `.markdown` / `.mdown` / `.mkd` / `.mdtext`
-五个扩展名的 `OpenWithProgids` 下均没有 `mdvn.md` 这条值。**HKCU 下与本程序
+结果：`markair.md` 子树不存在；`.md` / `.markdown` / `.mdown` / `.mkd` / `.mdtext`
+五个扩展名的 `OpenWithProgids` 下均没有 `markair.md` 这条值。**HKCU 下与本程序
 相关的注册表状态已完全还原为验证前的干净状态。**
 
 ## 3. Process Monitor 层验收（人工、权威）—— 未执行
 
-`07-m2-tasks.md` T61 要求用 Process Monitor 过滤 `mdvn.exe` 的
+`07-m2-tasks.md` T61 要求用 Process Monitor 过滤 `markair.exe` 的
 `RegSetValue`/`RegCreateKey`/`RegDeleteKey` 事件，确认"注册时写的键集合 ==
 卸载时删的键集合"，且"平时打开文档全程零注册表写入"。
 

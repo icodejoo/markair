@@ -1,4 +1,4 @@
-// mdvn find bar geometry computation (2026-09-19 revision: query editing is
+// markair find bar geometry computation (2026-09-19 revision: query editing is
 // now delegated to a native Win32 EDIT child window, gaining cursor/
 // selection/clipboard/IME support for free instead of hand-drawing a fake
 // input box with no cursor). The find bar itself is still a plain D2D-drawn
@@ -14,7 +14,7 @@
 // same numbers and never includes this header back (same "render never
 // includes shell" constraint as shell/scrollbar.h and similar headers).
 //
-// mdvn 查找条几何计算(2026-09-19 改版:查询串编辑交给原生 Win32 EDIT 子
+// markair 查找条几何计算(2026-09-19 改版:查询串编辑交给原生 Win32 EDIT 子
 // 窗口,换来光标/选区/剪贴板/IME 全套免费能力,不再自己拼一个没有光标的
 // 假输入框)。查找条本身仍是纯 D2D 画的圆角浮出条,只是内部让出一块固定
 // 矩形给 EDIT 控件——四段("查找: " 前缀 / 编辑框 / "9/11"这类状态文字 /
@@ -29,7 +29,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 constexpr float kFindBarPaddingXDip = 10.0f;
 constexpr float kFindBarPrefixWidthDip = 44.0f;   // "查找: " 标签宽度
@@ -122,7 +122,7 @@ struct FindBarLayout {
  *
  *   查找条各部分矩形。
  *
- * @example auto layout = mdvn::ComputeFindBarLayout(1200.0f, 0.0f);
+ * @example auto layout = markair::ComputeFindBarLayout(1200.0f, 0.0f);
  */
 inline FindBarLayout ComputeFindBarLayout(float clientWidthDip, float topOffsetDip) {
     FindBarLayout r{};
@@ -180,7 +180,7 @@ enum class FindBarNavHit {
  *
  *   命中的箭头按钮,或 `FindBarNavHit::None`。
  *
- * @example auto hit = mdvn::FindBarNavHitTest(layout, dipX, dipY);
+ * @example auto hit = markair::FindBarNavHitTest(layout, dipX, dipY);
  */
 inline FindBarNavHit FindBarNavHitTest(const FindBarLayout& layout, float xDip, float yDip) {
     if (yDip < layout.top || yDip > layout.top + layout.height) return FindBarNavHit::None;
@@ -196,4 +196,4 @@ inline FindBarNavHit FindBarNavHitTest(const FindBarLayout& layout, float xDip, 
     return FindBarNavHit::None;
 }
 
-}  // namespace mdvn
+}  // namespace markair

@@ -62,7 +62,7 @@ class Greeter
     // 打印中文问候,含插值字符串
     public static void Greet(string name)
     {
-        string msg = $"你好,{name}!欢迎使用 mdvn";
+        string msg = $"你好,{name}!欢迎使用 markair";
         Console.WriteLine(msg);
     }
 
@@ -169,7 +169,7 @@ const pattern = `C:\Users\测试\路径`
 
 // 打印中文问候,含中文注释
 func greet(name string) string {
-	return fmt.Sprintf("你好,%s!欢迎使用 mdvn", name)
+	return fmt.Sprintf("你好,%s!欢迎使用 markair", name)
 }
 
 func main() {
@@ -203,7 +203,7 @@ impl<'a> Greeter<'a> {
 
     // 生成中文问候语
     fn greet(&self) -> String {
-        format!("你好,{}!欢迎使用 mdvn", self.name)
+        format!("你好,{}!欢迎使用 markair", self.name)
     }
 }
 

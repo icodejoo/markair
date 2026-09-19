@@ -3,7 +3,7 @@
 #include <shlobj.h>  // SHChangeNotify
 #include <cwchar>    // swprintf_s/wcslen/wcsstr/wcscpy_s
 
-namespace mdvn {
+namespace markair {
 
 u32 BuildAssocWritePlan(const wchar_t* exePath, const wchar_t* displayName, AssocRegValue out[]) {
     // 单线程使用的静态缓冲区,拼出 DefaultIcon("<exe>",0)与 shell\open\command
@@ -17,8 +17,8 @@ u32 BuildAssocWritePlan(const wchar_t* exePath, const wchar_t* displayName, Asso
     u32 n = 0;
     // ① ProgID 子树的 3 条值。
     out[n++] = AssocRegValue{kAssocProgId, nullptr, displayName};
-    out[n++] = AssocRegValue{L"mdvn.md\\DefaultIcon", nullptr, iconValue};
-    out[n++] = AssocRegValue{L"mdvn.md\\shell\\open\\command", nullptr, commandValue};
+    out[n++] = AssocRegValue{L"markair.md\\DefaultIcon", nullptr, iconValue};
+    out[n++] = AssocRegValue{L"markair.md\\shell\\open\\command", nullptr, commandValue};
 
     // ② 五个扩展名各写一条 OpenWithProgids 空值(把自己加进候选列表)。
     static wchar_t openWithSubKeys[kAssociatedExtensionCount][32];
@@ -34,7 +34,7 @@ u32 BuildAssocUninstallPlan(AssocDeleteEntry out[]) {
     // ProgID 整棵子树,RegDeleteTreeW 删除(valueName == nullptr)。
     out[n++] = AssocDeleteEntry{kAssocProgId, nullptr};
 
-    // 五条 OpenWithProgids 值,一个都不能漏——只删 mdvn.md 而留下悬空引用
+    // 五条 OpenWithProgids 值,一个都不能漏——只删 markair.md 而留下悬空引用
     // 正是"卸载有残留"最常见的形态。
     static wchar_t openWithSubKeys[kAssociatedExtensionCount][32];
     for (u32 i = 0; i < kAssociatedExtensionCount; ++i) {
@@ -163,4 +163,4 @@ bool UnregisterFileAssociations() {
     return allOk;
 }
 
-}  // namespace mdvn
+}  // namespace markair

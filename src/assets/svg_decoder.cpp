@@ -2,7 +2,7 @@
 
 #include <lunasvg.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -64,4 +64,4 @@ DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* 
     return result;
 }
 
-}  // namespace mdvn
+}  // namespace markair

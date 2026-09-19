@@ -1,4 +1,4 @@
-// mdvn 的"打开目标"外壳逻辑:链接点击行为(T36)+ 图片点击查看原图(T36b)。
+// markair 的"打开目标"外壳逻辑:链接点击行为(T36)+ 图片点击查看原图(T36b)。
 //
 // T36 的三类链接目标各自的行为:
 //   ① `http(s)://`(以及 `mailto:` / `file:`)→ `ShellExecuteW` 交给系统默认程序,
@@ -24,7 +24,7 @@
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 点击一个链接时应当采取的行为(T36,纯判定,不含任何 Win32 调用)。 */
 enum class LinkAction : u8 {
@@ -41,7 +41,7 @@ enum class LinkAction : u8 {
  *
  * @param href 链接地址(UTF-8)。
  * @return 属于白名单 scheme 返回 true。
- * @example bool ok = mdvn::IsAllowedExternalScheme(mdvn::StrSlice{"https://a.com", 13}); // true
+ * @example bool ok = markair::IsAllowedExternalScheme(markair::StrSlice{"https://a.com", 13}); // true
  */
 bool IsAllowedExternalScheme(StrSlice href);
 
@@ -52,8 +52,8 @@ bool IsAllowedExternalScheme(StrSlice href);
  * @return 应采取的行为;空 href、非白名单 scheme、非 `.md` 的本地路径一律
  *         返回 `LinkAction::Reject`。
  * @example
- *   auto a = mdvn::DecideLinkAction(mdvn::StrSlice{"javascript:alert(1)", 19});
- *   // a == mdvn::LinkAction::Reject
+ *   auto a = markair::DecideLinkAction(markair::StrSlice{"javascript:alert(1)", 19});
+ *   // a == markair::LinkAction::Reject
  */
 LinkAction DecideLinkAction(StrSlice href);
 
@@ -67,7 +67,7 @@ LinkAction DecideLinkAction(StrSlice href);
  * @return 写入的字节数(不含结尾 '\0')。
  * @example
  *   char slug[64];
- *   u32 n = mdvn::MakeHeadingSlug(mdvn::StrSlice{"Hello World!", 12}, slug, 64);
+ *   u32 n = markair::MakeHeadingSlug(markair::StrSlice{"Hello World!", 12}, slug, 64);
  *   // slug == "hello-world", n == 11
  */
 u32 MakeHeadingSlug(StrSlice text, char* out, u32 cap);
@@ -81,7 +81,7 @@ u32 MakeHeadingSlug(StrSlice text, char* out, u32 cap);
  * @param doc 当前文档模型。
  * @param anchor 锚点文本(UTF-8),形如 `#section-title` 或 `section-title`。
  * @return 匹配到的标题块下标;未命中返回 `kInvalidIndex`。
- * @example u32 b = mdvn::FindAnchorBlock(doc, mdvn::StrSlice{"#安装", 8});
+ * @example u32 b = markair::FindAnchorBlock(doc, markair::StrSlice{"#安装", 8});
  */
 u32 FindAnchorBlock(const Document& doc, StrSlice anchor);
 
@@ -101,7 +101,7 @@ u32 FindAnchorBlock(const Document& doc, StrSlice anchor);
  * @return 规范化成功返回 true;href 为空、超长或 API 失败返回 false。
  * @example
  *   wchar_t full[MAX_PATH];
- *   mdvn::ResolveMarkdownPath(mdvn::StrSlice{"../readme.md", 12}, L"C:\\docs\\sub", full, MAX_PATH);
+ *   markair::ResolveMarkdownPath(markair::StrSlice{"../readme.md", 12}, L"C:\\docs\\sub", full, MAX_PATH);
  *   // full == L"C:\\docs\\readme.md"
  */
 bool ResolveMarkdownPath(StrSlice href, const wchar_t* docDirectory, wchar_t* out, u32 cap);
@@ -113,7 +113,7 @@ bool ResolveMarkdownPath(StrSlice href, const wchar_t* docDirectory, wchar_t* ou
  * @param href 链接地址(UTF-8)。
  * @return 已交给系统打开返回 true;scheme 被拒绝或调用失败返回 false
  *         (失败不崩溃、不弹 MessageBox)。
- * @example mdvn::OpenExternalTarget(mdvn::StrSlice{"https://example.com", 19});
+ * @example markair::OpenExternalTarget(markair::StrSlice{"https://example.com", 19});
  */
 bool OpenExternalTarget(StrSlice href);
 
@@ -121,7 +121,7 @@ bool OpenExternalTarget(StrSlice href);
  * 判断一个路径当前是否指向一个存在的文件(T36 ② 的"路径不存在"分支用)。
  * @param path 完整路径(以 '\0' 结尾),可为 nullptr。
  * @return 存在且不是目录返回 true。
- * @example if (!mdvn::MarkdownFileExists(full)) { / * 窗口内提示,不弹框 * / }
+ * @example if (!markair::MarkdownFileExists(full)) { / * 窗口内提示,不弹框 * / }
  */
 bool MarkdownFileExists(const wchar_t* path);
 
@@ -133,7 +133,7 @@ bool MarkdownFileExists(const wchar_t* path);
  *
  * @param path 完整文件路径(以 '\0' 结尾),非空。
  * @return `ShellExecuteW` 调用成功返回 true;路径为空或调用失败返回 false。
- * @example mdvn::OpenContainingFolderAndSelect(L"C:\\docs\\readme.md");
+ * @example markair::OpenContainingFolderAndSelect(L"C:\\docs\\readme.md");
  */
 bool OpenContainingFolderAndSelect(const wchar_t* path);
 
@@ -160,8 +160,8 @@ enum class ImageOpenResult : u8 {
  *        或网络图片下载到的响应体)。
  * @return 应采取的打开方式。
  * @example
- *   auto a = mdvn::DecideImageOpenAction(mdvn::LinkTargetKind::DataUri, true);
- *   // a == mdvn::ImageOpenAction::WriteTempThenOpen
+ *   auto a = markair::DecideImageOpenAction(markair::LinkTargetKind::DataUri, true);
+ *   // a == markair::ImageOpenAction::WriteTempThenOpen
  */
 ImageOpenAction DecideImageOpenAction(LinkTargetKind kind, bool hasRawBytes);
 
@@ -170,7 +170,7 @@ ImageOpenAction DecideImageOpenAction(LinkTargetKind kind, bool hasRawBytes);
  * 用 Arena 上的 Vec 存放路径,不使用任何 STL 容器。
  *
  * @example
- *   mdvn::TempFileRegistry temps(&arena);
+ *   markair::TempFileRegistry temps(&arena);
  *   const wchar_t* p = temps.WriteTempFile(bytes, len, L".png");
  *   // ... 程序退出前:
  *   temps.CleanupAll();
@@ -180,7 +180,7 @@ public:
     /**
      * 绑定存放路径字符串与清单数组的 Arena。
      * @param arena 生命周期须覆盖本对象(通常是文档 Arena 或进程级 Arena)。
-     * @example mdvn::TempFileRegistry temps(&docArena);
+     * @example markair::TempFileRegistry temps(&docArena);
      */
     explicit TempFileRegistry(Arena* arena);
 
@@ -188,7 +188,7 @@ public:
     TempFileRegistry& operator=(const TempFileRegistry&) = delete;
 
     /**
-     * 把一段原始字节写进 `%TEMP%\mdvn\` 下一个会话内自增编号的临时文件,并登记。
+     * 把一段原始字节写进 `%TEMP%\markair\` 下一个会话内自增编号的临时文件,并登记。
      *
      * @param bytes 原始字节,非空。
      * @param len 字节数,须大于 0。
@@ -238,7 +238,7 @@ private:
  * @param temps 临时文件清单,非空;写出的文件会登记进去以便退出时清理。
  * @return 执行结果,见 ImageOpenResult;任何失败都不崩溃、不弹 MessageBox。
  * @example
- *   mdvn::OpenImageOriginal(box.href, box.kind, docDir, p.bytes, p.len, L".png", &temps);
+ *   markair::OpenImageOriginal(box.href, box.kind, docDir, p.bytes, p.len, L".png", &temps);
  */
 ImageOpenResult OpenImageOriginal(StrSlice href, LinkTargetKind kind,
                                    const wchar_t* docDirectory,
@@ -246,4 +246,4 @@ ImageOpenResult OpenImageOriginal(StrSlice href, LinkTargetKind kind,
                                    const wchar_t* extension,
                                    TempFileRegistry* temps);
 
-}  // namespace mdvn
+}  // namespace markair

@@ -1,4 +1,4 @@
-// mdvn 进程入口(T13/T14 后更新)：
+// markair 进程入口(T13/T14 后更新)：
 // 命令行解析、命名互斥体(同文件重复打开时前置已有窗口)、真实文件加载、
 // 各子系统初始化、内置 --bench 性能埋点、弹窗、跑消息循环。
 // 窗口本身(窗口类注册、窗口过程、DPI 感知、滚动与快捷键)在
@@ -59,7 +59,7 @@ namespace {
 // 段落、引用(左侧竖线)、分割线、围栏代码块(背景)几种块类型,用来证明
 // "解析 -> 布局 -> 渲染"整条链路走得通。
 constexpr char kSampleMarkdown[] =
-    "# mdvn 示例文档\n\n"
+    "# markair 示例文档\n\n"
     "这是一个 **段落**,用来验证解析 -> 布局 -> 渲染整条链路是否走得通。\n\n"
     "## 二级标题\n\n"
     "> 这是一段引用文字,左侧应画出一条用 D2D 几何图元绘制的竖线,\n"
@@ -67,18 +67,18 @@ constexpr char kSampleMarkdown[] =
     "---\n\n"
     "```\n"
     "fn main() {\n"
-    "    println!(\"hello mdvn\");\n"
+    "    println!(\"hello markair\");\n"
     "}\n"
     "```\n";
 
 // 以下全局变量均为 POD / 普通指针,零初始化,不含任何有副作用的构造函数。
 ID2D1Factory* g_d2dFactory = nullptr;
-wchar_t g_displayText[MAX_PATH + 16] = L"mdvn";
-mdvn::RecentFiles g_recentFiles{};
+wchar_t g_displayText[MAX_PATH + 16] = L"markair";
+markair::RecentFiles g_recentFiles{};
 
-// mdvn 命名互斥体/窗口属性统一使用的前缀,避免和系统其它对象重名冲突。
-constexpr wchar_t kMutexNamePrefix[] = L"mdvn_filemutex_";
-constexpr wchar_t kPathHashPropName[] = L"mdvn_path_hash";
+// markair 命名互斥体/窗口属性统一使用的前缀,避免和系统其它对象重名冲突。
+constexpr wchar_t kMutexNamePrefix[] = L"markair_filemutex_";
+constexpr wchar_t kPathHashPropName[] = L"markair_path_hash";
 
 // T44 修复:T42 引入的"--bench 即强制全量解码"曾经不区分具体语料,导致
 // BENCH-A(测的是首屏虚拟化)也被误强制物化成全文档,拉高了 private_bytes
@@ -109,7 +109,7 @@ int OnText(MD_TEXTTYPE, const MD_CHAR*, MD_SIZE, void*) { return 0; }
 
 // 用一段最小 markdown 文本跑一次 md4c,证明库已正确链接进本 exe。
 void RunMd4cSmokeTest() {
-    static const char kSample[] = "# mdvn\n\nhello **world**\n";
+    static const char kSample[] = "# markair\n\nhello **world**\n";
     MD_PARSER parser{};
     parser.abi_version = 0;
     parser.flags = 0;
@@ -124,7 +124,7 @@ void RunMd4cSmokeTest() {
 
 // 用几种不同大小/对齐的分配验证 Arena 工作正常,再 Reset 一次证明可复用。
 void RunArenaSmokeTest() {
-    mdvn::Arena arena;
+    markair::Arena arena;
     if (!arena.Init(64 * 1024 * 1024)) {
         fprintf(stderr, "arena_init_failed\n");
         return;
@@ -225,22 +225,22 @@ HANDLE AcquireFileMutexAndMaybeFocusExisting(uint64_t pathHash) {
 // `fileMap` 的映射视图与返回的 Document::source 可能共享同一段内存,调用方
 // 须保证 `fileMap` 的生命周期覆盖 Document 的整个使用期(本文件里通过让
 // fileMap 与 docArena 一样活到 wWinMain 结尾来满足这一点)。
-mdvn::Document LoadMarkdownFile(mdvn::FileMap* fileMap, mdvn::Arena* arena) {
-    mdvn::StrSlice raw = fileMap->Data();
-    mdvn::EncodingDetection detection = mdvn::DetectEncoding(raw);
+markair::Document LoadMarkdownFile(markair::FileMap* fileMap, markair::Arena* arena) {
+    markair::StrSlice raw = fileMap->Data();
+    markair::EncodingDetection detection = markair::DetectEncoding(raw);
 
-    mdvn::StrSlice utf8;
-    if (detection.encoding == mdvn::DetectedEncoding::Utf16Le ||
-        detection.encoding == mdvn::DetectedEncoding::AnsiFallback) {
-        mdvn::Utf16Slice utf16 = mdvn::DecodeToUtf16(raw, detection, arena);
-        utf8 = mdvn::Utf16ToUtf8(utf16, arena);
+    markair::StrSlice utf8;
+    if (detection.encoding == markair::DetectedEncoding::Utf16Le ||
+        detection.encoding == markair::DetectedEncoding::AnsiFallback) {
+        markair::Utf16Slice utf16 = markair::DecodeToUtf16(raw, detection, arena);
+        utf8 = markair::Utf16ToUtf8(utf16, arena);
     } else {
-        utf8 = mdvn::StrSlice{raw.data + detection.contentOffset,
+        utf8 = markair::StrSlice{raw.data + detection.contentOffset,
                                raw.len - detection.contentOffset};
     }
 
     // T22:跳过 YAML front matter(若存在),两处解析调用点统一走这一函数。
-    return mdvn::ParseMarkdown(mdvn::SkipFrontMatter(utf8), arena);
+    return markair::ParseMarkdown(markair::SkipFrontMatter(utf8), arena);
 }
 
 // 从完整文件路径里截出所在目录(不含末尾分隔符),写入调用方缓冲。
@@ -263,20 +263,20 @@ void ExtractDirectory(const wchar_t* path, wchar_t* out, size_t outCap) {
 // 加载新文档 -> 重排"发生在这里(裁决 #6:不新开进程,任意时刻只有一份文档状态常驻)。
 struct DocumentHost {
     HWND hwnd;                       // 主窗口,用于取视口尺寸与改标题
-    mdvn::FileMap* fileMap;          // 旧文档的映射视图,换文档前必须先 Close
-    mdvn::Arena* docArena;           // 文档 Arena,换文档时整体 Reset
-    mdvn::Document* doc;             // 就地替换的文档模型
-    mdvn::BlockLayoutEngine* layout; // 布局引擎(Relayout 会先淘汰全部 layout)
-    mdvn::FontSubsystem* fonts;      // 取当前缩放档位
-    mdvn::ImageCache* imageCache;    // 图片缓存,换文档时位图与条目一并作废
-    mdvn::Arena* imageArena;         // 图片缓存所在 Arena,换文档时整体 Reset
+    markair::FileMap* fileMap;          // 旧文档的映射视图,换文档前必须先 Close
+    markair::Arena* docArena;           // 文档 Arena,换文档时整体 Reset
+    markair::Document* doc;             // 就地替换的文档模型
+    markair::BlockLayoutEngine* layout; // 布局引擎(Relayout 会先淘汰全部 layout)
+    markair::FontSubsystem* fonts;      // 取当前缩放档位
+    markair::ImageCache* imageCache;    // 图片缓存,换文档时位图与条目一并作废
+    markair::Arena* imageArena;         // 图片缓存所在 Arena,换文档时整体 Reset
     wchar_t* documentDirectory;      // MAX_PATH 缓冲,换文档后要更新成新文档的目录
 
     // T56:窗口状态记忆的写盘回调需要读到"当前窗口实时矩形"(windowState)
     // 与"要写进哪份配置"(settings),借用同一个 DocumentHost 传递,不另起
     // 一个只装两个指针的小结构体。
-    mdvn::WindowState* windowState;
-    mdvn::AppSettings* settings;
+    markair::WindowState* windowState;
+    markair::AppSettings* settings;
 
     // T71(bench 确定性修复):--bench 模式下为 true,窗口矩形变更回调据此
     // 跳过写盘——bench 本就不该污染开发者本机真实的 state.ini。
@@ -299,13 +299,13 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
 
     // 换行宽度收窄掉左右内边距(kContentPaddingDip),口径与 window.cpp 的
     // ViewportWidthOf 一致,否则窗口内换文档后正文换行宽度会和其余场景对不上。
-    float widthDip = mdvn::ContentWidthDip(mdvn::ClientWidthDip(host->hwnd));
+    float widthDip = markair::ContentWidthDip(markair::ClientWidthDip(host->hwnd));
     if (widthDip < 1.0f) widthDip = 1.0f;
     float fontScale = host->fonts ? host->fonts->Scale() : 1.0f;
 
     // ② 打开并解析新文档。
-    if (host->fileMap->Open(fullPath) != mdvn::FileMapError::None) {
-        *host->doc = mdvn::Document(host->docArena);  // 空文档,保证后续渲染不读到悬空指针
+    if (host->fileMap->Open(fullPath) != markair::FileMapError::None) {
+        *host->doc = markair::Document(host->docArena);  // 空文档,保证后续渲染不读到悬空指针
         host->layout->Relayout(*host->doc, widthDip, fontScale, host->imageCache);
         return false;
     }
@@ -321,8 +321,8 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     if (host->windowState) {
         host->windowState->currentDocumentSizeBytes = host->fileMap->Data().len;
         if (!host->benchMode && host->windowState->recentFiles) {
-            mdvn::AddRecentFile(host->windowState->recentFiles, fullPath);
-            mdvn::RequestRecentFilesSave(host->hwnd, host->windowState);
+            markair::AddRecentFile(host->windowState->recentFiles, fullPath);
+            markair::RequestRecentFilesSave(host->hwnd, host->windowState);
         }
     }
 
@@ -339,19 +339,19 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
 // T14 性能埋点的回调钩子:window.h 的 WindowState 只接受不带命名空间知识的
 // 通用函数指针,这里用两个薄转发函数把它们接到 bench 模块上,保持 shell 层
 // 不直接依赖 app/bench.h。
-void OnWindowCreatedBenchHook(void*) { mdvn::bench::MarkWindowCreated(); }
+void OnWindowCreatedBenchHook(void*) { markair::bench::MarkWindowCreated(); }
 
 // 首帧真正显示后立即记下时间点并把整份报告输出到 stderr——不等窗口关闭,
 // 方便脚本(T15)在首屏渲染完成后就能采集到数据,不必等用户/脚本关掉窗口。
 void OnFirstPresentBenchHook(void*) {
-    mdvn::bench::MarkFirstPresent();
-    mdvn::bench::EmitReport();
+    markair::bench::MarkFirstPresent();
+    markair::bench::EmitReport();
 }
 
 // T76 逐帧埋点的三个薄转发钩子,理由同上:shell 层不直接依赖 app/bench.h。
-void OnFrameBeginBenchHook(void*) { mdvn::bench::MarkFrameBegin(); }
-void OnFrameLayoutDoneBenchHook(void*) { mdvn::bench::MarkFrameLayoutDone(); }
-void OnFrameEndBenchHook(void*) { mdvn::bench::MarkFrameEnd(); }
+void OnFrameBeginBenchHook(void*) { markair::bench::MarkFrameBegin(); }
+void OnFrameLayoutDoneBenchHook(void*) { markair::bench::MarkFrameLayoutDone(); }
+void OnFrameEndBenchHook(void*) { markair::bench::MarkFrameEnd(); }
 
 // T78:内存泄漏排查探针("--bench-loop=<kind>:<count>")每完成一次循环动作
 // 调用一次,把当前 PrivateUsage 以机器可读单行输出到 stderr,供
@@ -379,13 +379,13 @@ struct BenchLoopCliArgs {
     const wchar_t* corpusDir;  // kind==1(replace)时使用,其余可为空
 };
 
-BenchLoopCliArgs ParseBenchLoopCliArgs(const mdvn::Vec<wchar_t*>& argv) {
+BenchLoopCliArgs ParseBenchLoopCliArgs(const markair::Vec<wchar_t*>& argv) {
     BenchLoopCliArgs result{0, 0, nullptr};
     constexpr wchar_t kLoopPrefix[] = L"--bench-loop=";
     constexpr size_t kLoopPrefixLen = 13;
     constexpr wchar_t kDirPrefix[] = L"--bench-loop-dir=";
     constexpr size_t kDirPrefixLen = 17;
-    for (mdvn::u32 i = 1; i < argv.Size(); ++i) {
+    for (markair::u32 i = 1; i < argv.Size(); ++i) {
         const wchar_t* arg = argv[i];
         if (wcsncmp(arg, kDirPrefix, kDirPrefixLen) == 0) {
             result.corpusDir = arg + kDirPrefixLen;
@@ -458,10 +458,10 @@ void OnWindowGeometryChangedHook(void* userData) {
     if (host->fonts) host->settings->zoom = host->fonts->Scale();
     host->settings->theme = host->windowState->themeSetting;
     host->settings->hasTheme = true;
-    mdvn::SaveAppSettings(*host->settings);
+    markair::SaveAppSettings(*host->settings);
 }
 
-// T59:把一行文本输出到父进程的控制台(mdvn 是 WIN32 子系统程序,没有自己的
+// T59:把一行文本输出到父进程的控制台(markair 是 WIN32 子系统程序,没有自己的
 // 控制台)。`AttachConsole(ATTACH_PARENT_PROCESS)` 只在 kernel32 里,不拉起
 // 任何额外模块;附加失败(例如父进程本身没有控制台,双击打开的场景)时静默
 // 放弃,不影响退出码本身。用完立即 `FreeConsole`,不让本进程之后一直挂在
@@ -481,27 +481,27 @@ void EmitConsoleLine(const wchar_t* text) {
 // 两个开关一次性处理 kAssociatedExtensions 里的全部五个扩展名,不提供
 // "只关联某个扩展名"的子选项。
 // @return 0 成功,1 失败(含"两个开关同时出现"这一歧义场景)。
-int HandleAssocCliCommand(const mdvn::bench::ParsedArgs& args) {
+int HandleAssocCliCommand(const markair::bench::ParsedArgs& args) {
     if (args.registerRequested && args.unregisterRequested) {
-        EmitConsoleLine(L"mdvn: --register 与 --unregister 不能同时使用\r\n");
+        EmitConsoleLine(L"markair: --register 与 --unregister 不能同时使用\r\n");
         return 1;
     }
 
     wchar_t exePath[MAX_PATH]{};
     DWORD exePathLen = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     if (exePathLen == 0 || exePathLen >= MAX_PATH) {
-        EmitConsoleLine(L"mdvn: 无法获取程序路径,操作已取消\r\n");
+        EmitConsoleLine(L"markair: 无法获取程序路径,操作已取消\r\n");
         return 1;
     }
 
     if (args.registerRequested) {
-        bool ok = mdvn::RegisterFileAssociations(exePath, L"mdvn Markdown 文档");
-        EmitConsoleLine(ok ? L"mdvn: 已注册文件关联,涉及以下扩展名:\r\n"
-                           : L"mdvn: 文件关联注册失败\r\n");
+        bool ok = markair::RegisterFileAssociations(exePath, L"markair Markdown 文档");
+        EmitConsoleLine(ok ? L"markair: 已注册文件关联,涉及以下扩展名:\r\n"
+                           : L"markair: 文件关联注册失败\r\n");
         if (ok) {
-            for (mdvn::u32 i = 0; i < mdvn::kAssociatedExtensionCount; ++i) {
+            for (markair::u32 i = 0; i < markair::kAssociatedExtensionCount; ++i) {
                 wchar_t line[64];
-                swprintf_s(line, L"  %s\r\n", mdvn::kAssociatedExtensions[i]);
+                swprintf_s(line, L"  %s\r\n", markair::kAssociatedExtensions[i]);
                 EmitConsoleLine(line);
             }
         }
@@ -509,13 +509,13 @@ int HandleAssocCliCommand(const mdvn::bench::ParsedArgs& args) {
     }
 
     // args.unregisterRequested 为 true(前面已排除"两者同时出现"的情况)。
-    bool ok = mdvn::UnregisterFileAssociations();
-    EmitConsoleLine(ok ? L"mdvn: 已卸载文件关联,涉及以下扩展名:\r\n"
-                       : L"mdvn: 文件关联卸载失败\r\n");
+    bool ok = markair::UnregisterFileAssociations();
+    EmitConsoleLine(ok ? L"markair: 已卸载文件关联,涉及以下扩展名:\r\n"
+                       : L"markair: 文件关联卸载失败\r\n");
     if (ok) {
-        for (mdvn::u32 i = 0; i < mdvn::kAssociatedExtensionCount; ++i) {
+        for (markair::u32 i = 0; i < markair::kAssociatedExtensionCount; ++i) {
             wchar_t line[64];
-            swprintf_s(line, L"  %s\r\n", mdvn::kAssociatedExtensions[i]);
+            swprintf_s(line, L"  %s\r\n", markair::kAssociatedExtensions[i]);
             EmitConsoleLine(line);
         }
     }
@@ -537,16 +537,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
     _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
 #endif
-    // 命令行解析改用不依赖 shell32.dll 的 mdvn::ParseCommandLine(见 cmdline.h
+    // 命令行解析改用不依赖 shell32.dll 的 markair::ParseCommandLine(见 cmdline.h
     // 顶部注释)——CommandLineToArgvW 本身是 shell32 的导出符号,在这里被
     // 无条件调用会让 CMakeLists.txt 里的 /DELAYLOAD:shell32.dll 名存实亡。
     // cmdlineArena 只需装下命令行字符串与 argv 数组,生命周期覆盖整个
     // wWinMain(benchArgs.filePath 后面还会被多处使用),函数退出时随栈析构。
-    mdvn::Arena cmdlineArena;
+    markair::Arena cmdlineArena;
     cmdlineArena.Init(64 * 1024);
-    mdvn::Vec<wchar_t*> argv = mdvn::ParseCommandLine(GetCommandLineW(), &cmdlineArena);
+    markair::Vec<wchar_t*> argv = markair::ParseCommandLine(GetCommandLineW(), &cmdlineArena);
     int argc = static_cast<int>(argv.Size());
-    mdvn::bench::ParsedArgs benchArgs = mdvn::bench::ParseArgs(argc, argv.Data());
+    markair::bench::ParsedArgs benchArgs = markair::bench::ParseArgs(argc, argv.Data());
     // T78:内存泄漏排查探针,独立于上面那套解析,详见 ParseBenchLoopCliArgs 注释。
     BenchLoopCliArgs benchLoopArgs = ParseBenchLoopCliArgs(argv);
     int benchLoopFileCount = 0;
@@ -562,14 +562,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         return HandleAssocCliCommand(benchArgs);
     }
 
-    if (benchArgs.benchEnabled) mdvn::bench::Enable();
+    if (benchArgs.benchEnabled) markair::bench::Enable();
     // "进程入口"埋点尽量早地记录;命令行解析本身极轻,可忽略的测量误差。
-    mdvn::bench::MarkProcessStart();
+    markair::bench::MarkProcessStart();
 
     // Per-Monitor V2 DPI 感知必须在创建任何窗口之前开启(T12)。
-    mdvn::EnablePerMonitorV2DpiAwareness();
+    markair::EnablePerMonitorV2DpiAwareness();
 
-    // 架构决策 #1(mdvn 是只读查看器,不需要文字输入)已被 T37 查找条的原生
+    // 架构决策 #1(markair 是只读查看器,不需要文字输入)已被 T37 查找条的原生
     // EDIT 控件推翻——查找条要支持中文关键词,必须让 IME 正常工作,这里不再
     // 调用 ImmDisableIME。
 
@@ -581,9 +581,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 未带文件参数时,默认打开历史记录第一条并自动展开历史侧栏——需要提前
     // 把历史记录加载出来(原来这一步在下面靠后的位置,现在挪到这里,同一份
     // 数据只加载一次,不重复读盘;bench 模式一律跳过磁盘读写,不走这条路)。
-    mdvn::InitRecentFiles(&g_recentFiles);
+    markair::InitRecentFiles(&g_recentFiles);
     if (!benchArgs.benchEnabled) {
-        mdvn::LoadRecentFiles(&g_recentFiles);
+        markair::LoadRecentFiles(&g_recentFiles);
     }
     bool autoOpenedFromHistory = false;
     const wchar_t* effectiveFilePath = benchArgs.filePath;
@@ -609,10 +609,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_d2dFactory);
 
-    // T39:启动期一次性读 %LOCALAPPDATA%\mdvn\state.ini(单次 < 1KB);
+    // T39:启动期一次性读 %LOCALAPPDATA%\markair\state.ini(单次 < 1KB);
     // 文件不存在就按默认值走,不创建目录、不写盘。
-    mdvn::AppSettings settings;
-    mdvn::LoadAppSettings(&settings);
+    markair::AppSettings settings;
+    markair::LoadAppSettings(&settings);
 
     // If theme is not explicitly persisted in state.ini yet, detect system theme once,
     // determine whether it is light or dark, and immediately persist it to state.ini.
@@ -620,11 +620,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 若 state.ini 中尚未持久化有效主题,则在初始化时读取一次系统主题,
     // 确定是亮色还是暗色,并立即存入持久化文件 state.ini。
     if (!settings.hasTheme) {
-        bool systemIsDark = mdvn::DetectSystemIsDark();
-        settings.theme = systemIsDark ? mdvn::ThemeSetting::Dark : mdvn::ThemeSetting::Light;
+        bool systemIsDark = markair::DetectSystemIsDark();
+        settings.theme = systemIsDark ? markair::ThemeSetting::Dark : markair::ThemeSetting::Light;
         settings.hasTheme = true;
         if (!benchArgs.benchEnabled) {
-            mdvn::SaveAppSettings(settings);
+            markair::SaveAppSettings(settings);
         }
     }
 
@@ -646,7 +646,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     // 字体子系统本体放在栈上(非全局对象),不违反"禁止有副作用的全局
     // 构造函数"约束。族名覆盖必须在 Init 之前生效。
-    mdvn::FontSubsystem fonts;
+    markair::FontSubsystem fonts;
     fonts.SetFamilyOverrides(settings.fontBodyPrimary, settings.fontBodyFallback,
                              settings.fontMonoPrimary, settings.fontMonoFallback);
     fonts.Init();
@@ -658,20 +658,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 文档相关数据全部落在这一块 Arena 上;fileMap 与它一样活到 wWinMain
     // 结尾,保证 Document::source 引用的内存(无论来自映射视图还是 arena
     // 解码缓冲区)在整个消息循环期间都有效。
-    mdvn::Arena docArena;
+    markair::Arena docArena;
     docArena.Init(4 * 1024 * 1024);
 
-    mdvn::FileMap fileMap;
+    markair::FileMap fileMap;
     bool fileOpened = hasTarget &&
-                       (fileMap.Open(normalizedPath) == mdvn::FileMapError::None);
+                       (fileMap.Open(normalizedPath) == markair::FileMapError::None);
 
-    mdvn::Document doc = fileOpened
+    markair::Document doc = fileOpened
         ? LoadMarkdownFile(&fileMap, &docArena)
-        : mdvn::ParseMarkdown(
-              mdvn::SkipFrontMatter(mdvn::StrSlice{
-                  kSampleMarkdown, static_cast<mdvn::u32>(sizeof(kSampleMarkdown) - 1)}),
+        : markair::ParseMarkdown(
+              markair::SkipFrontMatter(markair::StrSlice{
+                  kSampleMarkdown, static_cast<markair::u32>(sizeof(kSampleMarkdown) - 1)}),
               &docArena);
-    mdvn::bench::MarkParseDone();
+    markair::bench::MarkParseDone();
 
     if (fileOpened) {
         SetDisplayTextFromPath(normalizedPath);
@@ -684,76 +684,76 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 两块 Arena 分工明确:imageArena 存"活到文档关闭"的东西(缓存条目、网络
     // 原始字节、临时文件路径清单),imageScratch 只存"用完即弃"的 data: URI 解码
     // 缓冲,每次解码前整体 Reset —— 两者绝不能混用,否则 Reset 会连缓存一起抹掉。
-    mdvn::Arena imageArena;
+    markair::Arena imageArena;
     imageArena.Init(32 * 1024 * 1024);
-    mdvn::Arena imageScratch;
+    markair::Arena imageScratch;
     imageScratch.Init(32 * 1024 * 1024);
 
-    mdvn::ImageCache imageCache;
+    markair::ImageCache imageCache;
     imageCache.Init(&imageArena);
 
     wchar_t documentDirectory[MAX_PATH]{};
     if (fileOpened) ExtractDirectory(normalizedPath, documentDirectory, MAX_PATH);
 
-    mdvn::BlockLayoutEngine layout;
+    markair::BlockLayoutEngine layout;
     layout.Relayout(doc, 760.0f, 1.0f, &imageCache);
-    mdvn::bench::MarkLayoutDone();
+    markair::bench::MarkLayoutDone();
 
-    mdvn::Renderer renderer;
+    markair::Renderer renderer;
     renderer.Init(g_d2dFactory, &fonts, &imageCache);
 
     // Initialize palette according to the resolved effective theme (Dark or Light).
     //
     // 根据已确定的生效主题(暗色或亮色)初始化渲染器调色板。
-    bool systemIsDark = (settings.theme == mdvn::ThemeSetting::Dark);
-    if (mdvn::ResolveEffectiveTheme(settings.theme, systemIsDark)) {
-        renderer.SetPalette(&mdvn::kDarkPalette);
+    bool systemIsDark = (settings.theme == markair::ThemeSetting::Dark);
+    if (markair::ResolveEffectiveTheme(settings.theme, systemIsDark)) {
+        renderer.SetPalette(&markair::kDarkPalette);
     }
 
-    mdvn::ImageResidencyManager residency;
+    markair::ImageResidencyManager residency;
     residency.Init(&renderer, &imageCache, &imageScratch, documentDirectory);
 
-    mdvn::RemoteImageLoader remoteLoader;
+    markair::RemoteImageLoader remoteLoader;
 
     // 临时文件清单(T36b)单独用一块小 Arena:它必须活过 T36 的"窗口内换文档"
     // (那一步会 Reset imageArena),否则退出时要删的路径会被一起抹掉。
-    mdvn::Arena tempArena;
+    markair::Arena tempArena;
     tempArena.Init(1 * 1024 * 1024);
-    mdvn::TempFileRegistry tempFiles(&tempArena);
+    markair::TempFileRegistry tempFiles(&tempArena);
 
     // T37/T38:查找会话的两块 Arena —— results 存命中数组与 UTF-8 查询串
     // (每次重搜整体 Reset),scratch 是逐块拼接缓冲(搜索过程中反复 Reset),
     // 两者必须分开,否则重搜时会把刚存好的命中数组抹掉。
-    mdvn::Arena findArena;
+    markair::Arena findArena;
     findArena.Init(16 * 1024 * 1024);
-    mdvn::Arena findScratch;
+    markair::Arena findScratch;
     findScratch.Init(16 * 1024 * 1024);
-    mdvn::FindSession find(&findArena, &findScratch);
+    markair::FindSession find(&findArena, &findScratch);
 
     // T45:代码块复制按钮拼接剪贴板文本用的临时 Arena(每次复制前整体 Reset)。
     // 单独一块而不是复用 imageScratch/findScratch,是为了不让"复制一次代码块"
     // 这个动作把别人正在用的临时缓冲抹掉。
-    mdvn::Arena clipboardScratch;
+    markair::Arena clipboardScratch;
     clipboardScratch.Init(16 * 1024 * 1024);
 
     // T63:大纲侧栏专用 Arena,刻意**不在这里 Init**——`Init` 只是
     // `VirtualAlloc` 预留地址空间(见 arena.cpp),但"默认关闭时不分配任何
     // Arena"这条验收要求的是字面意义上"不调用 Init",因此延迟到用户第一次
     // 按 `Ctrl+\` 打开侧栏时,由 window.cpp 的 ToggleOutlinePanel 现场调用。
-    mdvn::Arena outlineArena;
+    markair::Arena outlineArena;
 
     // T65:历史前进/后退栈,纯数据结构,直接放栈上,不需要 Arena。
-    mdvn::History history;
+    markair::History history;
 
     // T80:鼠标拖选文本的运行期状态,纯数据结构,直接放栈上;剪贴板拼接用
     // 单独一块 Arena(与 clipboardScratch/findScratch 分开,理由同它们——
     // 互不抹掉对方正在用的临时缓冲)。
-    mdvn::SelectionState selection;
-    mdvn::Arena selectionScratch;
+    markair::SelectionState selection;
+    markair::Arena selectionScratch;
     selectionScratch.Init(16 * 1024 * 1024);
 
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
-    mdvn::WindowState windowState{
+    markair::WindowState windowState{
         &fonts, &layout, &doc, &renderer, 0.0f,
         &imageCache, &residency, &remoteLoader, &tempFiles, &imageScratch, documentDirectory,
         &find, nullptr,
@@ -816,14 +816,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     //
     // --bench 模式下保持为空:WM_DESTROY 等收尾路径一律靠
     // `state->recentFiles` 是否为空来判断要不要落盘,留空指针即可让那些调用
-    // 点自然短路,避免 bench 运行仍然创建/写入 %LOCALAPPDATA%\mdvn\history.txt
+    // 点自然短路,避免 bench 运行仍然创建/写入 %LOCALAPPDATA%\markair\history.txt
     // 这个磁盘副作用(与 T71 对 state.ini 窗口矩形做的隔离是同一类问题)。
     //
     // Left null in --bench mode: shutdown paths such as WM_DESTROY decide
     // whether to persist purely from whether `state->recentFiles` is null,
     // so leaving the pointer unset lets those call sites short-circuit
     // naturally, avoiding the disk side effect of creating/writing
-    // %LOCALAPPDATA%\mdvn\history.txt during a bench run (the same class of
+    // %LOCALAPPDATA%\markair\history.txt during a bench run (the same class of
     // isolation T71 already applies to the persisted window rect in
     // state.ini).
     if (!benchArgs.benchEnabled) {
@@ -841,7 +841,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     if (fileOpened) {
         size_t i = 0;
-        for (; normalizedPath[i] != 0 && i + 1 < mdvn::kHistoryPathCapacity; ++i) {
+        for (; normalizedPath[i] != 0 && i + 1 < markair::kHistoryPathCapacity; ++i) {
             windowState.currentDocumentPath[i] = normalizedPath[i];
         }
         windowState.currentDocumentPath[i] = 0;
@@ -856,7 +856,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // 的这一刻同步调用 SaveRecentFiles(内部 FlushFileBuffers 会阻塞到
         // 首帧之前,拖慢启动)。
         if (!benchArgs.benchEnabled && !autoOpenedFromHistory) {
-            mdvn::AddRecentFile(windowState.recentFiles, normalizedPath);
+            markair::AddRecentFile(windowState.recentFiles, normalizedPath);
             needsRecentFilesSave = true;
         }
     }
@@ -864,18 +864,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // T48:窗口类背景刷是注册时一次性决定的,提前用同一份 systemIsDark/
     // settings.theme 解出生效主题(上面第 425~428 行已经算过一次结果给
     // renderer 用,这里复用同一套输入重新解一次,避免专门存一个中间变量)。
-    if (!mdvn::RegisterMainWindowClass(
-            hInstance, mdvn::ResolveEffectiveTheme(settings.theme, systemIsDark))) {
+    if (!markair::RegisterMainWindowClass(
+            hInstance, markair::ResolveEffectiveTheme(settings.theme, systemIsDark))) {
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
     }
-    HWND hwnd = mdvn::CreateMainWindow(hInstance, g_displayText, &windowState);
+    HWND hwnd = markair::CreateMainWindow(hInstance, g_displayText, &windowState);
     if (!hwnd) {
         if (fileMutex) CloseHandle(fileMutex);
         return 1;
     }
     if (needsRecentFilesSave) {
-        mdvn::RequestRecentFilesSave(hwnd, &windowState);
+        markair::RequestRecentFilesSave(hwnd, &windowState);
     }
 
     // 未带文件参数、自动打开历史记录第一条时的收尾:成功则让历史侧栏直接
@@ -885,12 +885,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 覆盖必须在它返回之后才生效。
     if (autoOpenedFromHistory) {
         if (fileOpened) {
-            windowState.historyAnimState = mdvn::SidebarAnimState::Open;
+            windowState.historyAnimState = markair::SidebarAnimState::Open;
             windowState.historyAnimProgress = 1.0f;
         } else {
-            mdvn::ConfirmAndRemoveMissingHistoryEntry(hwnd, &windowState, 0);
+            markair::ConfirmAndRemoveMissingHistoryEntry(hwnd, &windowState, 0);
             if (windowState.recentFiles->count > 0) {
-                windowState.historyAnimState = mdvn::SidebarAnimState::Open;
+                windowState.historyAnimState = markair::SidebarAnimState::Open;
                 windowState.historyAnimProgress = 1.0f;
             }
         }
@@ -920,10 +920,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
                  reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(HashPathCaseInsensitive(normalizedPath))));
     }
 
-    int exitCode = mdvn::RunMessageLoop();
+    int exitCode = markair::RunMessageLoop();
 
     // T76:窗口关闭后把本次会话的逐帧耗时分布输出到 stderr(非 --bench 时空操作)。
-    mdvn::bench::EmitFrameReport();
+    markair::bench::EmitFrameReport();
 
     // T55:进程正常退出前兜底写一次 state.ini。windowState.theme 是运行期
     // 唯一会被用户实时改动的字段(Ctrl+Shift+T 循环,见 T47);字体族名覆盖
@@ -938,7 +938,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // (例如只按了 Ctrl+= 就直接关窗口,没移动/缩放过窗口),这里补上最终值。
     settings.zoom = fonts.Scale();
     // T71:bench 模式不写盘——理由同 OnWindowGeometryChangedHook。
-    if (!benchArgs.benchEnabled) mdvn::SaveAppSettings(settings);
+    if (!benchArgs.benchEnabled) markair::SaveAppSettings(settings);
 
     // T36b:正常退出前统一删除本次会话创建过的全部临时文件(裁决:不追踪外部
     // 查看器进程是否退出,异常终止的残留交给 %TEMP% 的系统级清理兜底)。
@@ -946,7 +946,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     // T48:释放深色主题下自建的窗口类背景刷(浅色主题下是系统内置句柄,
     // 这个函数内部会判断,空操作零开销)。
-    mdvn::ReleaseMainWindowClassResources();
+    markair::ReleaseMainWindowClassResources();
 
     if (g_d2dFactory) g_d2dFactory->Release();
     if (fileMutex) CloseHandle(fileMutex);

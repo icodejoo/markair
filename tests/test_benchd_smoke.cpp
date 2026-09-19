@@ -6,7 +6,7 @@
 // 时才跑完整的"打开 -> 解析 -> 布局"链路,并如实打印(而不是断言)是否触发了
 // kMaxDocumentNodeCount 节点数上限截断——08-m3-tasks.md 明确要求:若触发截断,
 // 这是产品事实,必须记录,不能当成测量瑕疵回避,也不能因为触发了就判用例失败。
-#include "mdvn_test.h"
+#include "markair_test.h"
 #include "../src/util/arena.h"
 #include "../src/util/str.h"
 #include "../src/doc/model.h"
@@ -18,28 +18,28 @@
 
 #include <cstdio>
 
-using mdvn::Arena;
-using mdvn::Document;
-using mdvn::DetectedEncoding;
-using mdvn::EncodingDetection;
-using mdvn::BlockLayoutEngine;
-using mdvn::FileMap;
-using mdvn::FileMapError;
-using mdvn::ParseMarkdown;
-using mdvn::SkipFrontMatter;
-using mdvn::StrSlice;
+using markair::Arena;
+using markair::Document;
+using markair::DetectedEncoding;
+using markair::EncodingDetection;
+using markair::BlockLayoutEngine;
+using markair::FileMap;
+using markair::FileMapError;
+using markair::ParseMarkdown;
+using markair::SkipFrontMatter;
+using markair::StrSlice;
 
-#ifndef MDVN_BENCH_DIR
-#define MDVN_BENCH_DIR "bench"
+#ifndef MARKAIR_BENCH_DIR
+#define MARKAIR_BENCH_DIR "bench"
 #endif
 
 // 用例:对 bench/BENCH-D.md 跑一次"打开 -> 解析 -> 布局",不崩溃即算通过；
 // 是否触发节点数上限截断只如实打印到 stderr,不作为失败条件(截断与否是
 // 产品事实,由 bench/M3-BENCHD.md 记录、由人判断是否需要处理,不是本用例
 // 该拍板的事)。
-MDVN_TEST(BenchDSmoke_TenMegabyteDocOpensParsesLayoutsWithoutCrash) {
+MARKAIR_TEST(BenchDSmoke_TenMegabyteDocOpensParsesLayoutsWithoutCrash) {
     wchar_t path[600];
-    const char* narrowDir = MDVN_BENCH_DIR;
+    const char* narrowDir = MARKAIR_BENCH_DIR;
     wchar_t dir[512];
     size_t i = 0;
     for (; narrowDir[i] != 0 && i + 1 < 512; ++i) dir[i] = static_cast<wchar_t>(narrowDir[i]);
@@ -62,12 +62,12 @@ MDVN_TEST(BenchDSmoke_TenMegabyteDocOpensParsesLayoutsWithoutCrash) {
     arena.Init(256 * 1024 * 1024);
 
     StrSlice raw = fm.Data();
-    EncodingDetection detection = mdvn::DetectEncoding(raw);
+    EncodingDetection detection = markair::DetectEncoding(raw);
     StrSlice utf8;
     if (detection.encoding == DetectedEncoding::Utf16Le ||
         detection.encoding == DetectedEncoding::AnsiFallback) {
-        mdvn::Utf16Slice utf16 = mdvn::DecodeToUtf16(raw, detection, &arena);
-        utf8 = mdvn::Utf16ToUtf8(utf16, &arena);
+        markair::Utf16Slice utf16 = markair::DecodeToUtf16(raw, detection, &arena);
+        utf8 = markair::Utf16ToUtf8(utf16, &arena);
     } else {
         utf8 = StrSlice{raw.data + detection.contentOffset, raw.len - detection.contentOffset};
     }
@@ -80,12 +80,12 @@ MDVN_TEST(BenchDSmoke_TenMegabyteDocOpensParsesLayoutsWithoutCrash) {
             static_cast<unsigned>(raw.len), static_cast<unsigned>(doc.blocks.Size()),
             doc.truncated ? "true(触发kMaxDocumentNodeCount上限截断)" : "false");
 
-    MDVN_CHECK(doc.blocks.Size() > 0);
+    MARKAIR_CHECK(doc.blocks.Size() > 0);
 
     BlockLayoutEngine layout;
     bool relayoutOk = layout.Relayout(doc, 760.0f);
-    MDVN_CHECK(relayoutOk);
-    MDVN_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
+    MARKAIR_CHECK(relayoutOk);
+    MARKAIR_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
 
     fm.Close();
 }

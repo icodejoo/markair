@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    mdvn 性能基准测量脚本（T15）。
+    markair 性能基准测量脚本（T15）。
 
 .DESCRIPTION
-    暖启动模式（默认）：连续运行 mdvn.exe --bench <BENCH-A.md> N 次，
+    暖启动模式（默认）：连续运行 markair.exe --bench <BENCH-A.md> N 次，
     解析每次运行 stderr 输出的 KV 性能行，计算各指标的中位数与 P95，
     输出一份逐轮原始数据 CSV，并在控制台打印摘要。
 
@@ -32,8 +32,8 @@
 .PARAMETER Cold
     是否为冷启动模式。开启后每轮运行前尝试清 standby list。
 
-.PARAMETER MdvnExe
-    mdvn.exe 的路径，默认 build\src\Release\mdvn.exe（相对脚本所在的仓库根目录）。
+.PARAMETER MarkairExe
+    markair.exe 的路径，默认 build\src\Release\markair.exe（相对脚本所在的仓库根目录）。
 
 .PARAMETER BenchFile
     用于测量的基准语料文件，默认 bench\BENCH-A.md。直接指定路径时优先级
@@ -82,7 +82,7 @@
 param(
     [int]$N = 20,
     [switch]$Cold,
-    [string]$MdvnExe = "build\src\Release\mdvn.exe",
+    [string]$MarkairExe = "build\src\Release\markair.exe",
     [string]$BenchFile,
     [ValidateSet("BENCH-A", "BENCH-B", "BENCH-C", "EMPTY", "BENCH-D")]
     [string]$Target = "BENCH-A",
@@ -114,11 +114,11 @@ function Resolve-RepoPath([string]$p) {
     return Join-Path $repoRoot $p
 }
 
-$mdvnExePath = Resolve-RepoPath $MdvnExe
+$markairExePath = Resolve-RepoPath $MarkairExe
 $benchFilePath = Resolve-RepoPath $BenchFile
 
-if (-not (Test-Path $mdvnExePath)) {
-    throw "找不到 mdvn.exe：$mdvnExePath ；请先构建或用 -MdvnExe 指定正确路径。"
+if (-not (Test-Path $markairExePath)) {
+    throw "找不到 markair.exe：$markairExePath ；请先构建或用 -MarkairExe 指定正确路径。"
 }
 if (-not (Test-Path $benchFilePath)) {
     throw "找不到基准语料文件：$benchFilePath"
@@ -167,13 +167,13 @@ function Clear-StandbyList {
     }
 }
 
-# 运行一次 mdvn.exe --bench <file>，捕获 stderr，解析出各字段值，
+# 运行一次 markair.exe --bench <file>，捕获 stderr，解析出各字段值，
 # 并主动杀掉进程（--bench 模式下窗口不会自动退出）。
 function Invoke-OneRun([int]$index) {
-    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "mdvn_bench_err_$([guid]::NewGuid().ToString('N')).txt")
-    $stdoutFile = [System.IO.Path]::Combine($env:TEMP, "mdvn_bench_out_$([guid]::NewGuid().ToString('N')).txt")
+    $stderrFile = [System.IO.Path]::Combine($env:TEMP, "markair_bench_err_$([guid]::NewGuid().ToString('N')).txt")
+    $stdoutFile = [System.IO.Path]::Combine($env:TEMP, "markair_bench_out_$([guid]::NewGuid().ToString('N')).txt")
 
-    $proc = Start-Process -FilePath $mdvnExePath `
+    $proc = Start-Process -FilePath $markairExePath `
         -ArgumentList @("--bench", "`"$benchFilePath`"") `
         -RedirectStandardError $stderrFile `
         -RedirectStandardOutput $stdoutFile `
@@ -250,7 +250,7 @@ function Get-P95([double[]]$values) {
 # private_bytes 无法直接比较，必须如实记录，而不是假设"环境是干净的"。
 function Get-EnvInfoText {
     $lines = @()
-    $lines += "==== mdvn 测量环境信息（T71）===="
+    $lines += "==== markair 测量环境信息（T71）===="
     $lines += "采集时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 
     try {
@@ -289,7 +289,7 @@ function Get-EnvInfoText {
 
     # 全局注入模块排查：列出当前用户会话里常见的输入法/安全软件/美化工具
     # 相关进程，作为"是否存在全局注入模块"的间接证据（真正精确的办法是
-    # 用 VMMap 对 mdvn.exe 本身做模块级快照，见 M3-METHOD.md 里对应条目）。
+    # 用 VMMap 对 markair.exe 本身做模块级快照，见 M3-METHOD.md 里对应条目）。
     try {
         $suspects = Get-Process -ErrorAction SilentlyContinue | Where-Object {
             $_.ProcessName -match "sogou|QQPCTray|360|baidu|wps|Tencent|ime|logi|razer"
@@ -307,8 +307,8 @@ function Get-EnvInfoText {
 # ------------------------- 主流程 -------------------------
 
 $mode = if ($Cold) { "冷启动" } else { "暖启动" }
-Write-Host "==== mdvn 性能基准测量：$mode 模式，共 $N 轮 ===="
-Write-Host "mdvn.exe : $mdvnExePath"
+Write-Host "==== markair 性能基准测量：$mode 模式，共 $N 轮 ===="
+Write-Host "markair.exe : $markairExePath"
 Write-Host "语料文件 : $benchFilePath"
 
 $results = @()

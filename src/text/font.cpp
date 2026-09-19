@@ -1,4 +1,4 @@
-// mdvn 字体子系统实现:见 font.h。字体族名基础来自
+// markair 字体子系统实现:见 font.h。字体族名基础来自
 // 01-requirements.md §8 裁决 #10,2026-09-19 追加修订:正文主族改为跟随
 // 系统默认消息字体(见 QuerySystemBodyFamily),不再写死 "Segoe UI" 字面量;
 // 查询走 SystemParametersInfoW(SPI_GETNONCLIENTMETRICS),不触发
@@ -7,7 +7,7 @@
 
 #include <windows.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -348,4 +348,4 @@ IDWriteTextLayout* FontSubsystem::CreateTextLayout(const wchar_t* text,
     return layout;
 }
 
-}  // namespace mdvn
+}  // namespace markair

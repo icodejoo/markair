@@ -1,10 +1,10 @@
-// mdvn 底部操作栏:常驻显示,左侧 6 个纯图标按钮
+// markair 底部操作栏:常驻显示,左侧 6 个纯图标按钮
 // (大纲/打开文档/主题切换/字体缩小/字体放大/查找),中间是状态文字区,最右侧是历史记录按钮。
 #pragma once
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 底部栏固定高度(DIP),随 DPI 缩放(调用方按需再乘 DPI 缩放系数)。
 constexpr float kBottomBarHeightDip = 32.0f;
@@ -234,4 +234,4 @@ inline void FormatBottomBarFileSize(u64 sizeBytes, wchar_t* out, u32 outCap) {
     out[pos] = L'\0';
 }
 
-}  // namespace mdvn
+}  // namespace markair

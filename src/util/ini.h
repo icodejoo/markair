@@ -1,6 +1,6 @@
-// mdvn 的 `state.ini` 配置读取(T39):自写 KV 解析,不引 JSON/TOML 库。
+// markair 的 `state.ini` 配置读取(T39):自写 KV 解析,不引 JSON/TOML 库。
 //
-// 路径固定为 `%LOCALAPPDATA%\mdvn\state.ini`,启动期一次性读完(单次 < 1KB),
+// 路径固定为 `%LOCALAPPDATA%\markair\state.ini`,启动期一次性读完(单次 < 1KB),
 // 文件不存在按默认值走 —— **不创建目录、不写盘**(M1 没有任何需要持久化的值,
 // 缩放级别按裁决 #4 只存内存态)。
 //
@@ -43,7 +43,7 @@
 #include "str.h"
 #include "types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 字体族名覆盖项的缓冲长度(含结尾 '\0');Win32 的 LF_FACESIZE 是 32,这里留一倍余量。
 constexpr u32 kMaxFontFamilyChars = 64;
@@ -64,7 +64,7 @@ constexpr u32 kMaxIniBytes = 2048;
 // 与 src/app/main.cpp 里"同文件重复打开前置已有窗口"用的是同一套技术手段
 // (CreateMutexW + WaitForSingleObject 超时 + ReleaseMutex),只是这里的名字
 // 固定不按路径哈希区分——state.ini 全局只有一份,不需要按文件区分互斥体。
-constexpr wchar_t kStateIniMutexName[] = L"mdvn_state_ini_write_mutex";
+constexpr wchar_t kStateIniMutexName[] = L"markair_state_ini_write_mutex";
 
 // 命名互斥体等待超时(毫秒)。绝不无限等:超时即放弃本次写盘并静默返回。
 constexpr DWORD kStateIniMutexTimeoutMs = 2000;
@@ -110,8 +110,8 @@ struct AppSettings {
  *
  * @param out 待填充的配置,非空。
  * @example
- *   mdvn::AppSettings s;
- *   mdvn::DefaultAppSettings(&s);   // s.loadRemoteImages == true
+ *   markair::AppSettings s;
+ *   markair::DefaultAppSettings(&s);   // s.loadRemoteImages == true
  */
 void DefaultAppSettings(AppSettings* out);
 
@@ -126,27 +126,27 @@ void DefaultAppSettings(AppSettings* out);
  * @param out 解析结果,调用前须先用 `DefaultAppSettings` 初始化,非空。
  * @return 实际被识别并应用的键个数。
  * @example
- *   mdvn::AppSettings s;
- *   mdvn::DefaultAppSettings(&s);
- *   mdvn::ParseIniSettings(mdvn::StrSlice{"load_remote_images=1\n", 21}, &s);
+ *   markair::AppSettings s;
+ *   markair::DefaultAppSettings(&s);
+ *   markair::ParseIniSettings(markair::StrSlice{"load_remote_images=1\n", 21}, &s);
  */
 u32 ParseIniSettings(StrSlice text, AppSettings* out);
 
 /**
- * 从 `%LOCALAPPDATA%\mdvn\state.ini` 读取配置(启动期调用一次)。
+ * 从 `%LOCALAPPDATA%\markair\state.ini` 读取配置(启动期调用一次)。
  * 文件不存在/读取失败时 `out` 保持默认值,**不创建目录、不写盘**。
  *
  * @param out 配置输出,非空;函数内部会先调用 `DefaultAppSettings`。
  * @return 真的读到并解析了配置文件返回 true;文件不存在或不可读返回 false。
  * @example
- *   mdvn::AppSettings settings;
- *   mdvn::LoadAppSettings(&settings);
+ *   markair::AppSettings settings;
+ *   markair::LoadAppSettings(&settings);
  *   remoteLoader.Init(hwnd, settings.loadRemoteImages);
  */
 bool LoadAppSettings(AppSettings* out);
 
 /**
- * 把配置写到 `%LOCALAPPDATA%\mdvn\state.ini`(裁决 #7:读-改-写 + 命名互斥体)。
+ * 把配置写到 `%LOCALAPPDATA%\markair\state.ini`(裁决 #7:读-改-写 + 命名互斥体)。
  *
  * 内部流程:取固定名字的命名互斥体(超时 `kStateIniMutexTimeoutMs`,超时即
  * 放弃、静默返回)→ 重读磁盘上的当前文件 → 只把"本进程自上次
@@ -160,11 +160,11 @@ bool LoadAppSettings(AppSettings* out);
  * @param settings 待写入的配置(通常是本进程当前内存态)。
  * @return 成功写盘返回 true;任何失败(含静默降级)返回 false。
  * @example
- *   mdvn::AppSettings settings;
- *   mdvn::LoadAppSettings(&settings);
- *   settings.theme = mdvn::ThemeSetting::Dark;
- *   mdvn::SaveAppSettings(settings);
+ *   markair::AppSettings settings;
+ *   markair::LoadAppSettings(&settings);
+ *   settings.theme = markair::ThemeSetting::Dark;
+ *   markair::SaveAppSettings(settings);
  */
 bool SaveAppSettings(const AppSettings& settings);
 
-}  // namespace mdvn
+}  // namespace markair

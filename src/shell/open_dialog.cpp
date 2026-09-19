@@ -5,7 +5,7 @@
 
 #include "assoc.h"  // kAssociatedExtensions(唯一定义处)
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -124,4 +124,4 @@ bool LaunchNewInstance(const wchar_t* filePath) {
     return true;
 }
 
-}  // namespace mdvn
+}  // namespace markair

@@ -12,10 +12,10 @@
 
 | 项 | 结论 |
 |---|---|
-| 异常 A（滚动帧率恒定 30.8 ms、掉帧率 99%） | **测量工具的 bug，不是渲染性能问题**。`bench/scroll_probe.ps1` 的 `Start-Sleep -Milliseconds 16` 受 Windows 15.625 ms 定时器粒度约束，实际每 31.25 ms 才投递一次滚轮消息；mdvn 每条消息画一帧、一帧不掉，于是 PresentMon 测到的"帧间隔"其实是**脚本自己的投递节奏**。已修脚本。 |
+| 异常 A（滚动帧率恒定 30.8 ms、掉帧率 99%） | **测量工具的 bug，不是渲染性能问题**。`bench/scroll_probe.ps1` 的 `Start-Sleep -Milliseconds 16` 受 Windows 15.625 ms 定时器粒度约束，实际每 31.25 ms 才投递一次滚轮消息；markair 每条消息画一帧、一帧不掉，于是 PresentMon 测到的"帧间隔"其实是**脚本自己的投递节奏**。已修脚本。 |
 | 异常 B（10 MB 文档 `window_to_present` 占 96.6%、2108 ms） | **产品代码的真 bug，且首先是一个正确性 bug**。截断文档的 `childCount` 永远回填不上，布局塌成 `totalHeight=0`（**画面全空**），同时几何全零的块被虚拟化判成"全部可见"，一次首帧创建并绘制 7355 个 `IDWriteTextLayout`。已修。 |
 | 修复效果（BENCH-D，20 轮） | 首屏 `t_process_to_present_ms` 中位数 **2182 ms → 124 ms**（17.6×）；`private_bytes` **176.9 MB → 21.6 MB**（8.2×）。01 §4 的"≤ 1.5 s"从**不达标**变为达标且余量 12×。 |
-| 软件渲染能否满足 60 FPS | **能**。mdvn 自身单帧重绘 P50：BENCH-A **1.8 ms**、BENCH-C（高亮最坏情况）**7.4 ms**、BENCH-D **2.5 ms**，全部远在 16.6 ms 预算内。 |
+| 软件渲染能否满足 60 FPS | **能**。markair 自身单帧重绘 P50：BENCH-A **1.8 ms**、BENCH-C（高亮最坏情况）**7.4 ms**、BENCH-D **2.5 ms**，全部远在 16.6 ms 预算内。 |
 | 是否需要"滚动时降低重绘精度" | **不需要**，该方案未实现、未采用。见 §7。 |
 | 既有用例 | 改动前 **422** 个 0 失败；改动后 **423** 个（新增 1 条回归用例）0 失败；`/W4` 零警告。 |
 
@@ -28,7 +28,7 @@
 - 第 **379** 行 `rtProps.type = D2D1_RENDER_TARGET_TYPE_SOFTWARE;` —— **无条件**，前面没有
   任何硬件探测，后面没有任何回退分支。
 - 第 **384** 行用的是 `CreateHwndRenderTarget`，即 GDI 位图后端的 HWND 渲染目标，
-  **mdvn 自己没有 DXGI 交换链**。
+  **markair 自己没有 DXGI 交换链**。
 
 所以 `04-delivery-plan.md` 风险表里"软件渲染达不到 60FPS"说的是**主路径的帧率风险**，
 不是一条边缘分支的风险。这条风险本轮已用实测关闭（§3）。
@@ -64,7 +64,7 @@ T72 实测（`bench/M3-RENDER-FPS.md` §4）：
 
 两份复杂度天差地别的文档测出几乎逐位相同的分布——这不符合"内容越复杂越慢"的常识。
 
-### 2.2 归因：帧间隔 = 脚本的投递间隔，与 mdvn 无关
+### 2.2 归因：帧间隔 = 脚本的投递间隔，与 markair 无关
 
 `bench/scroll_probe.ps1`（修订前）第 122 行用 `Start-Sleep -Milliseconds $IntervalMs`
 控制投递节奏，`$IntervalMs` 默认 16。**Windows 的默认定时器粒度是 15.625 ms**，
@@ -79,9 +79,9 @@ T72 实测（`bench/M3-RENDER-FPS.md` §4）：
 3. **改用自旋等待后节奏立刻变了**：同样请求 16 ms，实测
    `投递 625 次 / 实际 10000 ms => 平均间隔 16 ms`。
 
-### 2.3 用新埋点把 mdvn 自己那一段单独测出来
+### 2.3 用新埋点把 markair 自己那一段单独测出来
 
-要证明"慢的不是 mdvn"，必须把 mdvn 自身的重绘耗时与 DWM 合成节奏分开。本任务按裁决
+要证明"慢的不是 markair"，必须把 markair 自身的重绘耗时与 DWM 合成节奏分开。本任务按裁决
 #2 的**方案 B** 新增了逐帧埋点（只在 `--bench` 下生效，见 §6 的开销说明）：
 
 ```
@@ -92,18 +92,18 @@ MarkFrameEnd        -> RenderFrame 返回（D2D EndDraw 已返回）
 
 **同一份 BENCH-A、同一个 10 秒窗口，两种投递口径的对照：**
 
-| 投递口径 | 脚本实际投递间隔 | mdvn 画了几帧 | mdvn 自身单帧 P50 | P95 | P99 |
+| 投递口径 | 脚本实际投递间隔 | markair 画了几帧 | markair 自身单帧 P50 | P95 | P99 |
 |---|---|---|---|---|---|
 | `Start-Sleep 16`（T72 原口径） | 31.25 ms | 322 帧 / 321 条消息 | **2.30 ms** | 4.00 ms | 5.91 ms |
 | `-SpinWait 16`（修正口径） | 16.00 ms | 626 帧 / 625 条消息 | **2.31 ms** | 3.61 ms | 4.40 ms |
 
 两行的关键读法：
 
-- **mdvn 自身单帧耗时在两种口径下完全一致（2.30 / 2.31 ms）** —— 它压根不是瓶颈，
+- **markair 自身单帧耗时在两种口径下完全一致（2.30 / 2.31 ms）** —— 它压根不是瓶颈，
   投递快一倍它就画快一倍。
 - **帧数 = 消息数 + 1**，即**每条滚轮消息都画出了一帧，一帧没掉**。T72 报的"掉帧率
   99.3%"是把"没有输入事件所以不需要重绘"误判成了"掉帧"。
-- mdvn 自身 2.3 ms 的重绘，相当于 **430 FPS 的能力**，对 16.6 ms 预算有 7 倍余量。
+- markair 自身 2.3 ms 的重绘，相当于 **430 FPS 的能力**，对 16.6 ms 预算有 7 倍余量。
 
 **结论：异常 A 是测量工具的 bug，不是渲染性能问题。** PresentMon 抓到的 `Composed:
 Copy with GPU GDI` 事件是 DWM 把窗口位图合成上屏的时刻；在"只有收到输入才重绘"的
@@ -155,7 +155,7 @@ DIAG blocks=8192 drawn=8192 degenerate=8192 withlayout=7355 totalheight=0.0
 
 三个数字同时炸出来：
 
-- `totalheight=0.0` —— **整份布局的总高度是 0**，也就是说 mdvn 给 BENCH-D 画出来的是
+- `totalheight=0.0` —— **整份布局的总高度是 0**，也就是说 markair 给 BENCH-D 画出来的是
   一个**全空的窗口**。这已经不是性能问题，是正确性问题。
 - `degenerate=8192` —— **全部 8192 个块的几何都是 `top == bottom == 0`**，所以我加的
   视口裁剪一个都裁不掉（零几何与任何视口都"相交"），这解释了第 2 层为什么没效果。
@@ -292,11 +292,11 @@ BENCH-D 那个 512 ms 的 P99 尖刺（最大 528 ms）也是同一个成因：�
 
 ### 5.2 档位一：本机（有 iGPU，但走软件渲染）—— ✅ 已测
 
-两个口径分别列出。**两者测的不是一回事，必须分开读**：`mdvn 自身重绘`是
+两个口径分别列出。**两者测的不是一回事，必须分开读**：`markair 自身重绘`是
 `--bench` 逐帧埋点测的"PaintOnce 入口 → D2D EndDraw 返回"；`DWM 合成上屏`是
 PresentMon 的 `MsBetweenPresents`，其上界由输入事件到达速率决定。
 
-**口径 ①：mdvn 自身单帧重绘耗时**（10 s / 自旋 16 ms 投递 625 条滚轮消息）
+**口径 ①：markair 自身单帧重绘耗时**（10 s / 自旋 16 ms 投递 625 条滚轮消息）
 
 | 语料 | 帧数 | P50 | P95 | P99 | 最大 | 掉帧数（> 16.6 ms） |
 |---|---|---|---|---|---|---|
@@ -318,8 +318,8 @@ BENCH-D 的 P95/P99 仍偏高（31.9 / 44.5 ms），成因是滚动经过大代�
 
 **读数须知（三条，缺一条都会误读）：**
 
-1. **P50 恒等于 16.0 ms 不是巧合，是投递间隔的倒影**。脚本每 16 ms 投一条消息，mdvn
-   每条消息画一帧，所以合成节奏就是 16 ms。这个数字**不是 mdvn 的能力上限**——能力
+1. **P50 恒等于 16.0 ms 不是巧合，是投递间隔的倒影**。脚本每 16 ms 投一条消息，markair
+   每条消息画一帧，所以合成节奏就是 16 ms。这个数字**不是 markair 的能力上限**——能力
    上限看口径 ①（BENCH-A 1.82 ms ≈ 550 FPS 的余量）。
 2. **本机面板是 59 Hz，vsync 周期 16.95 ms**，而 01 §4 的掉帧判据用的是 16.6 ms。也就是
    说**这块屏幕在物理上就不可能让每一帧都 ≤ 16.6 ms**，上表的"掉帧数"里有相当一部分
@@ -357,16 +357,16 @@ mstsc /v:localhost
 powershell -c "Add-Type -Namespace T -Name M -MemberDefinition '[DllImport(\"user32.dll\")] public static extern int GetSystemMetrics(int i);'; [T.M]::GetSystemMetrics(0x1000)"
 
 # ③ 在 RDP 会话里跑与 §5.2 完全相同的两个口径
-#    口径①：mdvn 自身重绘（看进程 stderr 的 frames_* 一行）
-E:\workspaces\mdvn\build\src\Release\mdvn.exe --bench E:\workspaces\mdvn\bench\BENCH-C.md
-powershell -File E:\workspaces\mdvn\bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16 -SpinWait
+#    口径①：markair 自身重绘（看进程 stderr 的 frames_* 一行）
+E:\workspaces\markair\build\src\Release\markair.exe --bench E:\workspaces\markair\bench\BENCH-C.md
+powershell -File E:\workspaces\markair\bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16 -SpinWait
 #    口径②：DWM 合成（PresentMon，需管理员）
-E:\workspaces\mdvn\tools\PresentMon.exe --process_name mdvn.exe --timed 10 --terminate_after_timed --output_file bench\render_fps\rdp_BENCH-C.csv
+E:\workspaces\markair\tools\PresentMon.exe --process_name markair.exe --timed 10 --terminate_after_timed --output_file bench\render_fps\rdp_BENCH-C.csv
 ```
 
-**基于代码的预期（供对照，不冒充实测）**：mdvn 的绘制全部落在 CPU 上的 D2D 软件光栅器
+**基于代码的预期（供对照，不冒充实测）**：markair 的绘制全部落在 CPU 上的 D2D 软件光栅器
 里（`renderer.cpp:379/384`，无 DXGI 交换链），RDP 改变的只是**呈现环节**（位图经远程
-桌面镜像驱动编码传输），不改变 mdvn 自身的重绘路径。因此**口径 ① 的数字预期与本机
+桌面镜像驱动编码传输），不改变 markair 自身的重绘路径。因此**口径 ① 的数字预期与本机
 基本一致，口径 ② 预期会明显变差且随网络带宽波动**。这个预期是否成立，必须由上面的
 实跑来判定——本文档不替它下结论。
 
@@ -385,7 +385,7 @@ E:\workspaces\mdvn\tools\PresentMon.exe --process_name mdvn.exe --timed 10 --ter
    #5 给的 2 个工作日时间盒，且与 **M3 裁决 #6"不专门搭建虚拟机"** 的既有结论一致。
    **未执行**。
 
-**同样给出基于代码的预期**：与 §5.3 同理，mdvn 的渲染目标类型是编译期写死的软件光栅器，
+**同样给出基于代码的预期**：与 §5.3 同理，markair 的渲染目标类型是编译期写死的软件光栅器，
 **无 GPU 环境不会触发任何不同的代码分支**（这正是 §1 那条"软件渲染是主路径不是回退
 分支"的直接推论），口径 ① 预期与本机同量级（仅随客户机 CPU 单核性能缩放）。
 
@@ -412,7 +412,7 @@ E:\workspaces\mdvn\tools\PresentMon.exe --process_name mdvn.exe --timed 10 --ter
 **不需要，且未实现。**
 
 04 风险表里那条缓解方案的触发前提是"实测软件渲染达不到 60 FPS"。本轮实测的结论是：
-达得到。mdvn 自身单帧重绘 P50 在 1.8 ms（BENCH-A）到 7.4 ms（BENCH-C 高亮最坏情况）
+达得到。markair 自身单帧重绘 P50 在 1.8 ms（BENCH-A）到 7.4 ms（BENCH-C 高亮最坏情况）
 之间，对 16.6 ms 的单帧预算有 2.2× ~ 9.2× 的余量；此前看起来"达不到"的两组数据，一组
 （异常 A）是测量工具 bug，另一组（异常 B、以及 BENCH-C 的 14.7 ms）是产品代码里三处
 "为屏幕外内容付费"的真 bug，都已修复。
@@ -469,7 +469,7 @@ E:\workspaces\mdvn\tools\PresentMon.exe --process_name mdvn.exe --timed 10 --ter
    §6 那个"private_bytes 176.9 MB"的结论**已经作废**，修复后是 21.6 MB。
 2. **T83（门禁收紧）**：① 本机面板是 **59 Hz**（vsync 16.95 ms），01 §4 的 16.6 ms 掉帧
    判据比硬件本身还严，定阈值时必须按实际刷新率折算；② 帧率门禁应当用 `--bench` 的
-   **口径 ①**（mdvn 自身重绘）而不是 PresentMon 的口径 ②——后者的上界由输入事件速率
+   **口径 ①**（markair 自身重绘）而不是 PresentMon 的口径 ②——后者的上界由输入事件速率
    决定，在 CI 的无 GPU 虚拟机上必然假红，T72 §7 已经预见到这一点。
 3. **T85（发布前回归）**：§5.3 的 RDP 一档与 §5.4 的沙盒一档需要用户参与才能补齐，
    复跑命令已在对应小节给全。

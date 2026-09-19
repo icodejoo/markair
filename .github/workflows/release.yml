@@ -1,11 +1,11 @@
-# mdvn 单文件 Release 构建 workflow。
+# markair 单文件 Release 构建 workflow。
 #
 # 与 ci.yml 的分工:ci.yml 管"每次 push/PR 的性能门禁"(01§4 全部硬指标),
 # 本文件只管"产出一份可下载的单文件 exe 发布物",复用已有的
 # ci\verify_release.ps1 做验收(不加壳/不压缩、无 CRT 动态依赖、WINDOWS
 # 子系统、LICENSE/THIRD-PARTY-NOTICES 打包清单),不重复定义第二套判据。
 #
-# Single-file mdvn.exe release build workflow.
+# Single-file markair.exe release build workflow.
 #
 # Division of labor vs ci.yml: ci.yml owns the per-push/PR performance
 # budget gate (all hard metrics in 01§4); this file only produces a
@@ -51,9 +51,9 @@ permissions:
 
 jobs:
   build-release-exe:
-    # mdvn 是 Win32 桌面应用,必须在 Windows runner 上构建。
+    # markair 是 Win32 桌面应用,必须在 Windows runner 上构建。
     #
-    # mdvn is a Win32 desktop app; must build on a Windows runner.
+    # markair is a Win32 desktop app; must build on a Windows runner.
     runs-on: windows-latest
 
     steps:
@@ -128,9 +128,9 @@ jobs:
       # 改用 "Ninja Multi-Config"——不依赖任何 VS 生成器命名/版本探测,只需要
       # cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经配置好),产出的多配置
       # 目录结构(build\src\Release\...)与原 VS 生成器完全一致,不影响本
-      # workflow 后续按 build\src\Release\mdvn.exe 取产物的路径假设。本机
-      # 实测过(2026-09-19):同一份源码配置+构建 mdvn.exe 成功,产物落在
-      # build\src\Release\mdvn.exe,与切换前路径一致。
+      # workflow 后续按 build\src\Release\markair.exe 取产物的路径假设。本机
+      # 实测过(2026-09-19):同一份源码配置+构建 markair.exe 成功,产物落在
+      # build\src\Release\markair.exe,与切换前路径一致。
       #
       # Don't pin the generator version ("Visual Studio 17 2022"): the
       # windows-latest image's VS version bumps periodically (already VS 18
@@ -140,10 +140,10 @@ jobs:
       # naming/version detection, only needs cl.exe/link.exe on PATH
       # (already set up by msvc-dev-cmd). Its multi-config output layout
       # (build\src\Release\...) matches the old VS generator exactly, so
-      # this workflow's downstream build\src\Release\mdvn.exe path
+      # this workflow's downstream build\src\Release\markair.exe path
       # assumption is unaffected. Verified locally (2026-09-19): configuring
-      # and building mdvn.exe from the same source succeeds, landing at the
-      # same build\src\Release\mdvn.exe path as before the switch.
+      # and building markair.exe from the same source succeeds, landing at the
+      # same build\src\Release\markair.exe path as before the switch.
       # 防御:restore-keys 前缀回退可能恢复出一份用旧生成器("Visual Studio
       # 17 2022")配置过的 build 目录(比如切到 Ninja Multi-Config 之前的
       # 缓存条目)。若不做这层判断就直接 cmake -B 复用该目录,CMake 会因
@@ -171,13 +171,13 @@ jobs:
 
       - name: 构建 / Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release --target mdvn
+        run: cmake --build build --config Release --target markair
 
       - name: 跑单元测试 / Run unit tests
         shell: pwsh
         run: |
-          cmake --build build --config Release --target mdvn_tests
-          .\build\tests\Release\mdvn_tests.exe
+          cmake --build build --config Release --target markair_tests
+          .\build\tests\Release\markair_tests.exe
 
       # 复用既有验收脚本:不加壳/不压缩声明性检查、无 CRT 动态依赖、
       # WINDOWS 子系统、体积记录、LICENSE/THIRD-PARTY-NOTICES 打包清单、
@@ -208,15 +208,15 @@ jobs:
       - name: 上传单文件 exe / Upload single-file exe
         uses: actions/upload-artifact@v4
         with:
-          name: mdvn-exe
-          path: build\src\Release\mdvn.exe
+          name: markair-exe
+          path: build\src\Release\markair.exe
           if-no-files-found: error
 
       - name: 上传发布包(exe+LICENSE+THIRD-PARTY-NOTICES) / Upload release zip
         uses: actions/upload-artifact@v4
         with:
-          name: mdvn-release-zip
-          path: bench\artifacts\mdvn-release.zip
+          name: markair-release-zip
+          path: bench\artifacts\markair-release.zip
           if-no-files-found: error
 
       # 发布/更新"latest"滚动 Release:tag_name 固定为 latest,softprops/
@@ -239,12 +239,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: mdvn (latest build)
+          name: markair (latest build)
           body: |
             自动滚动构建,对应源码 commit: ${{ github.sha }}
 
             Automatically updated rolling build, built from source commit ${{ github.sha }}.
           make_latest: true
           files: |
-            build\src\Release\mdvn.exe
-            bench\artifacts\mdvn-release.zip
+            build\src\Release\markair.exe
+            bench\artifacts\markair-release.zip

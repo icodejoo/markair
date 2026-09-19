@@ -1,4 +1,4 @@
-// mdvn 的窗口外壳(T12):窗口类注册、主窗口创建、窗口过程、DPI 感知与
+// markair 的窗口外壳(T12):窗口类注册、主窗口创建、窗口过程、DPI 感知与
 // 滚动状态管理。本模块只负责"消息 -> 状态变更 -> 触发重绘",不做解析/布局/
 // 渲染本身的工作,那些分别属于 doc/layout/render 模块。
 //
@@ -35,7 +35,7 @@
 #include "window_state.h"
 #include "../util/recent_files.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 自绘滚动条(方案A)当前正在拖动哪一个实例;`None` 表示都没有。
@@ -376,12 +376,12 @@ void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item
 /**
  * Request a debounced (500ms) write of the recent-files history to disk.
  * Callers only mutate the in-memory RecentFiles list synchronously
- * (mdvn::AddRecentFile is a cheap array shift, no I/O); the actual disk
+ * (markair::AddRecentFile is a cheap array shift, no I/O); the actual disk
  * write happens on a WM_TIMER tick owned by the main window, so clicking
  * several in-document links back-to-back does not fsync once per click.
  *
  * 请求一次去抖(500ms)的历史记录写盘。调用方只需同步更新内存里的
- * RecentFiles 列表(mdvn::AddRecentFile 只是数组移位,不涉及 I/O);真正的
+ * RecentFiles 列表(markair::AddRecentFile 只是数组移位,不涉及 I/O);真正的
  * 磁盘写入发生在主窗口拥有的 WM_TIMER 到点时,连续点击好几个文档内链接
  * 不会每次点击都落一次盘。
  *
@@ -393,7 +393,7 @@ void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item
  *
  *   运行期状态,recentFiles 为空时静默返回。
  *
- * @example mdvn::RequestRecentFilesSave(hwnd, &windowState);
+ * @example markair::RequestRecentFilesSave(hwnd, &windowState);
  */
 void RequestRecentFilesSave(HWND hwnd, WindowState* state);
 
@@ -406,14 +406,14 @@ void RequestRecentFilesSave(HWND hwnd, WindowState* state);
  * @return 成功开启 Per-Monitor V2 返回 true;系统不支持或调用失败返回 false。
  * @example
  *   int WINAPI wWinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
- *       mdvn::EnablePerMonitorV2DpiAwareness();
+ *       markair::EnablePerMonitorV2DpiAwareness();
  *       // ... 之后再创建窗口
  *   }
  */
 bool EnablePerMonitorV2DpiAwareness();
 
 /**
- * 注册 mdvn 主窗口类(幂等:重复调用只在首次真正注册,`isDarkTheme` 只在
+ * 注册 markair 主窗口类(幂等:重复调用只在首次真正注册,`isDarkTheme` 只在
  * 首次真正注册时生效)。
  * @param instance 当前进程实例句柄。
  * @param isDarkTheme 注册时的生效主题是否为深色(调用方用
@@ -421,7 +421,7 @@ bool EnablePerMonitorV2DpiAwareness();
  *        与 `kDarkPalette.background` 同色的自建刷子(T48),避免深色主题下
  *        首帧白闪,为 false 时沿用系统 `COLOR_WINDOW`。
  * @return 注册成功(或此前已注册成功)返回 true。
- * @example mdvn::RegisterMainWindowClass(hInstance, true);  // isDarkTheme=true
+ * @example markair::RegisterMainWindowClass(hInstance, true);  // isDarkTheme=true
  */
 bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme);
 
@@ -433,8 +433,8 @@ bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme);
  *
  * 调用方(`wWinMain`)应在消息循环结束、进程退出前调用一次。
  * @example
- *   int exitCode = mdvn::RunMessageLoop();
- *   mdvn::ReleaseMainWindowClassResources();
+ *   int exitCode = markair::RunMessageLoop();
+ *   markair::ReleaseMainWindowClassResources();
  *   return exitCode;
  */
 void ReleaseMainWindowClassResources();
@@ -462,13 +462,13 @@ void ReleaseMainWindowClassResources();
  *              (若非空)。
  * @return 创建成功返回窗口句柄,失败返回 nullptr。
  * @example
- *   mdvn::WindowState state{};
+ *   markair::WindowState state{};
  *   state.fonts = &fonts; state.layout = &layout;  // ...其余字段同上...
  *   state.winX = settings.winX; state.winY = settings.winY;
  *   state.winW = settings.winW; state.winH = settings.winH;
  *   state.winMaximized = settings.winMaximized;
  *   state.onWindowGeometryChanged = &OnWindowGeometryChangedHook;
- *   HWND hwnd = mdvn::CreateMainWindow(hInstance, L"mdvn", &state);
+ *   HWND hwnd = markair::CreateMainWindow(hInstance, L"markair", &state);
  */
 HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* state);
 
@@ -477,7 +477,7 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
  * 缩放换算成逻辑单位,与布局/渲染使用的 DIP 坐标系保持一致。
  * @param hwnd 目标窗口。
  * @return 客户区宽度(DIP);取不到 DPI 时按 96 DPI 计算。
- * @example layout.Relayout(doc, mdvn::ClientWidthDip(hwnd), fonts.Scale(), &cache);
+ * @example layout.Relayout(doc, markair::ClientWidthDip(hwnd), fonts.Scale(), &cache);
  */
 float ClientWidthDip(HWND hwnd);
 
@@ -485,15 +485,15 @@ float ClientWidthDip(HWND hwnd);
  * 取窗口客户区高度(DIP),口径同 `ClientWidthDip`。
  * @param hwnd 目标窗口。
  * @return 客户区高度(DIP)。
- * @example float vh = mdvn::ClientHeightDip(hwnd);
+ * @example float vh = markair::ClientHeightDip(hwnd);
  */
 float ClientHeightDip(HWND hwnd);
 
 /**
  * 跑标准的 `GetMessage` 消息循环,直到窗口关闭(收到 `WM_QUIT`)。
  * @return `WM_QUIT` 携带的退出码,可直接作为 `wWinMain` 的返回值。
- * @example return mdvn::RunMessageLoop();
+ * @example return markair::RunMessageLoop();
  */
 int RunMessageLoop();
 
-}  // namespace mdvn
+}  // namespace markair

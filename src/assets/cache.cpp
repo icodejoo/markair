@@ -2,7 +2,7 @@
 
 #include <d2d1.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -249,4 +249,4 @@ void ImageCache::ReleaseAllBitmaps() {
     totalBytes_ = 0;
 }
 
-}  // namespace mdvn
+}  // namespace markair

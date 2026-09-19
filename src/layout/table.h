@@ -1,4 +1,4 @@
-// mdvn 的表格列宽算法(T25)。
+// markair 的表格列宽算法(T25)。
 //
 // 取舍说明:理想宽度本可以用 IDWriteTextLayout::DetermineMinWidth 之类的真实
 // 排版度量,但那样会让本模块依赖 DirectWrite/字体子系统,违背"纯数字函数,
@@ -11,7 +11,7 @@
 #include "../util/span.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 单列宽度上限相对视口宽度的比例(04 已定方向:内容测宽 + 上限约束)。
 constexpr float kMaxColumnWidthRatio = 0.6f;
@@ -90,9 +90,9 @@ constexpr float kTableGlyphWidthSafetyFactor = 1.2f;
  * @return colCount 个元素的列宽数组;Arena 分配失败时返回空 Span(data=nullptr,len=0)。
  * @example
  *   u32 chars[] = {3, 10,   2, 20}; // 2 列 2 行:第 0 列最大视觉宽度 3,第 1 列 20
- *   mdvn::Span<float> widths = mdvn::ComputeTableColumnWidths(chars, 2, 2, 600.0f, &arena);
+ *   markair::Span<float> widths = markair::ComputeTableColumnWidths(chars, 2, 2, 600.0f, &arena);
  */
 Span<float> ComputeTableColumnWidths(const u32* cellCharCounts, u32 colCount, u32 rowCount,
                                       float viewportWidth, Arena* arena, float fontScale = 1.0f);
 
-}  // namespace mdvn
+}  // namespace markair

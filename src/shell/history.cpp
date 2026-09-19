@@ -1,6 +1,6 @@
 #include "history.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -65,4 +65,4 @@ void History::PushBackRaw(const wchar_t* path, float scrollY) {
     PushRaw(&backCount_, &backStart_, backEntries_, path, scrollY);
 }
 
-}  // namespace mdvn
+}  // namespace markair

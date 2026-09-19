@@ -1,4 +1,4 @@
-// mdvn 主题三态状态机(T47):系统主题探测 + System/Light/Dark 三态循环。
+// markair 主题三态状态机(T47):系统主题探测 + System/Light/Dark 三态循环。
 // 纯状态机模块——除了最底层"真读一次注册表"的薄函数,其余全部是不依赖
 // Win32 的纯函数,可脱离窗口/D2D 单测(参见 tests/test_theme_state.cpp)。
 #pragma once
@@ -6,7 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-namespace mdvn {
+namespace markair {
 
 /**
  * User theme preference: Light or Dark.
@@ -78,4 +78,4 @@ bool AppsUseLightThemeValueToIsDark(DWORD value);
  */
 bool DetectSystemIsDark();
 
-}  // namespace mdvn
+}  // namespace markair

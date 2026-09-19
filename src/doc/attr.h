@@ -1,4 +1,4 @@
-// mdvn 的 MD_ATTRIBUTE 展开工具:把 md4c 分段的属性文本(href/title/label 等)
+// markair 的 MD_ATTRIBUTE 展开工具:把 md4c 分段的属性文本(href/title/label 等)
 // 拼接为 Arena 上连续的 UTF-8 缓冲区。只被 parser.cpp/attr.cpp 使用,
 // model.h 不感知 md4c 类型,依赖 md4c.h 的逻辑只留在这一层。
 #pragma once
@@ -8,7 +8,7 @@
 #include "model.h"
 #include "../../third_party/md4c/md4c.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 把 MD_ATTRIBUTE 的分段(NORMAL 原样拷贝 / ENTITY 解码 / NULLCHAR 替换为
@@ -20,7 +20,7 @@ namespace mdvn {
  * @param arena 输出缓冲区所在的 Arena。
  * @return 展开后的 UTF-8 文本切片;attr 为空时返回长度为 0 的切片。
  * @example
- *   StrSlice href = mdvn::ExpandAttribute(detail->href, &arena);
+ *   StrSlice href = markair::ExpandAttribute(detail->href, &arena);
  */
 StrSlice ExpandAttribute(const MD_ATTRIBUTE& attr, Arena* arena);
 
@@ -33,8 +33,8 @@ StrSlice ExpandAttribute(const MD_ATTRIBUTE& attr, Arena* arena);
  * @param href 已展开的链接地址文本(通常来自 ExpandAttribute 的返回值)。
  * @return 判定出的链接目标种类。
  * @example
- *   mdvn::LinkTargetKind kind = mdvn::ClassifyLinkTarget(href);
+ *   markair::LinkTargetKind kind = markair::ClassifyLinkTarget(href);
  */
 LinkTargetKind ClassifyLinkTarget(StrSlice href);
 
-} // namespace mdvn
+} // namespace markair

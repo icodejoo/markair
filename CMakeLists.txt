@@ -1,11 +1,11 @@
-# mdvn 根 CMake 工程：仅支持 MSVC，不引入任何包管理器（vcpkg/conan）。
+# markair 根 CMake 工程：仅支持 MSVC，不引入任何包管理器（vcpkg/conan）。
 cmake_minimum_required(VERSION 3.20)
 
-project(mdvn CXX C)
+project(markair CXX C)
 
 # 本项目硬性要求 MSVC 工具链（COM/ABI 假设、编译选项均针对 MSVC），非 MSVC 直接报错。
 if(NOT MSVC)
-    message(FATAL_ERROR "mdvn 仅支持 MSVC 工具链构建，请使用 Visual Studio 2022 生成器。")
+    message(FATAL_ERROR "markair 仅支持 MSVC 工具链构建，请使用 Visual Studio 2022 生成器。")
 endif()
 
 # 全局 C++ 标准：C++17，且关闭编译器扩展以保证行为可预期。
@@ -34,7 +34,7 @@ endforeach()
 # 不对了，实测表现为 wcscmp 断言失败（值与"运行时按 UTF-8 显式解码 ini
 # 文件字节"得到的结果对不上）。/utf-8 强制"源码字符集"与"执行字符集"
 # 都按 UTF-8 解释，与源文件实际编码一致，消除这个机器相关的差异。
-set(MDVN_COMMON_COMPILE_OPTIONS
+set(MARKAIR_COMMON_COMPILE_OPTIONS
     /W4       # 主代码要求零警告
     /EHs-c-   # 禁用 C++ 异常
     /GR-      # 禁用 RTTI
@@ -50,7 +50,7 @@ set(MDVN_COMMON_COMPILE_OPTIONS
 # (per user decision). /O1 is MSVC's current "minimize size" preset
 # (the documented replacement for standalone /Os, mutually exclusive with
 # /O2). /GL /Gy /Gw stay unchanged — they already are size-related.
-set(MDVN_RELEASE_COMPILE_OPTIONS
+set(MARKAIR_RELEASE_COMPILE_OPTIONS
     /O1 /GL /Gy /Gw
 )
 
@@ -61,7 +61,7 @@ set(MDVN_RELEASE_COMPILE_OPTIONS
 # 记录节，省几百字节到几 KB，零风险。/FILEALIGN:512:PE 文件对齐从默认
 # 512(已是最小值)——显式声明留痕，实际已是默认值，不改变输出，仅避免
 # 未来 CMake/工具链默认值漂移。
-set(MDVN_RELEASE_LINK_OPTIONS
+set(MARKAIR_RELEASE_LINK_OPTIONS
     /OPT:REF /OPT:ICF=3 /LTCG /EMITTOOLVERSIONINFO:NO /FILEALIGN:512
 )
 
@@ -74,7 +74,7 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # （在 src/CMakeLists.txt 里链接）。
 #
 # 为什么没有 /DELAYLOAD:windowscodecs.dll（T30 验收项的等价实现）：
-# mdvn 访问 WIC 的唯一途径是 `CoCreateInstance(CLSID_WICImagingFactory, ...)`，
+# markair 访问 WIC 的唯一途径是 `CoCreateInstance(CLSID_WICImagingFactory, ...)`，
 # 完全不引用 windowscodecs.dll 的任何导出符号，因此 exe 的导入表里根本没有这个
 # DLL，加上 /DELAYLOAD 只会得到 LNK4199「未找到来自 windowscodecs.dll 的导入」。
 # COM 运行期激活本身就比延迟加载更晚、更惰性：不解码图片就不会 CoCreateInstance，
@@ -84,7 +84,7 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # 临时文件图片调用系统看图软件,见 src/shell/navigate.cpp)只在用户真正点击
 # 链接/图片时才会被调用,但 shell32 是静态导入,进程启动时无条件加载——
 # 实测它会连带拉起 windows.storage.dll(~7.8MB)、comctl32.dll(~2.7MB)等一整条
-# Shell 命名空间基础设施,而 mdvn 自己从不使用其中任何 Shell UI/命名空间功能,
+# Shell 命名空间基础设施,而 markair 自己从不使用其中任何 Shell UI/命名空间功能,
 # 纯粹是 ShellExecuteW 这一个入口点带来的"连坐"加载。延迟加载后,不点击任何
 # 外链/图片的会话里,模块列表不应出现这几个 DLL。
 # dwmapi.dll(T48 标题栏深浅色):`DwmSetWindowAttribute` 只是切一个窗口属性,
@@ -97,7 +97,7 @@ set(MDVN_RELEASE_LINK_OPTIONS
 # 变深色):`SetWindowTheme` 让 WS_VSCROLL 滚动条切换到系统的深色控件主题,
 # 与 dwmapi 同理在窗口创建时就调用,/DELAYLOAD 同样只做到不提前于导入表
 # 解析阶段加载。
-set(MDVN_DELAYLOAD_LINK_OPTIONS
+set(MARKAIR_DELAYLOAD_LINK_OPTIONS
     /DELAYLOAD:winhttp.dll
     /DELAYLOAD:shell32.dll
     /DELAYLOAD:dwmapi.dll
@@ -117,10 +117,10 @@ target_compile_options(md4c PRIVATE /W3 /wd4204 /wd4706)
 # 不改动「默认软件渲染」架构裁决）。上游代码在 /W4 下有警告，单独关闭，不修改
 # third_party 源码去掩盖；STATIC 构建需要 *_BUILD_STATIC 宏关掉 dllexport。
 #
-# Release 也要套 MDVN_RELEASE_COMPILE_OPTIONS（2026-09-19 CI 实测追加）：
+# Release 也要套 MARKAIR_RELEASE_COMPILE_OPTIONS（2026-09-19 CI 实测追加）：
 # 这两个 target 最初漏加了 /O1 /GL /Gy /Gw，导致 Release 构建时 plutovg 里
 # 未被实际调用的代码(stb_image/stb_image_write 的 PNG/JPEG 编解码、
-# stb_truetype 字形栅格化——mdvn 只用 lunasvg 画 shape/path 类 SVG，不需要
+# stb_truetype 字形栅格化——markair 只用 lunasvg 画 shape/path 类 SVG，不需要
 # `<image>` 元素内嵌位图与 `<text>` 字体渲染这两块)没有 /Gy 逐函数拆分,
 # 最终链接时 /OPT:REF 也就没法按函数粒度剔除,整份未用代码原样留在 exe 里，
 # 实测把体积从 ~312KB 顶到 ~817KB，超过 M2 体积硬性门禁(基线+80KB)。补上
@@ -142,13 +142,13 @@ add_library(plutovg STATIC
 target_include_directories(plutovg PUBLIC third_party/lunasvg/plutovg/include)
 target_compile_definitions(plutovg PUBLIC PLUTOVG_BUILD_STATIC)
 # stb_image(plutovg-surface.c 内嵌)按格式关闭未用到的解码器,纯宏开关,不动
-# vendor 源码本体:mdvn 的 SVG `<image>` 场景只保留 PNG/JPEG 两种最常见的
+# vendor 源码本体:markair 的 SVG `<image>` 场景只保留 PNG/JPEG 两种最常见的
 # 内嵌位图格式,BMP/PSD/TGA/GIF/HDR/PIC/PNM 全部关掉(2026-09-19 体积调研)。
 target_compile_definitions(plutovg PRIVATE
     STBI_NO_BMP STBI_NO_PSD STBI_NO_TGA STBI_NO_GIF
     STBI_NO_HDR STBI_NO_PIC STBI_NO_PNM STBI_NO_LINEAR STBI_NO_FAILURE_STRINGS)
 target_compile_options(plutovg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100
-    $<$<CONFIG:Release>:${MDVN_RELEASE_COMPILE_OPTIONS}>)
+    $<$<CONFIG:Release>:${MARKAIR_RELEASE_COMPILE_OPTIONS}>)
 
 add_library(lunasvg STATIC
     third_party/lunasvg/source/graphics.cpp
@@ -167,7 +167,7 @@ target_include_directories(lunasvg PUBLIC third_party/lunasvg/include
 target_compile_definitions(lunasvg PUBLIC LUNASVG_BUILD_STATIC)
 target_link_libraries(lunasvg PUBLIC plutovg)
 target_compile_options(lunasvg PRIVATE /W3 /wd4996 /wd4244 /wd4267 /wd4100
-    $<$<CONFIG:Release>:${MDVN_RELEASE_COMPILE_OPTIONS}>)
+    $<$<CONFIG:Release>:${MARKAIR_RELEASE_COMPILE_OPTIONS}>)
 
 add_subdirectory(src)
 add_subdirectory(tests)

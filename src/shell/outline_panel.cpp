@@ -1,6 +1,6 @@
 #include "outline_panel.h"
 
-namespace mdvn {
+namespace markair {
 
 u32 TruncateOutlineTitle(const wchar_t* text, u32 len, float maxWidthDip,
                           const OutlineTextMeasurer& measurer,
@@ -77,4 +77,4 @@ u32 FindOutlineItemAtY(u32 itemCount, float panelLocalY, float scrollY) {
     return index < itemCount ? index : kInvalidIndex;
 }
 
-}  // namespace mdvn
+}  // namespace markair

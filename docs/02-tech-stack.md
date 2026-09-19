@@ -1,4 +1,4 @@
-# mdvn 技术选型
+# markair 技术选型
 
 > 本文所有第三方项目均经过实际检索核实,来源链接列在文末。凡未能核实到的数据(如具体发布日期)一律注明"未核实",不编造。
 
@@ -45,7 +45,7 @@
 **渲染目标类型:恒定软件渲染(架构决策,M3 裁决 #3 定稿)**
 
 `src/render/renderer.cpp:379` **无条件**把渲染目标设为 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`,
-走 `CreateHwndRenderTarget`,**不做"先试硬件、失败回退"的探测**,也没有 mdvn 自建的
+走 `CreateHwndRenderTarget`,**不做"先试硬件、失败回退"的探测**,也没有 markair 自建的
 DXGI 交换链。
 
 依据是 M0 的实测对照(`memory.md:103~108`):
@@ -56,10 +56,10 @@ DXGI 交换链。
 | 软件渲染 | **9.0 ~ 9.4 MB** | 裸窗口基线(含禁 IME) |
 
 01 §4 的常驻内存硬指标是 15 MB。硬件路径单是驱动模块就把基线推到 38 MB,**直接击穿
-该指标且无从优化**(那是驱动的私有页,不在 mdvn 的掌控内)。因此这里选择内存,放弃
-GPU 加速——这不是"降级路径",而是 **mdvn 的唯一主路径**。
+该指标且无从优化**(那是驱动的私有页,不在 markair 的掌控内)。因此这里选择内存,放弃
+GPU 加速——这不是"降级路径",而是 **markair 的唯一主路径**。
 
-帧率代价已在 M3 T76 实测验证(`bench/M3-RENDER.md`):软件渲染下 mdvn 自身单帧重绘
+帧率代价已在 M3 T76 实测验证(`bench/M3-RENDER.md`):软件渲染下 markair 自身单帧重绘
 BENCH-A P50 **1.8 ms**、BENCH-C(语法高亮最坏情况)P50 **7.4 ms**,均远在 16.6 ms 的
 60 FPS 预算之内,**帧率不构成放弃软件渲染的理由**。
 
@@ -117,9 +117,9 @@ BENCH-A P50 **1.8 ms**、BENCH-C(语法高亮最坏情况)P50 **7.4 ms**,均远�
 |---|---|---|
 | 图片解码 | **WIC**(`IWICImagingFactory`),D2D 原生互操作,解码后直接转 `ID2D1Bitmap` | stb_image(需自己处理色彩管理/EXIF,且系统已自带)、libpng/libjpeg(额外依赖) |
 | 文件监听 | **ReadDirectoryChangesW** + 去抖 | 轮询 `GetFileTime`(功耗差)、FileSystemWatcher(非原生) |
-| 配置存储 | `%LOCALAPPDATA%\mdvn\state.ini`,自写 20 行 KV 解析 | 注册表(污染)、JSON 库(依赖)、TOML 库(依赖) |
+| 配置存储 | `%LOCALAPPDATA%\markair\state.ini`,自写 20 行 KV 解析 | 注册表(污染)、JSON 库(依赖)、TOML 库(依赖) |
 | 命令行/路径 | Win32 `PathCchCanonicalize` 等 shlwapi/pathcch | 自写路径规范化(易错) |
-| 单元测试 | **自写极简断言宏 + 一个 `mdvn_tests.exe`**(已裁决 2026-09-16) | 引入 gtest/catch2 需要 vcpkg 或 submodule,会破坏本表最后一行"构建零外部依赖"的结论。见 01-requirements.md §8 #11 |
+| 单元测试 | **自写极简断言宏 + 一个 `markair_tests.exe`**(已裁决 2026-09-16) | 引入 gtest/catch2 需要 vcpkg 或 submodule,会破坏本表最后一行"构建零外部依赖"的结论。见 01-requirements.md §8 #11 |
 | 构建 | CMake ≥ 3.20 + MSVC,`/MT` 静态 CRT,`/O2 /GL /Gy /Gw`,链接 `/OPT:REF /OPT:ICF /LTCG` | vcpkg/conan(项目零外部依赖,不需要) |
 
 ---
@@ -131,7 +131,7 @@ BENCH-A P50 **1.8 ms**、BENCH-C(语法高亮最坏情况)P50 **7.4 ms**,均远�
 | 15MB 内存目标是否现实(D2D/DWrite 本身的常驻开销未知) | 写一个最小 spike:仅创建窗口 + D2D 上下文 + DirectWrite 画一行文字,用 VMMap 量 Private Working Set 基线 | **M0 第一件事** |
 | DirectWrite 是否会在初始化时隐式枚举全部系统字体(即 fontdb 同款问题) | spike 中对比:只 `CreateTextFormat` 指定单个字体族 vs 调用 `GetSystemFontCollection`,分别量内存与耗时 | M0 |
 | md4c 编译产物体积与解析速度 | 把 md4c 编译进 spike,量 exe 体积增量,并对 10MB 文档计时 | M0 |
-| ~~软件渲染回退路径的帧率~~ **已验证(T76)**:软件渲染是主路径而非回退路径,本机实测 mdvn 自身单帧重绘 P50 1.8~7.4 ms,远在 60 FPS 预算内;RDP / 无 GPU 两档的实际可构造性与结论见 `bench/M3-RENDER.md` §5 | PresentMon(DWM 合成口径)+ `--bench` 逐帧埋点(mdvn 自身重绘口径),两个口径必须分开看 | M3 **已完成** |
+| ~~软件渲染回退路径的帧率~~ **已验证(T76)**:软件渲染是主路径而非回退路径,本机实测 markair 自身单帧重绘 P50 1.8~7.4 ms,远在 60 FPS 预算内;RDP / 无 GPU 两档的实际可构造性与结论见 `bench/M3-RENDER.md` §5 | PresentMon(DWM 合成口径)+ `--bench` 逐帧埋点(markair 自身重绘口径),两个口径必须分开看 | M3 **已完成** |
 
 ---
 

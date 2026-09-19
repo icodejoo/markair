@@ -1,4 +1,4 @@
-// mdvn 大纲数据提取(T62):从已解析好的 Document 里抽出标题块下标 + 层级,
+// markair 大纲数据提取(T62):从已解析好的 Document 里抽出标题块下标 + 层级,
 // 供 T63 的侧栏 UI 使用。
 //
 // 与虚拟化不冲突(架构 §5 明确的点,写死在这里避免后续维护者误判):
@@ -18,7 +18,7 @@
 #include "../util/types.h"
 #include "model.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 一条大纲条目:指向一个标题块,8 字节/条(u32 + u8,末尾 3 字节对齐填充)。
@@ -38,9 +38,9 @@ struct OutlineItem {
  * @param out 输出的大纲数组,非空;函数只追加,不清空(调用方负责重新绑定 Arena)。
  * @return 本次提取到的标题条数。
  * @example
- *   mdvn::Vec<mdvn::OutlineItem> items(&arena);
- *   u32 n = mdvn::ExtractOutline(doc, &items);
+ *   markair::Vec<markair::OutlineItem> items(&arena);
+ *   u32 n = markair::ExtractOutline(doc, &items);
  */
 u32 ExtractOutline(const Document& doc, Vec<OutlineItem>* out);
 
-} // namespace mdvn
+} // namespace markair

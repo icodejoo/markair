@@ -8,7 +8,7 @@
 #include <cstring>
 #include <cwchar>
 
-namespace mdvn::bench {
+namespace markair::bench {
 
 namespace {
 
@@ -238,4 +238,4 @@ void EmitReport() {
             GetModuleHandleW(L"uxtheme.dll") != nullptr ? 1 : 0);
 }
 
-}  // namespace mdvn::bench
+}  // namespace markair::bench

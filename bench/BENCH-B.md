@@ -1,4 +1,4 @@
-# BENCH-B：mdvn 图片密集基准语料（T42）
+# BENCH-B：markair 图片密集基准语料（T42）
 
 > 本文件由脚本 + 手工共同生成，用于 T42"图片密集文档峰值内存"验收线的测量。
 > 覆盖：50 张本地梯度尺寸 PNG、`data:` URI 内嵌图片（base64 与非 base64两种）、
@@ -141,13 +141,13 @@ scheme），用于验证"默认不加载网络图片，只在用户点击后才�
 
 ![本地 SVG](images/sample.svg)
 
-## 第 5 节：多帧 GIF（验证 mdvn 现有 WIC 解码路径对多帧的处理）
+## 第 5 节：多帧 GIF（验证 markair 现有 WIC 解码路径对多帧的处理）
 
 手工拼 GIF89a 字节结构生成的 2 帧动图（8x8 像素，红底绿方块 -> 蓝底白方块，
 颜色/内容确有变化），已用 .NET GDI+ 的 `Image.GetFrameCount` 独立验证为合法
 的 2 帧 GIF。`src/assets/image.cpp::DecodeFirstFrame` 的实现只调用
 `decoder->GetFrame(0, ...)` 后立即释放解码器（裁决，见代码注释），也就是说
-mdvn 现有解码路径**只认第一帧、不枚举/不播放动画**——这是既有设计，不是本次
+markair 现有解码路径**只认第一帧、不枚举/不播放动画**——这是既有设计，不是本次
 新发现的缺陷。
 
 ![多帧 GIF](images/animated.gif)

@@ -1,4 +1,4 @@
-// mdvn 历史前进后退(T65):`Alt+←`/`Alt+→` 在"窗口内换文档"之间跳转。
+// markair 历史前进后退(T65):`Alt+←`/`Alt+→` 在"窗口内换文档"之间跳转。
 //
 // 本文件不 include <windows.h>,不碰任何 Win32 API——只处理"路径 + 滚动
 // 位置"这一对定长记录的入栈/出栈,口径与 T56 的 window_state.h 一致,
@@ -27,7 +27,7 @@
 
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 // 历史栈容量上限(裁决 #7):后退栈、前进栈各自最多保留这么多条,满了
 // 丢最旧的一条(栈底),不是拒绝新条目。
@@ -53,9 +53,9 @@ struct HistoryEntry {
  * 动态分配(两个栈的存储都是类内定长数组)。
  *
  * @example
- *   mdvn::History history;
+ *   markair::History history;
  *   history.PushNavigation(L"C:\\a.md", 0.0f);   // 从 a.md 导航离开前记一笔
- *   mdvn::HistoryEntry back;
+ *   markair::HistoryEntry back;
  *   if (history.PopBack(&back)) { / * 打开 back.path,恢复 back.scrollY * / }
  */
 class History {
@@ -81,7 +81,7 @@ public:
      *
      * @param out 成功时写入弹出的记录;非空。
      * @return 成功弹出返回 true;栈为空返回 false。
-     * @example mdvn::HistoryEntry e; if (history.PopBack(&e)) { ... }
+     * @example markair::HistoryEntry e; if (history.PopBack(&e)) { ... }
      */
     bool PopBack(HistoryEntry* out);
 
@@ -114,4 +114,4 @@ private:
     u32 forwardStart_;                               // 前进栈栈底在数组里的物理下标
 };
 
-}  // namespace mdvn
+}  // namespace markair

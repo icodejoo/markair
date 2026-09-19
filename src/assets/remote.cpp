@@ -2,7 +2,7 @@
 
 #include <winhttp.h>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -18,8 +18,8 @@ struct RemoteRequest {
     i32* inFlight;       // 指向 RemoteImageLoader::inFlight_,完成时递减
 };
 
-// mdvn 的 User-Agent:固定短串,不暴露任何用户/机器信息。
-constexpr wchar_t kUserAgent[] = L"mdvn";
+// markair 的 User-Agent:固定短串,不暴露任何用户/机器信息。
+constexpr wchar_t kUserAgent[] = L"markair";
 
 // ASCII 小写折叠。
 char LowerAscii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
@@ -254,4 +254,4 @@ bool RemoteImageLoader::RequestOnUserClick(StrSlice url) {
     return StartRequest(url);
 }
 
-}  // namespace mdvn
+}  // namespace markair

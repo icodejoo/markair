@@ -1,4 +1,4 @@
-// mdvn SVG 图片解码子系统:lunasvg 离线栅格化封装。
+// markair SVG 图片解码子系统:lunasvg 离线栅格化封装。
 //
 // 设计要点:
 //   - 与 ImageDecoder(WIC 路径)平行、独立的解码入口,复用同一套 DecodedImage/
@@ -15,7 +15,7 @@
 #include "image.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 从内存字节解码一张 SVG 图片,栅格化到位图。
@@ -43,8 +43,8 @@ namespace mdvn {
  *   The decode result; on failure bitmap is nullptr and status is non-Ok,
  *   this function never crashes or throws past its own boundary.
  *
- * @example mdvn::DecodedImage img = mdvn::DecodeSvgFromMemory(buf, n, target);
+ * @example markair::DecodedImage img = markair::DecodeSvgFromMemory(buf, n, target);
  */
 DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target);
 
-}  // namespace mdvn
+}  // namespace markair

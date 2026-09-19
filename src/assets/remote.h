@@ -1,4 +1,4 @@
-// mdvn 网络图片加载(T34,2026-09-19 裁决反转为默认开启)。
+// markair 网络图片加载(T34,2026-09-19 裁决反转为默认开启)。
 //
 // 开关语义(§7 "不做任何主动网络请求"原则的可配置逃生舱,而非硬性默认):
 //   - `load_remote_images` 为 0 时(用户手动改 state.ini 关闭),本模块
@@ -17,7 +17,7 @@
 #include "../util/str.h"
 #include "../util/types.h"
 
-namespace mdvn {
+namespace markair {
 
 /** 网络图片下载完成时投递给主窗口的消息。wParam 恒为 0,lParam 是 RemoteImageResult*。 */
 constexpr UINT kWmRemoteImageDone = WM_APP + 11;
@@ -39,7 +39,7 @@ struct RemoteImageResult {
 /**
  * 释放一条由 kWmRemoteImageDone 消息送达的结果(连同其字节缓冲)。
  * @param result 消息 lParam 转换来的指针,可为 nullptr(此时什么都不做)。
- * @example ReleaseRemoteImageResult(reinterpret_cast<mdvn::RemoteImageResult*>(lparam));
+ * @example ReleaseRemoteImageResult(reinterpret_cast<markair::RemoteImageResult*>(lparam));
  */
 void ReleaseRemoteImageResult(RemoteImageResult* result);
 
@@ -56,8 +56,8 @@ void ReleaseRemoteImageResult(RemoteImageResult* result);
  * @param outPort 输出:端口号,URL 未显式指定时按 scheme 取 80 / 443(非空)。
  * @return 解析成功返回 true;非 http/https、缺 host、缓冲区不够时返回 false。
  * @example
- *   wchar_t host[256], path[1024]; bool https = false; mdvn::u16 port = 0;
- *   bool ok = mdvn::ParseHttpUrl(url, &https, host, 256, path, 1024, &port);
+ *   wchar_t host[256], path[1024]; bool https = false; markair::u16 port = 0;
+ *   bool ok = markair::ParseHttpUrl(url, &https, host, 256, path, 1024, &port);
  */
 bool ParseHttpUrl(StrSlice url, bool* outHttps, wchar_t* host, u32 hostCap,
                   wchar_t* path, u32 pathCap, u16* outPort);
@@ -66,7 +66,7 @@ bool ParseHttpUrl(StrSlice url, bool* outHttps, wchar_t* host, u32 hostCap,
  * 网络图片加载器:按开关决定是否允许发起请求,每张图片一个短命 IO 线程。
  *
  * @example
- *   mdvn::RemoteImageLoader loader;
+ *   markair::RemoteImageLoader loader;
  *   loader.Init(hwnd, true);                // load_remote_images = 1(默认)
  *   loader.Request(href);                   // 自动发起下载
  *   // 开关关闭(用户改 state.ini)时,Request 直接返回 false,
@@ -122,4 +122,4 @@ private:
     i32 inFlight_;      // 尚未完成的请求数(仅供调试/限流,Interlocked 访问)
 };
 
-}  // namespace mdvn
+}  // namespace markair

@@ -1,18 +1,18 @@
-// mdvn 的字符串切片与 UTF-8/UTF-16 转换。不用 std::string/std::wstring,
+// markair 的字符串切片与 UTF-8/UTF-16 转换。不用 std::string/std::wstring,
 // 长期持有的字符串数据统一走零拷贝切片 + Arena 分配的缓冲区。
 #pragma once
 
 #include "arena.h"
 #include "types.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 零拷贝的 UTF-8 字符串切片,只是"看一眼"某段内存,不持有所有权、不深拷贝。
  * 典型用来指向内存映射的文件内容或 Arena 缓冲区。
  *
  * @example
- *   mdvn::StrSlice s{"hello", 5};
+ *   markair::StrSlice s{"hello", 5};
  */
 struct StrSlice {
     const char* data;
@@ -23,7 +23,7 @@ struct StrSlice {
  * 零拷贝的 UTF-16 字符串切片,语义同 StrSlice,单位是 UTF-16 code unit。
  *
  * @example
- *   mdvn::Utf16Slice s = mdvn::Utf8ToUtf16(utf8, &arena);
+ *   markair::Utf16Slice s = markair::Utf8ToUtf16(utf8, &arena);
  */
 struct Utf16Slice {
     const wchar_t* data;
@@ -44,7 +44,7 @@ struct Utf16Slice {
  * @param arena 输出缓冲区所在的 Arena,失败(空间耗尽)时返回的切片可能被截断。
  * @return 转换结果切片,data 以 '\0' 结尾,len 不含该 '\0'。
  * @example
- *   mdvn::Utf16Slice wide = mdvn::Utf8ToUtf16(mdvn::StrSlice{"你好", 6}, &arena);
+ *   markair::Utf16Slice wide = markair::Utf8ToUtf16(markair::StrSlice{"你好", 6}, &arena);
  */
 Utf16Slice Utf8ToUtf16(StrSlice input, Arena* arena);
 
@@ -58,7 +58,7 @@ Utf16Slice Utf8ToUtf16(StrSlice input, Arena* arena);
  * @param arena 输出缓冲区所在的 Arena。
  * @return 转换结果切片,data 以 '\0' 结尾,len 不含该 '\0'。
  * @example
- *   mdvn::StrSlice utf8 = mdvn::Utf16ToUtf8(wide, &arena);
+ *   markair::StrSlice utf8 = markair::Utf16ToUtf8(wide, &arena);
  */
 StrSlice Utf16ToUtf8(Utf16Slice input, Arena* arena);
 
@@ -69,7 +69,7 @@ StrSlice Utf16ToUtf8(Utf16Slice input, Arena* arena);
  *
  * @param input 待计量的 UTF-8 切片。
  * @return UTF-16 code unit 个数;结果与 `Utf8ToUtf16(input, arena).len` 恒等。
- * @example u32 n = mdvn::Utf16LengthOfUtf8(mdvn::StrSlice{"你好", 6}); // 2
+ * @example u32 n = markair::Utf16LengthOfUtf8(markair::StrSlice{"你好", 6}); // 2
  */
 u32 Utf16LengthOfUtf8(StrSlice input);
 
@@ -86,8 +86,8 @@ u32 Utf16LengthOfUtf8(StrSlice input);
  *
  * @param input 待估算的 UTF-8 切片。
  * @return 视觉宽度单位总量(ASCII 记 1,常见宽字符记 2)。
- * @example mdvn::Utf8VisualWidth(mdvn::StrSlice{"a你", 4}); // 1 + 2 = 3
+ * @example markair::Utf8VisualWidth(markair::StrSlice{"a你", 4}); // 1 + 2 = 3
  */
 u32 Utf8VisualWidth(StrSlice input);
 
-} // namespace mdvn
+} // namespace markair

@@ -19,9 +19,9 @@
 
 **状态**：✅ 已实测通过
 
-1. 复跑 `ci/verify_assoc.ps1 -SkipBuild`：exit=0，`mdvn.md` ProgID 子树与全部 5 条 `OpenWithProgids`（`.md`/`.markdown`/`.mdown`/`.mkd`/`.mdtext`）注册后齐备、卸载后全部消失，卸载后快照与注册前快照全量 diff 为空。
-2. 真实双击验证：`--register` 后用 `Invoke-Item` 打开 5 个样本文件（`bench/screenshots/t85_sample.{md,markdown,mdown,mkd,mdtext}`，内容取自 `bench/corpus/SOURCES.md`），**实测发现并确认了文档 T82 里写的那条事实**——Windows 弹出的是"选择打开方式"（`OpenWith.exe`）对话框，而不是直接拉起 mdvn。这正确印证了"注册 = 加进'打开方式'列表 ≠ 成为默认程序"，因为这几个扩展名从未被用户在系统设置里显式选过默认程序。这不是 bug。
-3. 为了验证渡染管线本身对 5 种扩展名都正常工作，改用直接 `mdvn.exe "<file>.<ext>"` 命令行方式逐个打开：`.mkd`、`.mdtext` 两个样本成功渲染并截图确认（`bench/screenshots/16_direct_open_mkd.png`、`16_direct_open_mdtext.png`）；`.md`/`.markdown`/`.mdown` 三个样本因焦点被其它前台窗口抢占未能截图确认（后台脚本连续启动多个进程时 Windows 的焦点保护机制所致），但代码层面 5 个扩展名走的是同一条内容无关的解析路径（`src/shell/assoc.h` 的 `kAssociatedExtensions` 只影响关联注册，不影响解析），已用 2/5 样本 + 注册表验证的全量覆盖，判定为通过。
+1. 复跑 `ci/verify_assoc.ps1 -SkipBuild`：exit=0，`markair.md` ProgID 子树与全部 5 条 `OpenWithProgids`（`.md`/`.markdown`/`.mdown`/`.mkd`/`.mdtext`）注册后齐备、卸载后全部消失，卸载后快照与注册前快照全量 diff 为空。
+2. 真实双击验证：`--register` 后用 `Invoke-Item` 打开 5 个样本文件（`bench/screenshots/t85_sample.{md,markdown,mdown,mkd,mdtext}`，内容取自 `bench/corpus/SOURCES.md`），**实测发现并确认了文档 T82 里写的那条事实**——Windows 弹出的是"选择打开方式"（`OpenWith.exe`）对话框，而不是直接拉起 markair。这正确印证了"注册 = 加进'打开方式'列表 ≠ 成为默认程序"，因为这几个扩展名从未被用户在系统设置里显式选过默认程序。这不是 bug。
+3. 为了验证渡染管线本身对 5 种扩展名都正常工作，改用直接 `markair.exe "<file>.<ext>"` 命令行方式逐个打开：`.mkd`、`.mdtext` 两个样本成功渲染并截图确认（`bench/screenshots/16_direct_open_mkd.png`、`16_direct_open_mdtext.png`）；`.md`/`.markdown`/`.mdown` 三个样本因焦点被其它前台窗口抢占未能截图确认（后台脚本连续启动多个进程时 Windows 的焦点保护机制所致），但代码层面 5 个扩展名走的是同一条内容无关的解析路径（`src/shell/assoc.h` 的 `kAssociatedExtensions` 只影响关联注册，不影响解析），已用 2/5 样本 + 注册表验证的全量覆盖，判定为通过。
 4. `--unregister` 后再跑一次 `verify_assoc.ps1`，确认零残留（同①的脚本输出）。
 
 ---
@@ -40,7 +40,7 @@
 
 - 100% DPI：本机当前系统缩放确认为 96 DPI（=100%），双屏均是 100%。在此配置下，② ⑤ ⑥ 中的各截图均在主屏采集，双屏窗口移动/几何计算沿用 M2 T68 ④ 已验证过的精确恢复逻辑（本轮 M3 未改动窗口状态恢复代码，未重复回归）。
 - 150%/200% DPI：**未做**。原因：Windows 上把系统级 DPI 缩放从 100% 切到 150%/200% 通常需要注销重登才能干净生效（或至少让所有已开的窗口重新走一遍 DPI 感知路径），而当前桌面上正有多个与本任务无关的真实工作会话在运行（其它项目的终端/agent 窗口），强行切换全局 DPI 缩放会打断这些会话，风险与本项收益不成比例，因此未执行。如实标注为待办，不编造已测结果。
-- 双屏：mdvn 窗口在双屏间移动/恢复的功能性验证在 M2 T68 已完整覆盖（100% DPI 下精确恢复 + 24px 层叠偏移），M3 阶段的改动集中在渲染/内存路径（T74/T76），未涉及窗口几何代码，本轮不重复测，但也未针对 M3 改动后再次交叉验证双屏，视为遗留待办。
+- 双屏：markair 窗口在双屏间移动/恢复的功能性验证在 M2 T68 已完整覆盖（100% DPI 下精确恢复 + 24px 层叠偏移），M3 阶段的改动集中在渲染/内存路径（T74/T76），未涉及窗口几何代码，本轮不重复测，但也未针对 M3 改动后再次交叉验证双屏，视为遗留待办。
 
 ---
 
@@ -77,7 +77,7 @@
 
 **状态**：见下方最终结果（脚本已按真实 30 分钟运行，非人工干等，但确保满时长真实跑完）
 
-用脚本 `t85_soak30.ps1` 自动化：单个 mdvn 进程持续发送真实 `PageDown`/`Home` 按键滚动，每 120 秒结束当前进程并用 `bench/corpus/` 下的文档重新启动（模拟"切文档"——**如实说明限制**：因为没有可脚本化的 IPC 走 `openDocumentInPlace` 原地替换文档路径，本轮"切文档"用的是关闭旧进程+新进程打开新文档来模拟，测的是"反复开关进程"场景，这条路径已经在 T78 单独用 100 次循环验证过；真正的同进程内 `openDocumentInPlace` 内存曲线不在本项覆盖范围，T78 已覆盖）。每 5~6 秒采样一次 `PrivateMemorySize64`，写入 `bench/screenshots/t85_soak30_log.csv`。
+用脚本 `t85_soak30.ps1` 自动化：单个 markair 进程持续发送真实 `PageDown`/`Home` 按键滚动，每 120 秒结束当前进程并用 `bench/corpus/` 下的文档重新启动（模拟"切文档"——**如实说明限制**：因为没有可脚本化的 IPC 走 `openDocumentInPlace` 原地替换文档路径，本轮"切文档"用的是关闭旧进程+新进程打开新文档来模拟，测的是"反复开关进程"场景，这条路径已经在 T78 单独用 100 次循环验证过；真正的同进程内 `openDocumentInPlace` 内存曲线不在本项覆盖范围，T78 已覆盖）。每 5~6 秒采样一次 `PrivateMemorySize64`，写入 `bench/screenshots/t85_soak30_log.csv`。
 
 （结果见文末"最终结论"一节，脚本仍在运行满 30 分钟。）
 
@@ -88,14 +88,14 @@
 **状态**：⚠️ 已实测，但触发不了拦截——发现一个环境事实：本机 SmartScreen 已被组策略关闭
 
 按裁决 #7（不买签名证书）要求实测未签名 exe 首次运行时 SmartScreen 的实际拦截画面：
-1. 复制 `build/src/Release/mdvn.exe` 到全新路径 `bench/screenshots/mdvn_smartscreen_test.exe`
+1. 复制 `build/src/Release/markair.exe` 到全新路径 `bench/screenshots/markair_smartscreen_test.exe`
 2. 用 `Set-Content ...:Zone.Identifier` 手动写入 `[ZoneTransfer] ZoneId=3`，模拟"从互联网下载"的标记（Mark-of-the-Web），这是触发 SmartScreen "应用信誉"检查的前提条件
 3. 启动该 exe，实测：**没有出现任何 SmartScreen 拦截对话框，进程直接正常启动**
 4. 排查原因（未凭印象断言，实地查了注册表）：`HKLM:\SOFTWARE\Policies\Microsoft\Windows\System` 下 `EnableSmartScreen = 0`，即本机通过组策略把 SmartScreen（应用与浏览器控制/Defender SmartScreen）整机关闭了，与是否有 MOTW 标记无关，这就是为什么没弹窗。
 
-**如实结论**：本机因组策略关闭了 SmartScreen，无法在本机复现"用户真实会看到的 SmartScreen 拦截画面并截图存档"这一效果，不是 mdvn 本身有问题，也不是测试方法有问题（MOTW 标记流程本身是对的）。这条需要在一台 SmartScreen 处于默认开启状态的机器上补测才能拿到真实截图。README 的"首次运行提示"说明先按裁决 #7③ 的已知行为描述撰写（点击"更多信息"→"仍要运行"），但截图证据这一项留空，如实标注为待办，不用本机无效结果冒充。
+**如实结论**：本机因组策略关闭了 SmartScreen，无法在本机复现"用户真实会看到的 SmartScreen 拦截画面并截图存档"这一效果，不是 markair 本身有问题，也不是测试方法有问题（MOTW 标记流程本身是对的）。这条需要在一台 SmartScreen 处于默认开启状态的机器上补测才能拿到真实截图。README 的"首次运行提示"说明先按裁决 #7③ 的已知行为描述撰写（点击"更多信息"→"仍要运行"），但截图证据这一项留空，如实标注为待办，不用本机无效结果冒充。
 
-（清理：临时复制的 `mdvn_smartscreen_test.exe` 已在测试后删除。）
+（清理：临时复制的 `markair_smartscreen_test.exe` 已在测试后删除。）
 
 ---
 

@@ -1,4 +1,4 @@
-// mdvn 的内置性能埋点(T14)。
+// markair 的内置性能埋点(T14)。
 //
 // 记录"进程入口 -> 解析完成 -> 布局完成 -> 窗口创建 -> 首次 Present"这条链路
 // 上五个时间点(顺序对应 wWinMain 的实际执行顺序,而非文档里罗列的顺序 ——
@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace mdvn::bench {
+namespace markair::bench {
 
 /**
  * 命令行参数里识别出的埋点相关信息。
@@ -37,8 +37,8 @@ struct ParsedArgs {
  *         unregisterRequested 分别表示是否出现过 "--register"/"--unregister";
  *         filePath 是第一个非这三个标志的参数(先出现的优先),没有则为 nullptr。
  * @example
- *   // argv = {L"mdvn.exe", L"--bench", L"C:\\a.md"}
- *   mdvn::bench::ParsedArgs a = mdvn::bench::ParseArgs(3, argv);
+ *   // argv = {L"markair.exe", L"--bench", L"C:\\a.md"}
+ *   markair::bench::ParsedArgs a = markair::bench::ParseArgs(3, argv);
  *   // a.benchEnabled == true, a.filePath 指向 L"C:\\a.md"
  */
 ParsedArgs ParseArgs(int argc, wchar_t* const* argv);
@@ -47,7 +47,7 @@ ParsedArgs ParseArgs(int argc, wchar_t* const* argv);
  * 启用埋点。须在其余 Mark 系列函数与 EmitReport 调用之前调用(通常在
  * wWinMain 里解析出 "--bench" 标志后立即调用一次)。不调用时,全部 Mark
  * 系列函数与 EmitReport 都是空操作。
- * @example if (parsed.benchEnabled) mdvn::bench::Enable();
+ * @example if (parsed.benchEnabled) markair::bench::Enable();
  */
 void Enable();
 
@@ -65,9 +65,9 @@ void MarkFirstPresent();
 // ---------------------------------------------------------------------------
 // T76:逐帧重绘耗时埋点(裁决 #2 的"方案 B",只在 --bench 下生效)。
 //
-// PresentMon 测到的是 DWM 合成上屏的节奏,混杂了"mdvn 自己的重绘"与"DWM
+// PresentMon 测到的是 DWM 合成上屏的节奏,混杂了"markair 自己的重绘"与"DWM
 // 合成延迟 + 输入事件到达节奏"三部分;要判断"软件渲染够不够快",必须单独
-// 把 mdvn 自己那一段测出来。下面三个 Mark 就是干这个的:
+// 把 markair 自己那一段测出来。下面三个 Mark 就是干这个的:
 //   MarkFrameBegin      -> 一次 WM_PAINT 重绘开始
 //   MarkFrameLayoutDone -> 虚拟化/滚动条同步做完、即将调 D2D 绘制
 //   MarkFrameEnd        -> D2D EndDraw 返回
@@ -85,7 +85,7 @@ void MarkFrameEnd();
  * 把逐帧耗时样本的分布(样本数 / P50 / P95 / P99 / 最大值,总耗时与其中的
  * D2D 绘制耗时各一组,外加首帧的两个值)以单行 KV 格式输出到 stderr。
  * 仅在 Enable() 被调用过之后才产生任何效果/输出。
- * @example mdvn::bench::EmitFrameReport();
+ * @example markair::bench::EmitFrameReport();
  */
 void EmitFrameReport();
 
@@ -105,7 +105,7 @@ void EmitFrameReport();
  * @return 写入的字符数(不含结尾 '\0')。
  * @example
  *   char line[256];
- *   mdvn::bench::FormatReportFromValues(1000, 0, 5, 8, 12, 20, 9'000'000ull,
+ *   markair::bench::FormatReportFromValues(1000, 0, 5, 8, 12, 20, 9'000'000ull,
  *                                       line, sizeof(line));
  */
 size_t FormatReportFromValues(int64_t freq,
@@ -120,8 +120,8 @@ size_t FormatReportFromValues(int64_t freq,
 /**
  * 读取内部记录的真实时间点 + 当前进程的 PrivateUsage,格式化后输出到
  * stderr。仅在 Enable() 被调用过之后才产生任何效果/输出。
- * @example mdvn::bench::EmitReport();
+ * @example markair::bench::EmitReport();
  */
 void EmitReport();
 
-}  // namespace mdvn::bench
+}  // namespace markair::bench

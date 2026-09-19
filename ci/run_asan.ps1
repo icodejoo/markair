@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    mdvn clang-cl ASAN 验证脚本（T79，沿用 M1 T43 已验证过的路子）。
+    markair clang-cl ASAN 验证脚本（T79，沿用 M1 T43 已验证过的路子）。
 
 .DESCRIPTION
     04 测量方法表里"ASAN 只用于验证,不进正式构建"这条手段的落地脚本：
     独立配置一份 build-asan\（VS 2022 生成器 + -T ClangCL 工具集，本机没有
     Ninja，因此不用 T43 commit 里提到的 Ninja 方案，改用等价的 VS+ClangCL
-    工具集），对 mdvn_tests 附加 /fsanitize=address，喂 bench\fuzz\ 全部 9 份
+    工具集），对 markair_tests 附加 /fsanitize=address，喂 bench\fuzz\ 全部 9 份
     畸形语料 + BENCH-A/B/C/D（分别由 test_fuzz_smoke.cpp / test_bench_abc_smoke.cpp /
     test_benchd_smoke.cpp 覆盖，走的是"直接调用解析/布局函数，不经过窗口"的
-    链路——T79 排查发现 ASAN 构建的 mdvn.exe 真实 GUI 路径会在窗口创建前挂死，
+    链路——T79 排查发现 ASAN 构建的 markair.exe 真实 GUI 路径会在窗口创建前挂死，
     这是构建环境限制不是内存安全问题，详见 bench\M3-LEAK.md 的 T79 章节，
-    因此不通过启动 mdvn.exe 本体来喂语料）。
+    因此不通过启动 markair.exe 本体来喂语料）。
 
     已知的工具链假阳性（T43 已定性，本脚本复现一致）：MSVC/lld 对多个 TU 里
     内容相同的空字符串字面量（如 L""、""）做只读数据折叠，ASAN 的全局变量
@@ -35,12 +35,12 @@
 
 .EXAMPLE
     powershell -File ci\run_asan.ps1
-    配置(若不存在)+构建 build-asan\ 下的 mdvn_tests,跑一遍全部真实语料。
+    配置(若不存在)+构建 build-asan\ 下的 markair_tests,跑一遍全部真实语料。
 #>
 
 param(
     [switch]$ForceReconfigure,
-    [string]$AsanRuntimeDir = "C:\asan_libs_mdvn"
+    [string]$AsanRuntimeDir = "C:\asan_libs_markair"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,9 +48,9 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $buildDir = Join-Path $repoRoot "build-asan"
-$testsExePath = Join-Path $buildDir "tests\Release\mdvn_tests.exe"
+$testsExePath = Join-Path $buildDir "tests\Release\markair_tests.exe"
 
-Write-Host "==== mdvn clang-cl ASAN 验证（T79） ===="
+Write-Host "==== markair clang-cl ASAN 验证（T79） ===="
 
 # ------------------------- 第零步：ASAN 动态运行时准备 -------------------------
 # lld-link 走 VS 工程生成时不会像 clang 驱动那样自动补 ASAN 运行时导入库
@@ -92,21 +92,21 @@ if ($needConfigure) {
     Write-Host "[1/3] build-asan\ 已配置，跳过（传 -ForceReconfigure 可强制重新配置）。"
 }
 
-# ------------------------- 第二步：构建 mdvn_tests（Release 配置——ASAN 不支持 /MTd 调试运行时） -------------------------
-Write-Host "[2/3] 构建 mdvn_tests（Release 配置）..."
-cmake --build $buildDir --target mdvn_tests --config Release
+# ------------------------- 第二步：构建 markair_tests（Release 配置——ASAN 不支持 /MTd 调试运行时） -------------------------
+Write-Host "[2/3] 构建 markair_tests（Release 配置）..."
+cmake --build $buildDir --target markair_tests --config Release
 if ($LASTEXITCODE -ne 0) {
     Write-Host "FAIL: cmake 构建失败，退出码 $LASTEXITCODE"
     exit 1
 }
 if (-not (Test-Path $testsExePath)) {
-    Write-Host "FAIL: 构建后仍找不到 mdvn_tests.exe：$testsExePath"
+    Write-Host "FAIL: 构建后仍找不到 markair_tests.exe：$testsExePath"
     exit 1
 }
 
 # ------------------------- 第三步：跑，按"真实语料输出是否齐全"判定 -------------------------
 Write-Host ""
-Write-Host "[3/3] 运行 mdvn_tests.exe（ASAN，喂 bench\fuzz\ 9 份 + BENCH-A/B/C/D）..."
+Write-Host "[3/3] 运行 markair_tests.exe（ASAN，喂 bench\fuzz\ 9 份 + BENCH-A/B/C/D）..."
 
 $env:PATH = "$AsanRuntimeDir;$env:PATH"
 $env:ASAN_OPTIONS = "halt_on_error=0:detect_odr_violation=0"

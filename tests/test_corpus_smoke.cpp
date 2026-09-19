@@ -4,15 +4,15 @@
 // "读取文件 -> 编码嗅探 -> 跳过 front matter -> 解析为文档模型 -> 块级布局"
 // 这条与 src/app/main.cpp::LoadMarkdownFile 完全一致的链路,断言:
 //   1) 文件能被 FileMap 成功映射(语料本身应当都能打开);
-//   2) ParseMarkdown 不崩溃、不断言失败(禁异常,失败只会体现为 MDVN_CHECK 计数);
+//   2) ParseMarkdown 不崩溃、不断言失败(禁异常,失败只会体现为 MARKAIR_CHECK 计数);
 //   3) 非空输入解析出的块数 > 0(排除"整份文档被吞成空文档"这种明显异常);
 //   4) BlockLayoutEngine::Relayout 成功且几何数组长度与块数一致。
-// mdvn 本来就不使用异常,真正的越界/空指针解引用会让测试进程直接崩溃退出,
+// markair 本来就不使用异常,真正的越界/空指针解引用会让测试进程直接崩溃退出,
 // ctest 会将其上报为失败,这就是本文件对"不崩溃"的验证手段。
 //
 // 语料清单硬编码在这里(而不是运行时遍历目录):CMake 测试目标不方便做目录
 // 遍历,硬编码列表也顺带起到"新增语料必须显式登记"的效果,防止遗漏。
-#include "mdvn_test.h"
+#include "markair_test.h"
 #include "../src/util/arena.h"
 #include "../src/util/str.h"
 #include "../src/doc/model.h"
@@ -25,19 +25,19 @@
 #include <cstdio>
 #include <cwchar>
 
-using mdvn::Arena;
-using mdvn::Document;
-using mdvn::DetectedEncoding;
-using mdvn::EncodingDetection;
-using mdvn::BlockLayoutEngine;
-using mdvn::FileMap;
-using mdvn::FileMapError;
-using mdvn::ParseMarkdown;
-using mdvn::SkipFrontMatter;
-using mdvn::StrSlice;
+using markair::Arena;
+using markair::Document;
+using markair::DetectedEncoding;
+using markair::EncodingDetection;
+using markair::BlockLayoutEngine;
+using markair::FileMap;
+using markair::FileMapError;
+using markair::ParseMarkdown;
+using markair::SkipFrontMatter;
+using markair::StrSlice;
 
-#ifndef MDVN_CORPUS_DIR
-#define MDVN_CORPUS_DIR "bench/corpus"
+#ifndef MARKAIR_CORPUS_DIR
+#define MARKAIR_CORPUS_DIR "bench/corpus"
 #endif
 
 namespace {
@@ -85,11 +85,11 @@ const wchar_t* kCorpusFiles[] = {
     L"angular-angular-pull-request-template.md",
 };
 
-// 把 MDVN_CORPUS_DIR(UTF-8 narrow 字面量)与语料文件名拼成宽字符完整路径。
+// 把 MARKAIR_CORPUS_DIR(UTF-8 narrow 字面量)与语料文件名拼成宽字符完整路径。
 // 固定缓冲区足够容纳仓库内路径深度,不做动态分配。
 void BuildCorpusPath(const wchar_t* fileName, wchar_t* out, size_t outCap) {
     wchar_t dir[512];
-    const char* narrowDir = MDVN_CORPUS_DIR;
+    const char* narrowDir = MARKAIR_CORPUS_DIR;
     size_t i = 0;
     for (; narrowDir[i] != 0 && i + 1 < 512; ++i) dir[i] = static_cast<wchar_t>(narrowDir[i]);
     dir[i] = 0;
@@ -102,12 +102,12 @@ void BuildCorpusPath(const wchar_t* fileName, wchar_t* out, size_t outCap) {
 // "正文是否非空"(而不是拿跳过前的原始字节长度去判断——纯 front matter、
 // 正文全部由外部模板渲染的页面是真实存在的合法文档,不应被当成解析异常)。
 Document LoadCorpusFile(StrSlice raw, Arena* arena, StrSlice* outBody) {
-    EncodingDetection detection = mdvn::DetectEncoding(raw);
+    EncodingDetection detection = markair::DetectEncoding(raw);
     StrSlice utf8;
     if (detection.encoding == DetectedEncoding::Utf16Le ||
         detection.encoding == DetectedEncoding::AnsiFallback) {
-        mdvn::Utf16Slice utf16 = mdvn::DecodeToUtf16(raw, detection, arena);
-        utf8 = mdvn::Utf16ToUtf8(utf16, arena);
+        markair::Utf16Slice utf16 = markair::DecodeToUtf16(raw, detection, arena);
+        utf8 = markair::Utf16ToUtf8(utf16, arena);
     } else {
         utf8 = StrSlice{raw.data + detection.contentOffset, raw.len - detection.contentOffset};
     }
@@ -119,7 +119,7 @@ Document LoadCorpusFile(StrSlice raw, Arena* arena, StrSlice* outBody) {
 // 判断一段文本是否"全是空白字符"(空格/制表/换行/回车)。用于区分"front
 // matter 之后确实没有正文"(合法空文档)与"正文非空但解析异常吞掉了"。
 bool IsAllWhitespace(StrSlice s) {
-    for (mdvn::u32 i = 0; i < s.len; ++i) {
+    for (markair::u32 i = 0; i < s.len; ++i) {
         char c = s.data[i];
         if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return false;
     }
@@ -129,9 +129,9 @@ bool IsAllWhitespace(StrSlice s) {
 }  // namespace
 
 // 用例:对语料清单里的每一份文件跑一次"打开 -> 解析 -> 布局",全部不崩溃、
-// 不产生空文档、几何数组与块数一致。任何一步异常都会体现为 MDVN_CHECK 失败
+// 不产生空文档、几何数组与块数一致。任何一步异常都会体现为 MARKAIR_CHECK 失败
 // 或进程崩溃(ctest 判定为失败退出码),不需要额外的异常捕获。
-MDVN_TEST(CorpusSmoke_AllRealWorldFilesOpenParseLayoutWithoutCrash) {
+MARKAIR_TEST(CorpusSmoke_AllRealWorldFilesOpenParseLayoutWithoutCrash) {
     int opened = 0;
     int totalBlocks = 0;
     for (const wchar_t* fileName : kCorpusFiles) {
@@ -143,7 +143,7 @@ MDVN_TEST(CorpusSmoke_AllRealWorldFilesOpenParseLayoutWithoutCrash) {
         if (err != FileMapError::None) {
             fprintf(stderr, "corpus_smoke: FAILED TO OPEN %ls (err=%d)\n", fileName,
                     static_cast<int>(err));
-            MDVN_CHECK(err == FileMapError::None);
+            MARKAIR_CHECK(err == FileMapError::None);
             continue;
         }
         ++opened;
@@ -165,22 +165,22 @@ MDVN_TEST(CorpusSmoke_AllRealWorldFilesOpenParseLayoutWithoutCrash) {
                     static_cast<unsigned>(body.len));
         }
         if (!IsAllWhitespace(body)) {
-            MDVN_CHECK(doc.blocks.Size() > 0);
+            MARKAIR_CHECK(doc.blocks.Size() > 0);
         }
         totalBlocks += static_cast<int>(doc.blocks.Size());
 
         // kMaxNestingDepth/kMaxDocumentNodeCount 截断机制:真实 README 不应触发。
-        MDVN_CHECK(!doc.truncated);
+        MARKAIR_CHECK(!doc.truncated);
 
         BlockLayoutEngine layout;
         bool relayoutOk = layout.Relayout(doc, 760.0f);
-        MDVN_CHECK(relayoutOk);
-        MDVN_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
+        MARKAIR_CHECK(relayoutOk);
+        MARKAIR_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
 
         fm.Close();
     }
 
     fprintf(stderr, "corpus_smoke: opened=%d/%d total_blocks=%d\n", opened,
             static_cast<int>(sizeof(kCorpusFiles) / sizeof(kCorpusFiles[0])), totalBlocks);
-    MDVN_CHECK_EQ(opened, static_cast<int>(sizeof(kCorpusFiles) / sizeof(kCorpusFiles[0])));
+    MARKAIR_CHECK_EQ(opened, static_cast<int>(sizeof(kCorpusFiles) / sizeof(kCorpusFiles[0])));
 }

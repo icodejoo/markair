@@ -1,6 +1,6 @@
 # 第三方组件声明
 
-mdvn 自身代码使用根目录 [LICENSE](LICENSE)（MIT）授权。以下是 mdvn 代码之外、随本项目一起分发的第三方组件清单。
+markair 自身代码使用根目录 [LICENSE](LICENSE)（MIT）授权。以下是 markair 代码之外、随本项目一起分发的第三方组件清单。
 
 ## md4c
 
@@ -74,7 +74,7 @@ lunasvg 内嵌 plutovg（2D 光栅化后端，同一上游作者，同 MIT 许�
 plutovg 源码树一并 vendored：
 
 - **stb_truetype.h / stb_image.h**（Sean Barrett，public domain / MIT 双许可，
-  见文件头注释）：字体轮廓解析与位图图片解码，mdvn 只用到 plutovg 的路径
+  见文件头注释）：字体轮廓解析与位图图片解码，markair 只用到 plutovg 的路径
   填充/光栅化部分，这两个头文件随 plutovg 编译单元一起进构建，未单独调用。
 - **plutovg-ft-\*.c**（源自 FreeType 的光栅化/描边算法，FreeType License，
   全文收录于 [third_party/lunasvg/plutovg/source/FTL.TXT](third_party/lunasvg/plutovg/source/FTL.TXT)）。

@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    T72：向 mdvn 主窗口投递固定节奏的滚轮消息，模拟"持续滚动 N 秒"场景，
+    T72：向 markair 主窗口投递固定节奏的滚轮消息，模拟"持续滚动 N 秒"场景，
     供 PresentMon（方案A）或内置逐帧埋点（方案B）在同一段时间窗口内采集数据。
 
 .DESCRIPTION
-    按窗口类名 "mdvn_main_window" 定位目标窗口，然后用 PostMessage 向其投递
+    按窗口类名 "markair_main_window" 定位目标窗口，然后用 PostMessage 向其投递
     WM_MOUSEWHEEL 消息，固定步长、固定间隔、固定总时长。
 
     ⚠️ 实现说明：本脚本用 EnumWindows + GetClassNameW 按类名匹配定位窗口，
@@ -22,7 +22,7 @@
     误伤其他窗口。
 
 .PARAMETER ClassName
-    目标窗口类名，默认 "mdvn_main_window"（与 src/shell/window.cpp 的
+    目标窗口类名，默认 "markair_main_window"（与 src/shell/window.cpp 的
     kWindowClassName 保持一致）。
 
 .PARAMETER DurationSeconds
@@ -36,10 +36,10 @@
     ⚠️ T76 修正，**测 60 FPS 时必须加这个开关**。默认的 `Start-Sleep
     -Milliseconds` 受 Windows 默认 15.625 ms 定时器粒度约束，请求 16 ms 实际
     会睡满两个 tick ≈ 31.25 ms —— T72 那轮"BENCH-A/BENCH-C 帧间隔都是
-    30.8 ms、掉帧率 99%"就是这么来的：测到的根本不是 mdvn 的重绘能力，
+    30.8 ms、掉帧率 99%"就是这么来的：测到的根本不是 markair 的重绘能力，
     而是本脚本自己的投递节奏（10 秒 321 次 = 31.25 ms/次，与 P50 30.86 ms
     逐位吻合）。加上 `-SpinWait` 改用自旋等待，实测能稳定压到 16.0 ms，
-    此时 mdvn 每条消息画一帧、一帧不掉（见 bench/M3-RENDER.md 第 3 节）。
+    此时 markair 每条消息画一帧、一帧不掉（见 bench/M3-RENDER.md 第 3 节）。
     代价是本脚本自己占满一个核心，对被测进程的影响已在 M3-RENDER.md 里
     用"自旋 vs Start-Sleep 同语料对照"量化过。
 
@@ -49,7 +49,7 @@
 
 .EXAMPLE
     powershell -File bench\scroll_probe.ps1
-    # 默认参数：对 mdvn_main_window 投递 10 秒、每 16ms 一次、向下滚动的滚轮消息。
+    # 默认参数：对 markair_main_window 投递 10 秒、每 16ms 一次、向下滚动的滚轮消息。
 
 .EXAMPLE
     powershell -File bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16 -SpinWait
@@ -57,7 +57,7 @@
 #>
 
 param(
-    [string]$ClassName = "mdvn_main_window",
+    [string]$ClassName = "markair_main_window",
     [int]$DurationSeconds = 10,
     [int]$IntervalMs = 16,
     [int]$DeltaPerTick = -120,
@@ -65,7 +65,7 @@ param(
 )
 
 # 内联 P/Invoke：EnumWindows + GetClassNameW 按类名定位窗口、PostMessageW 投递消息。
-Add-Type -Namespace MdvnProbe -Name NativeMethods -MemberDefinition @'
+Add-Type -Namespace MarkairProbe -Name NativeMethods -MemberDefinition @'
 public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
 [DllImport("user32.dll")]
@@ -90,21 +90,21 @@ $found = [IntPtr]::Zero
 $enumCb = {
     param($h, $l)
     $sb = New-Object System.Text.StringBuilder 256
-    [void][MdvnProbe.NativeMethods]::GetClassNameW($h, $sb, 256)
+    [void][MarkairProbe.NativeMethods]::GetClassNameW($h, $sb, 256)
     if ($sb.ToString() -eq $ClassName) {
         $script:found = $h
         return $false  # 找到即停止枚举
     }
     return $true
 }
-[void][MdvnProbe.NativeMethods]::EnumWindows($enumCb, [IntPtr]::Zero)
+[void][MarkairProbe.NativeMethods]::EnumWindows($enumCb, [IntPtr]::Zero)
 $hwnd = $found
 
 if ($hwnd -eq [IntPtr]::Zero) {
-    Write-Error "未找到窗口类名为 '$ClassName' 的窗口，请先启动 mdvn.exe（可加 --bench）。"
+    Write-Error "未找到窗口类名为 '$ClassName' 的窗口，请先启动 markair.exe（可加 --bench）。"
     exit 1
 }
-if (-not [MdvnProbe.NativeMethods]::IsWindow($hwnd)) {
+if (-not [MarkairProbe.NativeMethods]::IsWindow($hwnd)) {
     Write-Error "定位到的句柄无效。"
     exit 1
 }
@@ -117,7 +117,7 @@ Write-Host "开始投递 WM_MOUSEWHEEL：总时长 ${DurationSeconds}s，间隔 
 # 全程用 uint32/int64 运算避免中间结果溢出 Int32。
 $wheelParam = [int64]([uint32]($DeltaPerTick -band 0xFFFF)) * 65536
 $wParam = [IntPtr][int64]$wheelParam
-# lParam 是屏幕坐标 (x,y)，滚轮消息里坐标不影响 mdvn 的处理逻辑（整窗口滚动），
+# lParam 是屏幕坐标 (x,y)，滚轮消息里坐标不影响 markair 的处理逻辑（整窗口滚动），
 # 固定用 (0,0) 即可。
 $lParam = [IntPtr]::Zero
 
@@ -129,11 +129,11 @@ $sentCount = 0
 $nextDueMs = 0.0
 
 while ($sw.Elapsed.TotalMilliseconds -lt $totalMs) {
-    if (-not [MdvnProbe.NativeMethods]::IsWindow($hwnd)) {
+    if (-not [MarkairProbe.NativeMethods]::IsWindow($hwnd)) {
         Write-Error "目标窗口在投递过程中消失（可能已关闭），已投递 $sentCount 次后中止。"
         exit 1
     }
-    [void][MdvnProbe.NativeMethods]::PostMessageW($hwnd, $WM_MOUSEWHEEL, $wParam, $lParam)
+    [void][MarkairProbe.NativeMethods]::PostMessageW($hwnd, $WM_MOUSEWHEEL, $wParam, $lParam)
     $sentCount++
     $nextDueMs += $IntervalMs
     if ($SpinWait) {
@@ -152,6 +152,6 @@ Write-Host "投递完成：共 $sentCount 次，实际耗时 $([math]::Round($ac
 # 不能再让它静悄悄地过去。
 if ($sentCount -gt 0 -and $avgMs -gt ($IntervalMs * 1.25)) {
     Write-Warning ("实际平均投递间隔 $avgMs ms 远大于请求的 $IntervalMs ms（定时器粒度所致）。" +
-                   "此时测出的帧间隔反映的是本脚本的投递节奏，不是 mdvn 的重绘能力；" +
+                   "此时测出的帧间隔反映的是本脚本的投递节奏，不是 markair 的重绘能力；" +
                    "请加 -SpinWait 重测。")
 }

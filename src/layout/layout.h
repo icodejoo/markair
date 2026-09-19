@@ -1,4 +1,4 @@
-// mdvn 的块级布局模块(T10):文档模型 -> 行盒/块盒几何坐标。
+// markair 的块级布局模块(T10):文档模型 -> 行盒/块盒几何坐标。
 // 只做纯数字计算(y 坐标、缩进、矩形区域),不依赖 D2D 绘制(D2D 渲染是 T11 的事)。
 //
 // 核心约束(架构 §5):视口外不生成 IDWriteTextLayout——只为"可见范围 ± 1 屏"
@@ -15,7 +15,7 @@
 #include "../util/types.h"
 #include "table.h"
 
-namespace mdvn {
+namespace markair {
 
 /**
  * 一段矩形几何区域,单位 DIP(与 D2D/DirectWrite 坐标系一致)。
@@ -154,7 +154,7 @@ struct BlockGeometry {
  * 怎么解码、也不持有渲染目标,具体实现见 render/renderer.h 的 ImageResidencyManager。
  *
  * @example
- *   mdvn::ImageResidencyManager residency;   // 实现了本接口
+ *   markair::ImageResidencyManager residency;   // 实现了本接口
  *   layout.UpdateVisibleRange(top, bottom, fonts, &residency);
  */
 class ImageResidencyController {
@@ -201,18 +201,18 @@ public:
  * "块的几何区间与目标区间不再相交"的那一刻。
  *
  * @example
- *   mdvn::Arena docArena;
+ *   markair::Arena docArena;
  *   docArena.Init(4 * 1024 * 1024);
- *   mdvn::Document doc = mdvn::ParseMarkdown(mdvn::StrSlice{text, len}, &docArena);
+ *   markair::Document doc = markair::ParseMarkdown(markair::StrSlice{text, len}, &docArena);
  *
- *   mdvn::BlockLayoutEngine layout;
+ *   markair::BlockLayoutEngine layout;
  *   layout.Relayout(doc, 760.0f);              // 视口宽度变化只重跑这一步,不重解析
  *
- *   mdvn::FontSubsystem fonts;
+ *   markair::FontSubsystem fonts;
  *   fonts.Init();
  *   layout.UpdateVisibleRange(0.0f, 600.0f, fonts); // 只为可见 ± 1 屏生成/淘汰 layout
  *
- *   const mdvn::BlockGeometry& g0 = layout.Geometry(0);
+ *   const markair::BlockGeometry& g0 = layout.Geometry(0);
  */
 class BlockLayoutEngine {
 public:
@@ -349,4 +349,4 @@ private:
     u32 relayoutCallCount_;          // Relayout 累计调用次数(T49 测试桩,见 RelayoutCallCount)
 };
 
-}  // namespace mdvn
+}  // namespace markair

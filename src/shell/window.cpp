@@ -14,12 +14,12 @@
 #include "find_bar.h"          // 查找条几何(2026-09-19 改版:原生 EDIT 子窗口定位)
 #include "open_dialog.h"       // 底部栏"打开文档"按钮:IFileOpenDialog + 新开进程
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
 // 主窗口类名,全进程唯一。
-constexpr wchar_t kWindowClassName[] = L"mdvn_main_window";
+constexpr wchar_t kWindowClassName[] = L"markair_main_window";
 
 // 窗口初始逻辑尺寸(DIP),按窗口所在显示器 DPI 缩放后作为物理像素尺寸。
 constexpr int kInitialWidthDip = 800;
@@ -1567,7 +1567,7 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
 // Ctrl+± 同一路径),主题复用 T47 的 CycleTheme(与 Ctrl+Shift+T 同一路径),
 // 大纲复用 T63 的 ToggleOutlinePanel(与 Ctrl+\ 同一路径)。"打开文档"是唯一
 // 新增行为:弹出 IFileOpenDialog,选中后用 CreateProcessW 新开一个独立
-// mdvn.exe 进程——不调用 openDocumentInPlace,不替换当前正在看的文档。
+// markair.exe 进程——不调用 openDocumentInPlace,不替换当前正在看的文档。
 void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn) {
     if (!state) return;
     switch (btn) {
@@ -2640,13 +2640,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 /**
  * Request a debounced (500ms) write of the recent-files history to disk.
  * Callers only mutate the in-memory RecentFiles list synchronously
- * (mdvn::AddRecentFile is a cheap array shift, no I/O); the actual
+ * (markair::AddRecentFile is a cheap array shift, no I/O); the actual
  * CreateFileW/WriteFile/FlushFileBuffers happens on the WM_TIMER tick, so
  * clicking several in-document links back-to-back does not fsync once per
  * click — same debounce pattern as window-geometry persistence.
  *
  * 请求一次去抖(500ms)的历史记录写盘。调用方只需同步更新内存里的
- * RecentFiles 列表(mdvn::AddRecentFile 只是数组移位,不涉及 I/O);真正的
+ * RecentFiles 列表(markair::AddRecentFile 只是数组移位,不涉及 I/O);真正的
  * CreateFileW/WriteFile/FlushFileBuffers 发生在 WM_TIMER 到点时,连续点击
  * 好几个文档内链接不会每次点击都落一次盘——与窗口矩形持久化同一去抖手法。
  *
@@ -2658,7 +2658,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
  *
  *   Runtime state; silently returns if recentFiles is null.
  *
- * @example mdvn::RequestRecentFilesSave(hwnd, &windowState);
+ * @example markair::RequestRecentFilesSave(hwnd, &windowState);
  */
 void RequestRecentFilesSave(HWND hwnd, WindowState* state) {
     if (!state || !state->recentFiles) return;
@@ -2936,4 +2936,4 @@ int RunMessageLoop() {
     return static_cast<int>(msg.wParam);
 }
 
-}  // namespace mdvn
+}  // namespace markair

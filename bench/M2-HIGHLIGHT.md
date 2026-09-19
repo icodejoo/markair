@@ -8,12 +8,12 @@
 ## 0. 测量环境
 
 - 机器：本机（Windows 10 Pro 10.0.19045），单次会话内先后完成两次 clean build。
-- 构建配置：Release，`cmake --build build --target mdvn --config Release`。
+- 构建配置：Release，`cmake --build build --target markair --config Release`。
 - 对比基线：合入 T50~T53（围栏语言标记落地、词法器框架、高亮着色接入布局与渲染）
   **之前**的代码状态，即 git 提交 `97f9073`（T49："验证主题切换不触发Relayout"，
   T50 的提交是紧接其后的 `9dfbaa6`）。用 `git worktree add` 在同一台机器上把该提交
-  单独 checkout 出来、独立 clean configure + build 一份 `mdvn.exe`，与合入 T50~T53
-  后的当前 `mdvn.exe` 做同机同批对比，测完即用 `git worktree remove` 清理。
+  单独 checkout 出来、独立 clean configure + build 一份 `markair.exe`，与合入 T50~T53
+  后的当前 `markair.exe` 做同机同批对比，测完即用 `git worktree remove` 清理。
 
 ## 1. 体积增量（硬线：<= 80KB）
 
@@ -64,7 +64,7 @@ T45~T49（阶段 K 的窗口状态/主题状态机相关任务）已经在 T44 �
   枚举值一一对应。
 
 测量（`bench\run_bench.ps1 -Warm -N 20 -BenchFile bench\BENCH-C.md`，
-当前（T50~T53 之后）的 `mdvn.exe`）：
+当前（T50~T53 之后）的 `markair.exe`）：
 
 | 指标 | 中位数 | P95 |
 |---|---|---|
@@ -199,7 +199,7 @@ f-string 前缀 `f"..."`：`f` 先被 `ScanIdentifier` 当成一个独立标识�
    字面量 `'x'` 的开引号。这意味着从 `struct Greeter<'a> {` 中的那个 `'`
    开始，一直到 `let ch: char = '` 之前的**几乎整个文件正文**（包括
    `impl<'a>`、`fn new`、`format!` 调用、`println!` 语句、真实字符串
-   `"你好，{}!欢迎使用 mdvn"` 等）都会被当成同一个"未终止字符字面量"的
+   `"你好，{}!欢迎使用 markair"` 等）都会被当成同一个"未终止字符字面量"的
    内容一次性染成字符串颜色，直到 `'x'` 的 `'` 把它闭合。这正是任务描述
    里点名的"Rust 高亮最经典的坑"，本次人工过一遍确认**当前实现确实会
    踩上**，误标记范围远超"每份不超过 2 处"的线，判定必修。
@@ -293,7 +293,7 @@ Java 各发现 `TryRawString` 分支缺口导致的真实误标记，其中 Rust
 - 第 5/6/9/11 行的 `<'a>`、`&'a str`、`Greeter<'a>`：`'` 后跟标识符字符
   `a`，标识符长度为 1，但紧跟的字符是 `>`/空格/`,` 等而不是 `'`，判定为
   生命周期，只消费 `'a` 两个字节，不再一路吞后续内容——`impl`、`fn`、
-  `format!` 调用、真实字符串 `"你好，{}!欢迎使用 mdvn"` 等均按原语法各自
+  `format!` 调用、真实字符串 `"你好，{}!欢迎使用 markair"` 等均按原语法各自
   正常成 token，不再被误染成一段未闭合字符串。
 - 第 23 行 `r#"路径示例: "C:\Users\测试""#`：命中新的 Rust 原始字符串分支，
   从 `r#"` 开始逐字节扫描，遇到内嵌的裸双引号（`"C:\Users\测试"` 前后两个
@@ -323,7 +323,7 @@ Java 各发现 `TryRawString` 分支缺口导致的真实误标记，其中 Rust
 - 新增 9 个单测（`tests/test_lexer.cpp`：Rust 生命周期/字符字面量/转义
   字符字面量/`r#"..."#` 闭合与未闭合、Java 文本块内裸引号不提前闭合与
   未闭合），覆盖本次三处必修的正向与边界场景；连同既有用例合计
-  420 个，全部通过（含 `mdvn_tests` 全部套件与既有 corpus/fuzz smoke）。
+  420 个，全部通过（含 `markair_tests` 全部套件与既有 corpus/fuzz smoke）。
 - 本次修复只处理了 T67 点名的三处必修项，**不涉及** 6.3/6.5/6.11 节里
   记录的"可接受/观察项"（C# `$"`/`@"` 缺专用分支、TS 正则字面量无高亮、
   Shell heredoc 边界识别），如实记录：这些仍然是已知限制，留给后续任务

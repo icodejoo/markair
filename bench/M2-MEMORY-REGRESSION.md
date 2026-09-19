@@ -23,7 +23,7 @@
 
 1. **高亮功能（T50~T53）不是这次波动的原因。** 同一个二进制上 A/B 开关高亮，
    BENCH-A 的 `private_bytes` 中位数只差 **约 120KB（0.8%）**。
-2. **BENCH-A 的 15MB 里，mdvn 自己的数据结构只占约 652KB（4.3%）。** 其余
+2. **BENCH-A 的 15MB 里，markair 自己的数据结构只占约 652KB（4.3%）。** 其余
    约 14.9MB 全部来自 CRT/加载器、Win32 窗口，以及 **D2D 软件渲染目标 + DirectWrite
    软件文字光栅化**这三块系统侧分配。
 3. **P95 超标是这个指标本身的噪声，不是代码的属性。** 同一个二进制连续 14 轮，
@@ -62,7 +62,7 @@
 
 ## 3. 高亮 A/B：同一个二进制，只开关高亮（N=12）
 
-在 `CreateLayoutForBlock` 里加了一个临时环境变量开关，`MDVN_NO_HL=1` 时完全跳过
+在 `CreateLayoutForBlock` 里加了一个临时环境变量开关，`MARKAIR_NO_HL=1` 时完全跳过
 词法扫描与 `codeHighlights` 落盘，其余代码路径、二进制、机器状态完全相同——
 这是把"高亮的内存代价"从其它 M2 改动里干净剥离出来的唯一可靠办法。
 
@@ -128,8 +128,8 @@
 
 **归因结论：BENCH-A 的 private_bytes 有约 95.7% 来自系统侧（D2D 软件渲染目标
 3.82MB + DWrite/D2D 软件文字光栅化 6.85MB + 首帧 blit 2.15MB + 进程基线 1.52MB
-+ 窗口 0.38MB），mdvn 自己的全部 Arena 合计 652KB。这道门禁实际上在量
-"Direct2D 软件渲染一屏文字要多少内存"，而不是在量 mdvn 的数据结构。**
++ 窗口 0.38MB），markair 自己的全部 Arena 合计 652KB。这道门禁实际上在量
+"Direct2D 软件渲染一屏文字要多少内存"，而不是在量 markair 的数据结构。**
 
 ## 5. P95 为什么不稳：噪声定位到 DWrite
 
@@ -155,7 +155,7 @@
 - 稳定段：`pu_start` 摆幅 28KB，`pu_wnd` 摆幅 127KB，首帧入口摆幅 266KB。
 - 波动段：`DrawBlock` 循环后 13291520~15171584，**摆幅 1.88MB**。
 - 两个超过 16MB 的离群轮（17.42MB、16.63MB）**全部由 `DrawBlock` 段的尖峰造成**，
-  与 mdvn 分配的任何东西无关——那一段里 mdvn 只是按顺序调用
+  与 markair 分配的任何东西无关——那一段里 markair 只是按顺序调用
   `DrawTextLayout`/`FillRoundedRectangle`，内存是 DirectWrite 的文本分析结果与
   D2D 软件字形缓存在吃。
 
@@ -199,7 +199,7 @@ T49 基线那一批同样出现过 16146432（15.40MB）的离群轮。
 
 为什么这个因素在自动化里"时隐时现"：`bench\run_bench.ps1` 的 `Invoke-OneRun`
 是用 `Stop-Process -Force` 强杀进程的，`WM_DESTROY`/`SaveAppSettings` 不会执行，
-所以**跑 bench 本身不会写出 `state.ini`**。但只要开发者手动双击打开过 mdvn、
+所以**跑 bench 本身不会写出 `state.ini`**。但只要开发者手动双击打开过 markair、
 正常关窗（T55/T56 会把窗口矩形与最大化态写进 `state.ini`），之后**每一次**
 BENCH-A 都会继承那个矩形，读数整体抬升且抬升多少完全取决于当时窗口多大。
 这与"连续多次测量在 15.5MB~16.5MB 之间、经常超标"的现象高度吻合——
@@ -215,7 +215,7 @@ BENCH-A 都会继承那个矩形，读数整体抬升且抬升多少完全取决
 ## 7. 是否要放宽 16MB 阈值：建议与理由（决定权在用户）
 
 **如实结论：没有找到能把 BENCH-A P95 真正压到 16MB 以下的合理优化。**
-mdvn 自己只占 652KB，剩下 95.7% 在 D2D/DWrite 手里；能动它的只有两条，
+markair 自己只占 652KB，剩下 95.7% 在 D2D/DWrite 手里；能动它的只有两条，
 两条都不该由这次排查单方面拍：
 
 - 把文字反锯齿从 ClearType 换成灰度（`SetTextAntialiasMode`）——能明显削减
@@ -240,7 +240,7 @@ mdvn 自己只占 652KB，剩下 95.7% 在 D2D/DWrite 手里；能动它的只�
    ——那样离已观测最坏值太近，门禁会继续间歇性红灯，失去信号价值。
    **本次没有修改 `ci/check_budget.ps1` 里的 `PrivateBytesThresholdMB`（仍为 16）。**
 
-顺带确认另一条 M2 硬线仍然通过：当前 `mdvn.exe` 体积 351744 字节，相对 T49
+顺带确认另一条 M2 硬线仍然通过：当前 `markair.exe` 体积 351744 字节，相对 T49
 基线 312320 字节增量 +39424 字节（≈38.5KB），在 80KB 硬线内，也在
 `HighlightExeSizeThresholdBytes = 394240` 之下。
 
@@ -292,7 +292,7 @@ mdvn 自己只占 652KB，剩下 95.7% 在 D2D/DWrite 手里；能动它的只�
 
 - 修复前：增长量随 cycle 数近似线性上升（约 0.12~0.15MB/cycle）——**无界增长**。
 - 修复后：120 cycles 的增长量不再高于 40 cycles，**有上界、趋平**（剩下的
-  2~4MB 是 DWrite 自己的布局/字形缓存增长，随时间收敛，不是 mdvn 的 arena）。
+  2~4MB 是 DWrite 自己的布局/字形缓存增长，随时间收敛，不是 markair 的 arena）。
 
 ### 8.4 对 BENCH-A 的影响：没有影响（如实说明）
 
@@ -313,6 +313,6 @@ mdvn 自己只占 652KB，剩下 95.7% 在 D2D/DWrite 手里；能动它的只�
   （`tests/test_layout_codeblock.cpp`）：反复滚出/滚回 8 轮，断言
   `codeHighlights.data` 首地址与长度保持不变（地址不变即证明没有二次分配），
   并断言重新 `Relayout` 之后会正确复位重算。
-- 全量单测 `mdvn_tests.exe`：**421 个用例全部通过，0 失败**（原基线 420 + 新增 1），
+- 全量单测 `markair_tests.exe`：**421 个用例全部通过，0 失败**（原基线 420 + 新增 1），
   含既有 corpus_smoke（39/39）与 fuzz_smoke 全部语料。
 - `/W4` 零警告，无新增第三方依赖。

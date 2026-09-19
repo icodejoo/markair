@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -93,4 +93,4 @@ Utf16Slice DecodeToUtf16(StrSlice bytes, EncodingDetection detection, Arena* are
     return Utf16Slice{nullptr, 0};
 }
 
-} // namespace mdvn
+} // namespace markair

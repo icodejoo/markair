@@ -4,7 +4,7 @@
 
 #include "../hl/lexer.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -1133,4 +1133,4 @@ IDWriteTextLayout* BlockLayoutEngine::CreateLayoutForBlock(u32 blockIndex, FontS
     return layout;
 }
 
-}  // namespace mdvn
+}  // namespace markair

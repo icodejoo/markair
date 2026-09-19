@@ -38,8 +38,8 @@
 - **已知口径偏差**：01 §4 定义的"暖启动"是"同一进程已运行过一次、文件已在缓存"
   （对应"第二次及以后打开"），本命令测的是"每轮全新进程 + 文件系统缓存已热"
   （第 1 轮读盘把文件读入系统缓存，第 2~20 轮命中缓存），**不是**"同一进程复用"。
-  这是 M3 裁决记录 #4 采纳的口径（进程内复用在 mdvn 架构下不存在 —— 每个文档
-  是独立进程，见 01 §5.3 第 4 条"不做单实例"），因此"暖启动"在 mdvn 语境下
+  这是 M3 裁决记录 #4 采纳的口径（进程内复用在 markair 架构下不存在 —— 每个文档
+  是独立进程，见 01 §5.3 第 4 条"不做单实例"），因此"暖启动"在 markair 语境下
   唯一可行的解释就是"文件已缓存的新进程"。当前实测中位数 93.475 ms **超过
   60 ms 目标**（但未过 120 ms 上限），这是 T74 的输入数据，不在本任务范围内
   处理。
@@ -60,7 +60,7 @@
   `RAMMap64.exe -Et` 清空 Empty Standby List，模拟"文件从未被读过、系统缓存
   为空"的真冷启动场景，与上面第 1 行的"暖启动"形成对照。
 - **已知口径偏差**：`RAMMap64.exe -Et` 清的是**系统级** Empty Standby List，
-  会影响当前登录会话里其它进程的缓存状态（不限于 mdvn 相关文件），这是
+  会影响当前登录会话里其它进程的缓存状态（不限于 markair 相关文件），这是
   RAMMap 工具本身的行为边界，非本脚本引入的偏差，测量时应关闭其它占用磁盘
   I/O 的程序以减少串扰。本次 T71 验收只验证命令能跑通、`-Cold` 分支能正确
   调用到 RAMMap 可执行文件，**完整 20 轮冷启动实测数据留给 T74**（阶段 S
@@ -81,8 +81,8 @@
   （输出见上面第 1 节，`private_bytes` 中位数 ≈ 14.90 MB，P95 ≈ 15.43 MB）
 - **VMMap 权威值命令（人工，无法脚本化批量跑）**：
   ```powershell
-  build\src\Release\mdvn.exe bench\BENCH-A.md   # 先正常打开一次，静置 10 秒
-  tools\VMMap\vmmap64.exe -p <mdvn.exe 的 PID>   # 在 Process 页签查看 Private Bytes / Private WS
+  build\src\Release\markair.exe bench\BENCH-A.md   # 先正常打开一次，静置 10 秒
+  tools\VMMap\vmmap64.exe -p <markair.exe 的 PID>   # 在 Process 页签查看 Private Bytes / Private WS
   ```
   或用 VMMap 的命令行快照模式落盘（避免逐次手动截图）：
   ```powershell
@@ -128,7 +128,7 @@
 - **样本量**：1（体积是确定性值，不需要多轮）
 - **命令**：
   ```powershell
-  (Get-Item build\src\Release\mdvn.exe).Length
+  (Get-Item build\src\Release\markair.exe).Length
   ```
 - **本机实测输出（2026-09-18）**：`352256` 字节 ≈ 0.336 MB，距 1.5 MB 硬线约 4.5 倍余量。
 - **已知口径偏差**：无（文件大小是确定性度量，无采样误差）。`dumpbin /headers`
@@ -145,8 +145,8 @@
 - **样本量**：10 秒滚动窗口
 - **命令（可行性探测，T72 范围）**：
   ```powershell
-  build\src\Release\mdvn.exe bench\BENCH-A.md &
-  tools\PresentMon.exe --process_name mdvn.exe --output_file bench\presentmon_probe.csv --timed 10
+  build\src\Release\markair.exe bench\BENCH-A.md &
+  tools\PresentMon.exe --process_name markair.exe --output_file bench\presentmon_probe.csv --timed 10
   ```
 - **已知口径偏差 / 阻塞项**：`src/render/renderer.cpp:379` 无条件使用
   `D2D1_RENDER_TARGET_TYPE_SOFTWARE`，**没有 DXGI 交换链**，而 PresentMon 挂的
@@ -182,7 +182,7 @@
 - **样本量**：覆盖打开/点外链/点图片/F5/`--register` 等场景各一次
 - **命令**：
   ```powershell
-  $p = Start-Process build\src\Release\mdvn.exe -ArgumentList "bench\BENCH-A.md" -PassThru
+  $p = Start-Process build\src\Release\markair.exe -ArgumentList "bench\BENCH-A.md" -PassThru
   Start-Sleep -Seconds 2
   Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"
   Stop-Process -Id $p.Id -Force
@@ -201,7 +201,7 @@
 采集内容：操作系统版本、CPU、物理内存、显卡（`Get-CimInstance
 Win32_VideoController`）、是否 RDP 会话（`GetSystemMetrics(SM_REMOTESESSION)`）、
 疑似全局注入/常驻模块进程（关键词匹配，非精确列表，用于提醒"数字受环境干扰"，
-精确定位需要 VMMap 对 mdvn.exe 做模块级快照）。
+精确定位需要 VMMap 对 markair.exe 做模块级快照）。
 
 本机 2026-09-18 实测环境快照（`bench/env_20260918_124424.txt`）：
 ```

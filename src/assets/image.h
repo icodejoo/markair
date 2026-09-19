@@ -1,4 +1,4 @@
-// mdvn 图片解码子系统(T30):WIC 解码封装。
+// markair 图片解码子系统(T30):WIC 解码封装。
 //
 // 设计要点:
 //   - **惰性初始化**:文档里没有图片就不 CoInitializeEx、不创建 IWICImagingFactory
@@ -20,7 +20,7 @@
 
 struct IWICImagingFactory;
 
-namespace mdvn {
+namespace markair {
 
 // 单张图片的解码上限:任一边超过该像素数就按比例降采样,与 T32 缓存共用。
 // 取 512 是 2026-09-17 裁决的结果:T32 改为"永久缓存、不做淘汰"之后,必须靠
@@ -69,7 +69,7 @@ struct DecodedImage {
  *
  * @param href 图片地址(UTF-8 切片),可以是本地路径、URL 或 data: URI。
  * @return 判定为 SVG 返回 true。
- * @example bool svg = mdvn::IsSvgImageRef(mdvn::StrSlice{"logo.SVG", 8}); // true
+ * @example bool svg = markair::IsSvgImageRef(markair::StrSlice{"logo.SVG", 8}); // true
  */
 bool IsSvgImageRef(StrSlice href);
 
@@ -83,8 +83,8 @@ bool IsSvgImageRef(StrSlice href);
  * @param outWidth 输出:缩放后的宽,非空。
  * @param outHeight 输出:缩放后的高,非空。
  * @example
- *   mdvn::u32 w = 0, h = 0;
- *   mdvn::ComputeDownscaledSize(8000, 4000, 4096, &w, &h); // w=4096, h=2048
+ *   markair::u32 w = 0, h = 0;
+ *   markair::ComputeDownscaledSize(8000, 4000, 4096, &w, &h); // w=4096, h=2048
  */
 void ComputeDownscaledSize(u32 srcWidth, u32 srcHeight, u32 maxDim, u32* outWidth, u32* outHeight);
 
@@ -94,7 +94,7 @@ void ComputeDownscaledSize(u32 srcWidth, u32 srcHeight, u32 maxDim, u32* outWidt
  * @param width 像素宽。
  * @param height 像素高。
  * @return 字节数(用 u64 避免大图溢出)。
- * @example mdvn::u64 bytes = mdvn::DecodedByteSize(1920, 1080); // 8294400
+ * @example markair::u64 bytes = markair::DecodedByteSize(1920, 1080); // 8294400
  */
 u64 DecodedByteSize(u32 width, u32 height);
 
@@ -105,9 +105,9 @@ u64 DecodedByteSize(u32 width, u32 height);
  * 因此也不会触发 windowscodecs.dll 的延迟加载 —— 这是"无图文档零 WIC 开销"的实现保证。
  *
  * @example
- *   mdvn::ImageDecoder decoder;
- *   mdvn::DecodedImage img = decoder.DecodeFromMemory(bytes, len, renderTarget);
- *   if (img.status == mdvn::ImageStatus::Ok && img.bitmap) {
+ *   markair::ImageDecoder decoder;
+ *   markair::DecodedImage img = decoder.DecodeFromMemory(bytes, len, renderTarget);
+ *   if (img.status == markair::ImageStatus::Ok && img.bitmap) {
  *       renderTarget->DrawBitmap(img.bitmap, rect);
  *       img.bitmap->Release();
  *   }
@@ -126,7 +126,7 @@ public:
     /**
      * WIC 工厂是否已经真正创建过(即本进程是否已经碰过 windowscodecs.dll)。
      * @return 已惰性初始化返回 true。
-     * @example MDVN_CHECK(!decoder.IsInitialized()); // 还没解码过任何图片
+     * @example MARKAIR_CHECK(!decoder.IsInitialized()); // 还没解码过任何图片
      */
     bool IsInitialized() const { return factory_ != nullptr; }
 
@@ -139,7 +139,7 @@ public:
      * @param target D2D 渲染目标,用于创建 ID2D1Bitmap;传 nullptr 时只解码取尺寸、
      *               不创建位图(单元测试/仅探测尺寸场景)。
      * @return 解码结果;失败时 bitmap 为 nullptr 且 status 非 Ok,绝不崩溃。
-     * @example mdvn::DecodedImage img = decoder.DecodeFromMemory(buf, n, nullptr);
+     * @example markair::DecodedImage img = decoder.DecodeFromMemory(buf, n, nullptr);
      */
     DecodedImage DecodeFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target);
 
@@ -150,7 +150,7 @@ public:
      * @param path 绝对或相对的宽字符文件路径,非空。
      * @param target D2D 渲染目标,可为 nullptr(只取尺寸)。
      * @return 解码结果;文件不存在/损坏返回 Failed。
-     * @example mdvn::DecodedImage img = decoder.DecodeFromFile(L"C:\\a\\b.png", target);
+     * @example markair::DecodedImage img = decoder.DecodeFromFile(L"C:\\a\\b.png", target);
      */
     DecodedImage DecodeFromFile(const wchar_t* path, ID2D1RenderTarget* target);
 
@@ -166,4 +166,4 @@ private:
     bool comInitialized_;         // COM 是否由本对象初始化(决定析构时是否 CoUninitialize)
 };
 
-}  // namespace mdvn
+}  // namespace markair

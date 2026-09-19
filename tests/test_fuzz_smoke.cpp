@@ -11,7 +11,7 @@
 //      任意数量的块,只要不崩溃、不越界)。
 // 真正的越界/空指针解引用会让测试进程直接崩溃退出,ctest 将其上报为失败,
 // 这就是本文件对"不崩溃"的验证手段;"不卡死"由计时断言兜底。
-#include "mdvn_test.h"
+#include "markair_test.h"
 #include "../src/util/arena.h"
 #include "../src/util/str.h"
 #include "../src/doc/model.h"
@@ -25,19 +25,19 @@
 #include <cwchar>
 #include <windows.h>
 
-using mdvn::Arena;
-using mdvn::Document;
-using mdvn::DetectedEncoding;
-using mdvn::EncodingDetection;
-using mdvn::BlockLayoutEngine;
-using mdvn::FileMap;
-using mdvn::FileMapError;
-using mdvn::ParseMarkdown;
-using mdvn::SkipFrontMatter;
-using mdvn::StrSlice;
+using markair::Arena;
+using markair::Document;
+using markair::DetectedEncoding;
+using markair::EncodingDetection;
+using markair::BlockLayoutEngine;
+using markair::FileMap;
+using markair::FileMapError;
+using markair::ParseMarkdown;
+using markair::SkipFrontMatter;
+using markair::StrSlice;
 
-#ifndef MDVN_FUZZ_DIR
-#define MDVN_FUZZ_DIR "bench/fuzz"
+#ifndef MARKAIR_FUZZ_DIR
+#define MARKAIR_FUZZ_DIR "bench/fuzz"
 #endif
 
 namespace {
@@ -66,11 +66,11 @@ const FuzzCase kFuzzFiles[] = {
 // 单文件处理耗时上限(验收线原文:"单文件处理 ≤3s")。
 constexpr double kMaxSecondsPerFile = 3.0;
 
-// 把 MDVN_FUZZ_DIR(UTF-8 narrow 字面量)与语料文件名拼成宽字符完整路径,
+// 把 MARKAIR_FUZZ_DIR(UTF-8 narrow 字面量)与语料文件名拼成宽字符完整路径,
 // 手法与 test_corpus_smoke.cpp::BuildCorpusPath 一致。
 void BuildFuzzPath(const wchar_t* fileName, wchar_t* out, size_t outCap) {
     wchar_t dir[512];
-    const char* narrowDir = MDVN_FUZZ_DIR;
+    const char* narrowDir = MARKAIR_FUZZ_DIR;
     size_t i = 0;
     for (; narrowDir[i] != 0 && i + 1 < 512; ++i) dir[i] = static_cast<wchar_t>(narrowDir[i]);
     dir[i] = 0;
@@ -80,12 +80,12 @@ void BuildFuzzPath(const wchar_t* fileName, wchar_t* out, size_t outCap) {
 // 复刻 src/app/main.cpp::LoadMarkdownFile 的编码嗅探 + front matter 跳过 +
 // 解析逻辑,与 test_corpus_smoke.cpp::LoadCorpusFile 完全一致。
 Document LoadFuzzFile(StrSlice raw, Arena* arena) {
-    EncodingDetection detection = mdvn::DetectEncoding(raw);
+    EncodingDetection detection = markair::DetectEncoding(raw);
     StrSlice utf8;
     if (detection.encoding == DetectedEncoding::Utf16Le ||
         detection.encoding == DetectedEncoding::AnsiFallback) {
-        mdvn::Utf16Slice utf16 = mdvn::DecodeToUtf16(raw, detection, arena);
-        utf8 = mdvn::Utf16ToUtf8(utf16, arena);
+        markair::Utf16Slice utf16 = markair::DecodeToUtf16(raw, detection, arena);
+        utf8 = markair::Utf16ToUtf8(utf16, arena);
     } else {
         utf8 = StrSlice{raw.data + detection.contentOffset, raw.len - detection.contentOffset};
     }
@@ -93,7 +93,7 @@ Document LoadFuzzFile(StrSlice raw, Arena* arena) {
     return ParseMarkdown(body, arena);
 }
 
-// 返回两次 QueryPerformanceCounter 之间的秒数。mdvn 全程不用 <chrono>,
+// 返回两次 QueryPerformanceCounter 之间的秒数。markair 全程不用 <chrono>,
 // 沿用 src/app/bench.cpp 里同款的 QPC 计时手法,保持风格一致。
 double ElapsedSeconds(LARGE_INTEGER start, LARGE_INTEGER end, LARGE_INTEGER freq) {
     return static_cast<double>(end.QuadPart - start.QuadPart) / static_cast<double>(freq.QuadPart);
@@ -104,7 +104,7 @@ double ElapsedSeconds(LARGE_INTEGER start, LARGE_INTEGER end, LARGE_INTEGER freq
 // 用例:对 bench/fuzz/ 下每一份畸形语料跑一次"打开 -> 解析 -> 布局",
 // 全部不崩溃、单文件 <=3s,且 kMaxNestingDepth/kMaxDocumentNodeCount 在
 // 对应语料上按预期触发(或不触发)。
-MDVN_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
+MARKAIR_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
 
@@ -118,7 +118,7 @@ MDVN_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
         if (err != FileMapError::None) {
             fprintf(stderr, "fuzz_smoke: FAILED TO OPEN %ls (err=%d)\n", fc.fileName,
                     static_cast<int>(err));
-            MDVN_CHECK(err == FileMapError::None);
+            MARKAIR_CHECK(err == FileMapError::None);
             continue;
         }
         ++opened;
@@ -127,7 +127,7 @@ MDVN_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
         // kMaxDocumentNodeCount(20 万节点、每节点 sizeof(Block)=32 上限)估算,
         // 加上 huge-data-uri.md 的 8MB 字符串展开副本,256MB 留有充分余量。
         Arena arena;
-        MDVN_CHECK(arena.Init(256 * 1024 * 1024));
+        MARKAIR_CHECK(arena.Init(256 * 1024 * 1024));
 
         StrSlice raw = fm.Data();
 
@@ -140,8 +140,8 @@ MDVN_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
         fprintf(stderr, "fuzz_smoke: %ls parse_seconds=%.3f truncated=%d blocks=%u\n", fc.fileName,
                 seconds, doc.truncated ? 1 : 0, static_cast<unsigned>(doc.blocks.Size()));
 
-        MDVN_CHECK(seconds <= kMaxSecondsPerFile);
-        MDVN_CHECK_EQ(doc.truncated ? 1 : 0, fc.expectTruncated ? 1 : 0);
+        MARKAIR_CHECK(seconds <= kMaxSecondsPerFile);
+        MARKAIR_CHECK_EQ(doc.truncated ? 1 : 0, fc.expectTruncated ? 1 : 0);
 
         // 布局阶段同样纳入计时预算与"不崩溃"验证。注意:BlockLayoutEngine
         // 自己的几何数组用固定 32MB Arena(见 layout.cpp kGeometryArenaReserveBytes),
@@ -158,15 +158,15 @@ MDVN_TEST(FuzzSmoke_AllMalformedFilesHandledSafely) {
         seconds += ElapsedSeconds(t0, t1, freq);
 
         if (relayoutOk) {
-            MDVN_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
+            MARKAIR_CHECK_EQ(layout.BlockCount(), doc.blocks.Size());
         } else {
             fprintf(stderr, "fuzz_smoke: %ls Relayout safely gave up (geometry arena exhausted)\n",
                     fc.fileName);
         }
-        MDVN_CHECK(seconds <= kMaxSecondsPerFile);
+        MARKAIR_CHECK(seconds <= kMaxSecondsPerFile);
 
         fm.Close();
     }
 
-    MDVN_CHECK_EQ(opened, static_cast<int>(sizeof(kFuzzFiles) / sizeof(kFuzzFiles[0])));
+    MARKAIR_CHECK_EQ(opened, static_cast<int>(sizeof(kFuzzFiles) / sizeof(kFuzzFiles[0])));
 }

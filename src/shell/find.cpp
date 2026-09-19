@@ -2,7 +2,7 @@
 
 #include "../util/str.h"
 
-namespace mdvn {
+namespace markair {
 
 FindSession::FindSession(Arena* results, Arena* scratch)
     : results_(results), scratch_(scratch), matches_(results), queryLen_(0),
@@ -97,4 +97,4 @@ bool FindSession::GoPrev() {
     return true;
 }
 
-}  // namespace mdvn
+}  // namespace markair

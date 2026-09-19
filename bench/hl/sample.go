@@ -7,7 +7,7 @@ const pattern = `C:\Users\测试\路径`
 
 // 打印中文问候,含中文注释
 func greet(name string) string {
-	return fmt.Sprintf("你好,%s!欢迎使用 mdvn", name)
+	return fmt.Sprintf("你好,%s!欢迎使用 markair", name)
 }
 
 func main() {

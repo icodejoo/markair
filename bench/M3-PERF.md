@@ -9,14 +9,14 @@
 
 ## 0. 测试用例数（先说清楚，避免用旧数字）
 
-本任务开工时**实跑一次** `mdvn_tests.exe`（不沿用 T79/T81/T82 报告过的 426/429 等
+本任务开工时**实跑一次** `markair_tests.exe`（不沿用 T79/T81/T82 报告过的 426/429 等
 可能已过期的数字）：
 
 ```powershell
-build\tests\Release\mdvn_tests.exe
+build\tests\Release\markair_tests.exe
 ```
 
-**本机实测输出（2026-09-18）：`mdvn_tests: 426 test(s) run, 0 failure(s)`。**
+**本机实测输出（2026-09-18）：`markair_tests: 426 test(s) run, 0 failure(s)`。**
 
 > 之前几个任务（T76=423、T79=426→429、T82=429）报的数字之间有出入——按本次实跑
 > 结果，**当前真实用例数是 426**，以此为准，不采信文档里更早或更晚的其它数字。
@@ -36,7 +36,7 @@ build\tests\Release\mdvn_tests.exe
 | 3 | 常驻内存 Private WS（BENCH-A，静置 10s） | ≤ 15 MB | 25 MB | **10.48 MB**（10,732 K，VMMap 权威值，`M3-MEMORY.md` §3） | — | **达标** |
 | 4 | 常驻内存（空文档/刚启动） | ≤ 8 MB | 12 MB | **6.87 MB**（7,040 K，VMMap 权威值，`M3-MEMORY.md` §2） | — | **达标** |
 | 5 | exe 体积 | ≤ 1.5 MB | 3 MB | **360448 B ≈ 0.344 MB**（`M3-RELEASE.md` §2，T76 新增埋点后的最终构建） | — | **达标（余量约 4.2 倍）** |
-| 6 | 滚动帧率（BENCH-A） | 60 FPS 无掉帧 | 平均 < 55 FPS 不通过 | **mdvn 自身重绘 P50 1.82 ms（≈550 FPS 能力）；DWM 合成口径平均 62.54 FPS**（`M3-RENDER.md` §5.2） | 见下方口径说明 | **达标**（按两种口径的解读方式，见下方"口径偏差声明"第 6 行） |
+| 6 | 滚动帧率（BENCH-A） | 60 FPS 无掉帧 | 平均 < 55 FPS 不通过 | **markair 自身重绘 P50 1.82 ms（≈550 FPS 能力）；DWM 合成口径平均 62.54 FPS**（`M3-RENDER.md` §5.2） | 见下方口径说明 | **达标**（按两种口径的解读方式，见下方"口径偏差声明"第 6 行） |
 | 7 | 10 MB 文档打开时间 | ≤ 1.5 s 且 UI 不卡死 | 3 s | **87.532 ms**（`M3-HUGE.md` §1，T77 复核），消息循环阻塞 <65ms，首次滚动响应 <1ms | 91.385 ms | **达标（余量约 17 倍）** |
 | 8 | 子进程数 | 恒为 0 | 出现任何子进程即不通过 | **0**（BENCH-A/B/D + 点外链 + 点图片 + F5 + `--register`，`M3-RELEASE.md` §3） | — | **达标**（点击场景的命中精度未获独立证实，见口径偏差声明） |
 
@@ -74,7 +74,7 @@ powershell -File bench\run_bench.ps1 -Target EMPTY   -N 20   # 第4行
 ```
 VMMap 权威值（GUI 工具，单次人工快照，无法批量跑）：
 ```powershell
-build\src\Release\mdvn.exe --bench bench\BENCH-A.md   # 或 bench\EMPTY.md
+build\src\Release\markair.exe --bench bench\BENCH-A.md   # 或 bench\EMPTY.md
 # 静置 10 秒后
 tools\VMMap\vmmap64.exe -accepteula -p <PID> bench\vmmap_xxx_snapshot.mtl
 ```
@@ -87,23 +87,23 @@ tools\VMMap\vmmap64.exe -accepteula -p <PID> bench\vmmap_xxx_snapshot.mtl
 ### 2.4 exe 体积（第 5 行）
 
 ```powershell
-(Get-Item build\src\Release\mdvn.exe).Length
+(Get-Item build\src\Release\markair.exe).Length
 # 进入 VS Developer 命令行环境后：
-dumpbin /headers build\src\Release\mdvn.exe
+dumpbin /headers build\src\Release\markair.exe
 ```
 - 样本量：1（确定性值）；无统计量。
 
 ### 2.5 滚动帧率（第 6 行）
 
-口径①（mdvn 自身重绘，`--bench` 埋点）：
+口径①（markair 自身重绘，`--bench` 埋点）：
 ```powershell
-build\src\Release\mdvn.exe --bench bench\BENCH-A.md
+build\src\Release\markair.exe --bench bench\BENCH-A.md
 powershell -File bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16 -SpinWait
 ```
 口径②（DWM 合成上屏，PresentMon）：
 ```powershell
-build\src\Release\mdvn.exe bench\BENCH-A.md
-tools\PresentMon.exe --process_name mdvn.exe --timed 10 --terminate_after_timed --output_file bench\render_fps\bench_a.csv
+build\src\Release\markair.exe bench\BENCH-A.md
+tools\PresentMon.exe --process_name markair.exe --timed 10 --terminate_after_timed --output_file bench\render_fps\bench_a.csv
 powershell -File bench\scroll_probe.ps1 -DurationSeconds 10 -IntervalMs 16 -SpinWait
 ```
 - 样本量：10 秒滚动窗口（口径①约 625 帧、口径②约 500+ 帧）；统计量：P50/P95/P99 +
@@ -125,7 +125,7 @@ powershell -File bench\run_bench.ps1 -Target BENCH-D -N 20
 ### 2.7 子进程数（第 8 行）
 
 ```powershell
-$p = Start-Process build\src\Release\mdvn.exe -ArgumentList "bench\BENCH-A.md" -PassThru
+$p = Start-Process build\src\Release\markair.exe -ArgumentList "bench\BENCH-A.md" -PassThru
 Start-Sleep -Seconds 4
 Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"
 Stop-Process -Id $p.Id -Force
@@ -172,12 +172,12 @@ CPU：13th Gen Intel(R) Core(TM) i5-13500，核心数 14，逻辑处理器 20
 
 | 行 | 口径偏差 |
 |---|---|
-| 1（暖启动） | 01 §4 定义的"暖启动"是"同一进程复用"，但 mdvn 架构下**每个文档是独立进程**（不做单实例）。本文档采纳的口径是"文件已被系统缓存的新进程"（M3 裁决 #4 认定的唯一可行解释），**不是**真正的"同进程复用"。 |
+| 1（暖启动） | 01 §4 定义的"暖启动"是"同一进程复用"，但 markair 架构下**每个文档是独立进程**（不做单实例）。本文档采纳的口径是"文件已被系统缓存的新进程"（M3 裁决 #4 认定的唯一可行解释），**不是**真正的"同进程复用"。 |
 | 2（冷启动） | `RAMMap64.exe -Et` 清的是**系统级** Empty Standby List，会影响当前会话内其它进程的缓存状态，非本脚本引入的偏差，是 RAMMap 工具本身的行为边界。 |
 | 3（常驻内存） | 代理指标 `PrivateUsage`（≈ Private Bytes）**含已提交未驻留的部分**，比 VMMap 权威值 Private WS 更大（BENCH-A 差值 4.70 MB）。本文档"最终实测值"列取的是权威值，代理指标的 20 轮统计量在 `M3-METHOD.md` §3 单独列出（中位数 ≈14.90MB / P95≈15.43MB），两者不是同一个数，不可混用比较。 |
 | 4（空文档内存） | 同第 3 行。差值 1.31 MB（VMMap 权威 6.87MB vs 代理指标同期快照 8.19~8.97MB）。 |
 | 5（exe 体积） | 无偏差（文件大小是确定性度量）。但注意：T71 最初记录的基线是 352256 B，本报告采用的是 T76 新增逐帧埋点之后、`M3-RELEASE.md` 实测的**最终值 360448 B**——两者都在 1.5MB 硬线内，差异仅因新增了 `--bench` 惰性诊断代码。 |
-| 6（滚动帧率） | **这是全表口径最复杂的一行，必须分开读，不能只报一个数**：口径①（`--bench` 埋点测的"PaintOnce 入口→D2D EndDraw 返回"）测的是 mdvn 自身重绘能力；口径②（PresentMon `MsBetweenPresents`）测的是"DWM 把这个窗口合成上屏的频率"，其**上界由输入事件到达速率决定**，在"只有收到输入才重绘"的事件驱动应用上，PresentMon 测到的"平均 FPS"实际近似等于"滚轮消息投递速率"，不是 mdvn 的渲染能力上限（`M3-RENDER.md` §2.3 已用双投递速率对照实验证实这一点：mdvn 自身单帧耗时在 16ms 投递与 31ms 投递两种口径下完全一致，均为 2.3ms 左右）。**判定"达标"用的是口径①**（架构上限，反映 mdvn 真实渲染能力），口径②的数字作为"当前投递速率下的实测合成频率"一并列出，供参考，不作为唯一判据——这个选择本身建议由 T83 门禁收紧时再次确认。另外 BENCH-D（10MB 文档）口径②平均 FPS 是 54.83，卡在 55 FPS 线下方 0.17，已交接 T77 处理（T77 复核后判定该指标不再是瓶颈，见 `M3-HUGE.md`），本文档不代为改判。 |
+| 6（滚动帧率） | **这是全表口径最复杂的一行，必须分开读，不能只报一个数**：口径①（`--bench` 埋点测的"PaintOnce 入口→D2D EndDraw 返回"）测的是 markair 自身重绘能力；口径②（PresentMon `MsBetweenPresents`）测的是"DWM 把这个窗口合成上屏的频率"，其**上界由输入事件到达速率决定**，在"只有收到输入才重绘"的事件驱动应用上，PresentMon 测到的"平均 FPS"实际近似等于"滚轮消息投递速率"，不是 markair 的渲染能力上限（`M3-RENDER.md` §2.3 已用双投递速率对照实验证实这一点：markair 自身单帧耗时在 16ms 投递与 31ms 投递两种口径下完全一致，均为 2.3ms 左右）。**判定"达标"用的是口径①**（架构上限，反映 markair 真实渲染能力），口径②的数字作为"当前投递速率下的实测合成频率"一并列出，供参考，不作为唯一判据——这个选择本身建议由 T83 门禁收紧时再次确认。另外 BENCH-D（10MB 文档）口径②平均 FPS 是 54.83，卡在 55 FPS 线下方 0.17，已交接 T77 处理（T77 复核后判定该指标不再是瓶颈，见 `M3-HUGE.md`），本文档不代为改判。 |
 | 7（10MB文档） | `kMaxDocumentNodeCount`（200000）会截断此语料（`benchd_smoke` 实测 `truncated=true`），测到的"87.5ms 打开"是**截断后的部分文档**，不是完整 10MB 文档的排版结果——这是产品事实，如实记录。 |
 | 8（子进程数） | "打开文档/F5/`--register`"场景已充分验证（子进程数恒为0）；"点外链/点图片"场景受本沙箱环境截图 API 失效所限（`Graphics.CopyFromScreen` 报错、`PrintWindow` 对 D2D 软件渲染窗口截出纯白），**未能独立证实点击精准命中了可点击热区**，只能确认"无论是否命中，全程零子进程"，`M3-RELEASE.md` §3.3 已如实注明这一局限。 |
 
@@ -192,7 +192,7 @@ CPU：13th Gen Intel(R) Core(TM) i5-13500，核心数 14，逻辑处理器 20
   Direct2D 的 `CreateHwndRenderTarget` 无论渲染目标类型是软件还是硬件，底层呈现通道
   始终强制经过 DXGI，本机没有可用硬件 D3D 设备时会退化到 WARP
   （`D3D10Warp.dll` + `d3d11.dll` + `dxgi.dll` + `dxcore.dll` ≈ 10.8MB 模块加载）。
-  这是 **Direct2D API 本身的强制行为，不是 mdvn 代码里可以绕开的一次性初始化浪费**。
+  这是 **Direct2D API 本身的强制行为，不是 markair 代码里可以绕开的一次性初始化浪费**。
 - **已尝试的优化手段**（均无效或被明文禁止，详见 `M3-STARTUP.md` 第 4 节表格）：
   复核首帧虚拟化裁剪（已生效，非瓶颈）、复核 `/OPT`/`/LTCG`（已在位）、复核
   `/DELAYLOAD`（按预期工作）、惰性初始化排查（未发现可挪动候选）、提前调用

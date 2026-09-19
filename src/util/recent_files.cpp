@@ -5,14 +5,14 @@
 #include <cwchar>
 #include <cstring>
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
 // Relative path to history file from %LOCALAPPDATA%.
 //
 // 历史记录文件相对于 %LOCALAPPDATA% 的固定子路径。
-constexpr wchar_t kHistoryRelativePath[] = L"\\mdvn\\history.txt";
+constexpr wchar_t kHistoryRelativePath[] = L"\\markair\\history.txt";
 
 // Buffer size for reading/writing history file. Sized for the documented
 // worst case, not the common case: kMaxRecentFiles (100) entries at
@@ -312,7 +312,7 @@ bool SaveRecentFiles(const RecentFiles& list) {
 
     wchar_t dirPath[MAX_PATH]{};
     wcscpy_s(dirPath, MAX_PATH, localAppData);
-    wcscat_s(dirPath, MAX_PATH, L"\\mdvn");
+    wcscat_s(dirPath, MAX_PATH, L"\\markair");
 
     CreateDirectoryW(localAppData, nullptr);
     if (!CreateDirectoryW(dirPath, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
@@ -351,4 +351,4 @@ bool SaveRecentFiles(const RecentFiles& list) {
     return true;
 }
 
-}  // namespace mdvn
+}  // namespace markair

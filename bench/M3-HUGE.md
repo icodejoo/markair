@@ -65,13 +65,13 @@ powershell -File bench\run_bench.ps1 -Target BENCH-D -N 20
 核心逻辑记录如下（未落入仓库，因为是一次性验证脚本，不是常驻测量能力；若后续
 需要固化为可复现命令，应参照 `bench/scroll_probe.ps1` 的写法迁移进 `bench/`）：
 
-1. `Start-Process mdvn.exe --bench BENCH-D.md`，记录进程启动时刻。
-2. 用 `EnumWindows` + `GetWindowThreadProcessId` + 类名匹配（`mdvn_main_window`）
+1. `Start-Process markair.exe --bench BENCH-D.md`，记录进程启动时刻。
+2. 用 `EnumWindows` + `GetWindowThreadProcessId` + 类名匹配（`markair_main_window`）
    自旋轮询定位目标窗口（原因同 `scroll_probe.ps1` 的说明：本机 `FindWindowW`
    不可靠，`EnumWindows` 语义等价且稳定）。
 3. 找到窗口后立即测一次 `WM_NULL` 往返，再连续测 50 次取稳态分布。
 
-**关键事实**：mdvn 是单线程架构（§8 约束），窗口创建与首次文档解析/布局都在
+**关键事实**：markair 是单线程架构（§8 约束），窗口创建与首次文档解析/布局都在
 主线程同步完成——也就是说，从进程启动到 `CreateMainWindow` 返回、窗口开始能被
 `EnumWindows` 枚举到之前，消息循环根本没有开始跑。因此"消息循环被阻塞的最长
 时间"就等于"进程启动到窗口出现"这段时间，这段时间与首屏时间高度重合。
@@ -104,7 +104,7 @@ powershell -File bench\run_bench.ps1 -Target BENCH-D -N 20
 在窗口进入稳态后，`PostMessageW` 投递一次 `WM_MOUSEWHEEL`，紧接着测一次
 `WM_NULL` 往返（消息队列 FIFO，`WM_NULL` 排在滚动消息触发的重绘之后，其往返
 耗时近似等于"滚动消息处理完成所需时间"）。3 次实测：**0.61 / 0.50 / 0.44 ms**，
-远低于"≤ 100 ms"的判据，与 §1 里 mdvn 自身单帧重绘 P50（BENCH-D 约 2.5 ms，见
+远低于"≤ 100 ms"的判据，与 §1 里 markair 自身单帧重绘 P50（BENCH-D 约 2.5 ms，见
 `M3-RENDER.md`）同一数量级，符合预期。
 
 ---
@@ -115,7 +115,7 @@ powershell -File bench\run_bench.ps1 -Target BENCH-D -N 20
    （来自 §1 的 BENCH-D 20 轮暖启动）。
 2. **峰值 `private_bytes`**：中位数 **23,695,360 字节（≈22.6 MB）**，P95
    **25,616,384 字节（≈24.4 MB）**（同上）。
-3. **是否触发截断**：`mdvn_tests.exe` 的 `benchd_smoke` 用例实测输出：
+3. **是否触发截断**：`markair_tests.exe` 的 `benchd_smoke` 用例实测输出：
 
    ```
    benchd_smoke: file_bytes=10499788 blocks=33299 truncated=true(触发kMaxDocumentNodeCount上限截断)
@@ -157,10 +157,10 @@ T76 的修复（回填截断后的 `childCount`）没有破坏这个特性。
 按要求仍跑了一遍确认基线：
 
 ```
-build\tests\Release\mdvn_tests.exe
+build\tests\Release\markair_tests.exe
 ```
 
-输出：`mdvn_tests: 423 test(s) run, 0 failure(s)`，与会话开始时一致，`benchd_smoke`
+输出：`markair_tests: 423 test(s) run, 0 failure(s)`，与会话开始时一致，`benchd_smoke`
 用例照常触发截断，`corpus_smoke` 39/39 全部打开成功。
 
 ---

@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    mdvn 文件关联注册表零残留验收脚本（M2 T61）。
+    markair 文件关联注册表零残留验收脚本（M2 T61）。
 
 .DESCRIPTION
     04-delivery-plan.md 的 M2 验收标准原文要求"卸载后注册表无残留"。本脚本
     落地为脚本层验收（Process Monitor 层与"干净虚拟机"层为人工验收，见
     bench/M2-ASSOC.md，不在本脚本范围内）：
 
-    1. 注册前对 HKCU\Software\Classes 下与关联相关的子树（`mdvn.md` 与
+    1. 注册前对 HKCU\Software\Classes 下与关联相关的子树（`markair.md` 与
        全部五个扩展名 `.md`/`.markdown`/`.mdown`/`.mkd`/`.mdtext`）拍一份快照；
-    2. 调用 `mdvn.exe --register`；
+    2. 调用 `markair.exe --register`；
     3. 断言预期键都已写入（1 个 ProgID 子树 + 5 条 OpenWithProgids，一条不少）；
-    4. 调用 `mdvn.exe --unregister`；
+    4. 调用 `markair.exe --unregister`；
     5. 逐键断言全部消失，并与步骤 1 的快照做全量 diff，差异必须为空。
 
     扩展名清单与 ProgID 名硬编码抄自 src/shell/assoc.h 的
@@ -20,13 +20,13 @@
     文件的自动解析）。
 
     脚本可重复运行：每次运行开头都会先做一次"孤儿残留清理"（如果上一次运行
-    中途失败，HKCU 里可能已经留了 mdvn.md 或某个 OpenWithProgids 值）——
+    中途失败，HKCU 里可能已经留了 markair.md 或某个 OpenWithProgids 值）——
     清理时只删除本脚本认识的、且值一致的键，不触碰用户系统上其它程序建立的
     同名扩展名键的其它内容，因此不会因为残留而把无关键值判定为"这是我们
     的残留"从而误删。
 
 .PARAMETER ExePath
-    mdvn.exe 的路径，默认 build/src/Release/mdvn.exe（相对仓库根目录）。
+    markair.exe 的路径，默认 build/src/Release/markair.exe（相对仓库根目录）。
 
 .PARAMETER SkipBuild
     默认脚本会在 exe 不存在时自动执行一次 Release 构建；传此开关跳过构建，
@@ -41,7 +41,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $ExePath) {
-    $ExePath = Join-Path $repoRoot "build\src\Release\mdvn.exe"
+    $ExePath = Join-Path $repoRoot "build\src\Release\markair.exe"
 }
 
 $failed = $false
@@ -61,7 +61,7 @@ function Ok($msg) {
 # 若 assoc.h 里的 kAssociatedExtensions / kAssocProgId 有变化，这里要同步改。
 # ---------------------------------------------------------------------------
 $AssocExtensions = @(".md", ".markdown", ".mdown", ".mkd", ".mdtext")
-$ProgId = "mdvn.md"
+$ProgId = "markair.md"
 $ClassesRoot = "HKCU:\Software\Classes"
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ if (-not (Test-Path $ExePath)) {
         # ci\check_budget.ps1 同一处改动。
         cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
     }
-    cmake --build $buildDir --config Release --target mdvn
+    cmake --build $buildDir --config Release --target markair
     if (-not (Test-Path $ExePath)) {
         Fail "构建后仍找不到 exe：$ExePath"
         exit 1
@@ -98,8 +98,8 @@ Info "使用 exe: $ExePath"
 # ---------------------------------------------------------------------------
 # 读取本程序相关键的当前状态（用于孤儿清理 + 快照 + 断言）。
 # 返回一个 hashtable：
-#   ProgId  -> $true/$false（mdvn.md 子树是否存在）
-#   <ext>   -> $true/$false（<ext>\OpenWithProgids\mdvn.md 值是否存在）
+#   ProgId  -> $true/$false（markair.md 子树是否存在）
+#   <ext>   -> $true/$false（<ext>\OpenWithProgids\markair.md 值是否存在）
 # ---------------------------------------------------------------------------
 function Get-AssocState {
     $state = @{}
@@ -125,7 +125,7 @@ function Get-AssocState {
 }
 
 # ---------------------------------------------------------------------------
-# 孤儿残留清理：上一次运行若中途失败，可能留下 mdvn.md 或个别 OpenWithProgids
+# 孤儿残留清理：上一次运行若中途失败，可能留下 markair.md 或个别 OpenWithProgids
 # 值。只清理本程序认识的这些具体键/值，不动其它内容，保证脚本可重复运行。
 # ---------------------------------------------------------------------------
 function Clear-OrphanResidue {
@@ -205,7 +205,7 @@ $snapshotBefore = Export-Snapshot
 # 步骤 2：调用 --register。
 # ---------------------------------------------------------------------------
 Info "步骤 2：调用 --register"
-# 用 Start-Process -Wait 而不是 `& $ExePath`：mdvn 是 WIN32 子系统程序，
+# 用 Start-Process -Wait 而不是 `& $ExePath`：markair 是 WIN32 子系统程序，
 # `&` 调用方式下 PowerShell 有时会在子进程真正写完注册表 / 退出之前就
 # 拿回控制权（观察到 Test-Path 紧跟着读到的仍是旧状态），Start-Process -Wait
 # 能确保子进程完全退出后才继续。

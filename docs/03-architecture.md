@@ -1,4 +1,4 @@
-# mdvn 技术架构
+# markair 技术架构
 
 ## 1. 总体原则
 
@@ -62,7 +62,7 @@ util ← 所有模块
 
 **反模式是什么**:egui/fontdb 那条路会在初始化时遍历 `C:\Windows\Fonts` 下所有字体文件、逐个解析字体表(有的还全量栅格化字形集),中文字体单个就是几十 MB(等线/雅黑/思源),这是 440MB 的主因。
 
-**mdvn 的做法**:
+**markair 的做法**:
 
 1. **只用 `IDWriteFactory::CreateTextFormat` 按字体族名创建格式**,让 DirectWrite 的字体服务(`FontCache` 系统服务)去做匹配。DirectWrite 的系统字体集是**进程间共享的、按需内存映射的**,不会把字体数据复制进我们的私有工作集。
 2. **显式禁止调用 `GetSystemFontCollection` 去做枚举**(写进代码评审检查项)。我们不需要"字体选择下拉框",不需要字体列表。
@@ -123,14 +123,14 @@ Inline { flags(bold/italic/code/strike/link), textOffset, textLen, linkTargetIdx
 ### 架构决策:恒定软件渲染(M3 裁决 #3 定稿)
 
 `src/render/renderer.cpp:379` **无条件**使用 `D2D1_RENDER_TARGET_TYPE_SOFTWARE`
-(`CreateHwndRenderTarget`),**没有硬件探测、没有回退分支、也没有 mdvn 自建的 DXGI
+(`CreateHwndRenderTarget`),**没有硬件探测、没有回退分支、也没有 markair 自建的 DXGI
 交换链**。依据是 M0 实测(`memory.md:103~108`):硬件加速目标会拉起 GPU 驱动模块,
 进程私有内存 **38 MB**;软件渲染目标的裸窗口基线是 **9.0~9.4 MB**。01 §4 的常驻内存
-硬指标 15 MB 只有后者做得到,且 38 MB 里的大头是驱动私有页,mdvn 侧无从优化。
+硬指标 15 MB 只有后者做得到,且 38 MB 里的大头是驱动私有页,markair 侧无从优化。
 
 由此派生的两条架构事实,写在这里避免后续任务再次误判:
 
-1. **"软件渲染"对 mdvn 而言是主路径,不是降级路径。** 无 GPU / RDP / 老驱动这些
+1. **"软件渲染"对 markair 而言是主路径,不是降级路径。** 无 GPU / RDP / 老驱动这些
    场景走的是同一条代码路径,不存在"另一条分支"需要单独验证功能正确性——需要
    单独验证的只有帧率(T76 已做,见 `bench/M3-RENDER.md`)。
 2. **绘制成本全部落在 CPU 上**,所以"每帧只画可见的东西"是硬约束而不是优化偏好:

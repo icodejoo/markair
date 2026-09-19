@@ -1,4 +1,4 @@
-// mdvn 语言规则表与别名映射的实现(T52)。全部是只读常量数据 + 两个纯函数,
+// markair 语言规则表与别名映射的实现(T52)。全部是只读常量数据 + 两个纯函数,
 // 不含任何全局副作用构造、不链接 Win32/D2D/DWrite。
 //
 // 关于"取第一个空白前的词"裁切逻辑的归属:本文件的 ResolveLanguageId 假设
@@ -11,7 +11,7 @@
 // 调用方(如设置面板手动指定语言)复用,而不必都先理解围栏语法。
 #include "languages.h"
 
-namespace mdvn {
+namespace markair {
 
 namespace {
 
@@ -246,4 +246,4 @@ LanguageId ResolveLanguageId(StrSlice fenceInfo) {
     return kLanguageNone;
 }
 
-} // namespace mdvn
+} // namespace markair
