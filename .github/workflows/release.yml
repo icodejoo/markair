@@ -15,20 +15,37 @@
 # manifest) rather than defining a second set of criteria.
 name: Release
 
+# 用户裁决(2026-09-19):源码推送到 master 即自动构建并发布,不要求先手动
+# 打 version tag。采用"latest"滚动发布——每次触发都覆盖同一个 tag/Release
+# 的产物,不为每次推送保留独立历史版本(需要历史版本时改用手动打 tag,
+# workflow_dispatch 仍保留作为手动重跑入口)。paths 过滤跳过纯文档/图片/
+# 产物类改动,与全局 CLAUDE.md 里 commit 前 code-review 的"源码范围判断"
+# 同一条原则:不产源码变化就不重新构建发布。
+#
+# User decision (2026-09-19): pushing source to master auto-builds and
+# publishes, no manual version tag required first. Uses a rolling "latest"
+# release — every trigger overwrites the same tag/Release's assets rather
+# than keeping a separate historical version per push (use a manual tag for
+# that instead; workflow_dispatch stays as a manual re-run entry point). The
+# paths filter skips pure doc/image/artifact-only changes, same "is this a
+# source change" principle as the pre-commit code-review gate in the global
+# CLAUDE.md — no source change, no rebuild-and-republish.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [master]
+    paths:
+      - "src/**"
+      - "CMakeLists.txt"
+      - "tests/CMakeLists.txt"
+      - "ci/verify_release.ps1"
+      - "LICENSE"
+      - "THIRD-PARTY-NOTICES.md"
+      - ".github/workflows/release.yml"
   workflow_dispatch: {}
 
-# GitHub Release 创建/上传附件需要 contents:write;workflow_dispatch(无
-# tag)那次运行不会走到发布步骤(见下方 if 条件),这个权限只在真正打 tag
-# 触发时才用得上。
+# GitHub Release 创建/上传附件需要 contents:write。
 #
 # Creating a GitHub Release and uploading its assets needs contents:write.
-# The workflow_dispatch (no tag) run never reaches the publish step below
-# (gated by an `if` condition), so this permission is only exercised on an
-# actual tag push.
 permissions:
   contents: write
 
@@ -102,21 +119,32 @@ jobs:
           path: bench\artifacts\mdvn-release.zip
           if-no-files-found: error
 
-      # 只在真正打 tag(v*)推送时才发布到 GitHub Release,供用户下载;
-      # workflow_dispatch 手动触发(没有 tag)只产出上面两份 workflow
-      # artifact,不创建/更新 Release —— GitHub Release 本来就要绑定一个
-      # tag,手动触发时没有合适的 tag 可挂。
+      # 发布/更新"latest"滚动 Release:tag_name 固定为 latest,softprops/
+      # action-gh-release 找不到这个 tag 时会在当前 commit 上新建它,已存在
+      # 时把它移到当前 commit 并把新产物追加/覆盖进同一个 Release——用户
+      # 始终从同一个固定链接(.../releases/tag/latest)下载到最新构建,不需要
+      # 每次去找新 tag。body 里写清楚对应的源码 commit,而不是每次自动生成
+      # 一份变更日志(那是"保留历史版本"策略才需要的东西,滚动发布不需要)。
       #
-      # Only publish to a GitHub Release (for users to download) on an
-      # actual v* tag push; a manual workflow_dispatch run (no tag) only
-      # produces the two workflow artifacts above and does not create/update
-      # a Release — a GitHub Release needs a tag to attach to, and a manual
-      # run has none.
-      - name: 发布到 GitHub Release / Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      # Publish/update the rolling "latest" Release: tag_name is fixed to
+      # `latest`; softprops/action-gh-release creates that tag on the current
+      # commit if it doesn't exist yet, or moves it forward and
+      # replaces/adds assets on the same Release if it already does — users
+      # always download the newest build from one stable link
+      # (.../releases/tag/latest) without hunting for a new tag each time.
+      # The body just records which source commit this build came from,
+      # rather than auto-generating a changelog every run (that belongs to
+      # a keep-history-per-push strategy, which this rolling release isn't).
+      - name: 发布/更新 latest 滚动 Release / Publish/update rolling latest Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: mdvn (latest build)
+          body: |
+            自动滚动构建,对应源码 commit: ${{ github.sha }}
+
+            Automatically updated rolling build, built from source commit ${{ github.sha }}.
+          make_latest: true
           files: |
             build\src\Release\mdvn.exe
             bench\artifacts\mdvn-release.zip
-          generate_release_notes: true
