@@ -30,6 +30,7 @@
 #include "../util/ini.h"
 #include "../util/recent_files.h"
 #include "../util/str.h"
+#include "../util/updater.h"
 #include "../doc/model.h"
 #include "../doc/parser.h"
 #include "../doc/file_map.h"
@@ -291,6 +292,9 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     DocumentHost* host = static_cast<DocumentHost*>(userData);
     if (!host || !fullPath) return false;
 
+    // T92:换文档分段埋点入口,仅 --bench 生效,正常运行零开销(见 bench.h)。
+    markair::bench::MarkSwitchBegin();
+
     // ① 先把旧文档的全部状态放掉:解码位图 -> 图片缓存 Arena -> 文件映射 -> 文档 Arena。
     //    顺序不能反 —— 位图必须在缓存条目还在的时候释放,否则就没人认领了。
     host->imageCache->ReleaseAllBitmaps();
@@ -298,10 +302,13 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     host->imageCache->Init(host->imageArena);
     host->fileMap->Close();
     host->docArena->ResetAndTrim(64 * 1024);
+    markair::bench::MarkSwitchReleaseDone();
 
-    // 换行宽度收窄掉左右内边距(kContentPaddingDip),口径与 window.cpp 的
-    // ViewportWidthOf 一致,否则窗口内换文档后正文换行宽度会和其余场景对不上。
-    float widthDip = markair::ContentWidthDip(markair::ClientWidthDip(host->hwnd));
+    // 换行宽度收窄掉左右内边距(kContentPaddingDip),再减去文件夹侧栏挤压模式
+    // 占用的宽度,口径与 window.cpp 的 ViewportWidthOf 一致,否则窗口内换文档后
+    // 正文换行宽度会和其余场景对不上(尤其是文件夹侧栏展开时换文档场景)。
+    float widthDip = markair::ContentWidthDip(markair::ClientWidthDip(host->hwnd)) -
+                     markair::FolderSqueezeWidthDip(host->windowState);
     if (widthDip < 1.0f) widthDip = 1.0f;
     float fontScale = host->fonts ? host->fonts->Scale() : 1.0f;
 
@@ -311,7 +318,9 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
         host->layout->Relayout(*host->doc, widthDip, fontScale, host->imageCache);
         return false;
     }
+    markair::bench::MarkSwitchFileOpened();
     *host->doc = LoadMarkdownFile(host->fileMap, host->docArena);
+    markair::bench::MarkSwitchParseDone();
 
     // 底部栏状态区:换文档成功后同步更新大小,直接用 fileMap 映射出的字节数,
     // 与启动期首次打开同一口径,不必再调一次 GetFileSizeEx。
@@ -335,6 +344,34 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
 
     // ④ 按新文档重排;Relayout 内部会先淘汰上一份文档遗留的全部 IDWriteTextLayout。
     host->layout->Relayout(*host->doc, widthDip, fontScale, host->imageCache);
+    markair::bench::MarkSwitchRelayoutDone();
+
+    // ④.5 新文档应从顶部开始看,不能沿用旧文档遗留的 scrollY(否则旧文档滚得
+    // 靠下时,切到更短的新文档会显得内容被截断/空白)。换文档前 windowState
+    // 一直保持旧值,这里必须显式复位,并同步刷新虚拟化可见区间。
+    if (host->windowState) {
+        markair::ResetScrollToTop(host->hwnd, host->windowState);
+    }
+    markair::bench::MarkSwitchScrollResetDone();
+
+    // ⑤ 换文档后同步更新兄弟文件列表（若目录变更）并保持当前选中项高亮
+    bool folderScanTriggered = false;
+    if (host->windowState && host->documentDirectory[0] != 0) {
+        if (_wcsicmp(host->windowState->folderRootPath, host->documentDirectory) != 0) {
+            folderScanTriggered = true;
+            markair::OpenAndScanFolder(host->hwnd, host->windowState, host->documentDirectory, false /* openSidebar */);
+            markair::bench::MarkSwitchFolderScanDone();
+        } else {
+            host->windowState->folderCurrentItem = markair::kInvalidIndex;
+            for (markair::u32 i = 0; i < host->windowState->folderEntries.Size(); ++i) {
+                if (_wcsicmp(host->windowState->folderEntries[i].fullPath, fullPath) == 0) {
+                    host->windowState->folderCurrentItem = i;
+                    break;
+                }
+            }
+        }
+    }
+    markair::bench::EmitSwitchReport(folderScanTriggered);
     return true;
 }
 
@@ -581,6 +618,7 @@ struct WindowBundle {
     markair::History history;
     markair::SelectionState selection;
     markair::Arena selectionScratch;
+    markair::Arena folderArena;
     markair::AppSettings settings;
     markair::WindowState windowState;
     DocumentHost documentHost;
@@ -665,6 +703,7 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
     bundle->windowState.history = &bundle->history;
     bundle->windowState.selection = &bundle->selection;
     bundle->windowState.selectionScratch = &bundle->selectionScratch;
+    bundle->windowState.folderArena = &bundle->folderArena;
     bundle->windowState.recentFiles = &g_recentFiles;
 
     bool needsRecentFilesSave = false;
@@ -713,6 +752,17 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
 
     SetPropW(hwnd, kPathHashPropName,
              reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(HashPathCaseInsensitive(normalizedPath))));
+
+    DWORD attrs = GetFileAttributesW(normalizedPath);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        markair::OpenAndScanFolder(hwnd, &bundle->windowState, normalizedPath, true /* openSidebar */);
+    } else {
+        wchar_t parentDir[MAX_PATH]{};
+        ExtractDirectory(normalizedPath, parentDir, MAX_PATH);
+        if (parentDir[0] != 0) {
+            markair::OpenAndScanFolder(hwnd, &bundle->windowState, parentDir, false /* openSidebar */);
+        }
+    }
 
     ++g_openWindowCount;
     return hwnd;
@@ -788,6 +838,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (benchArgs.registerRequested || benchArgs.unregisterRequested) {
         return HandleAssocCliCommand(benchArgs);
     }
+
+    // 在任何 D2D/窗口初始化之前，检查并应用待安装的更新。
+    markair::ApplyPendingUpdate();
 
     if (benchArgs.benchEnabled) markair::bench::Enable();
     // "进程入口"埋点尽量早地记录;命令行解析本身极轻,可忽略的测量误差。
@@ -1015,6 +1068,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     markair::SelectionState selection;
     markair::Arena selectionScratch;
     selectionScratch.Init(16 * 1024 * 1024);
+    markair::Arena folderArena;
 
     // 窗口运行期状态放在栈上,生命周期覆盖整个消息循环;shell 层只借用不拥有。
     markair::WindowState windowState{
@@ -1059,6 +1113,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // T80:接上选择状态与其剪贴板拼接 Arena。
     windowState.selection = &selection;
     windowState.selectionScratch = &selectionScratch;
+    windowState.folderArena = &folderArena;
 
     // T76:逐帧耗时埋点只在 --bench 下挂钩子;正常运行时这三个字段保持
     // 聚合初始化留下的空指针,PaintOnce 里每帧只多两三次空指针判断。
@@ -1176,6 +1231,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // RemoteImageLoader::Request 第一行就返回 false,进程全程不会调用任何
     // WinHttp* 函数。
     remoteLoader.Init(hwnd, settings.loadRemoteImages);
+
+    // 自动更新：后台异步检查是否有新版本（不阻塞 UI，bench 模式跳过）。
+    if (!benchArgs.benchEnabled) {
+        markair::BeginUpdateCheck(hwnd);
+    }
+
+    // 命令行传入的是文件夹路径时，自动穿透扫描并展开文件夹侧栏；若是单文件，扫描兄弟目标文件（不展开侧栏）。
+    if (hasTarget) {
+        DWORD attrs = GetFileAttributesW(normalizedPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            markair::OpenAndScanFolder(hwnd, &windowState, normalizedPath, true /* openSidebar */);
+        } else {
+            wchar_t parentDir[MAX_PATH]{};
+            ExtractDirectory(normalizedPath, parentDir, MAX_PATH);
+            if (parentDir[0] != 0) {
+                markair::OpenAndScanFolder(hwnd, &windowState, parentDir, false /* openSidebar */);
+            }
+        }
+    }
 
     // T36:窗口内换文档所需的上下文,必须在 hwnd 拿到之后才能填完。
     // T56:一并携带 windowState/settings 指针,供 OnWindowGeometryChangedHook

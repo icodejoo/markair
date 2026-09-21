@@ -116,6 +116,67 @@ bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap) {
     return ok;
 }
 
+bool ShowOpenFolderDialog(HWND owner, wchar_t* outPath, u32 outCap) {
+    if (!outPath || outCap == 0) return false;
+    outPath[0] = L'\0';
+
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    bool needUninit = SUCCEEDED(coHr);
+
+    AppSettings settings;
+    LoadAppSettings(&settings);
+
+    bool ok = false;
+    IFileOpenDialog* dialog = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&dialog));
+    if (SUCCEEDED(hr) && dialog) {
+        // 设置为只选文件夹模式
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        dialog->SetTitle(L"选择 Markdown 文档所在文件夹");
+
+        if (settings.lastOpenDir[0] != L'\0') {
+            IShellItem* folder = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(settings.lastOpenDir, nullptr,
+                                                        IID_PPV_ARGS(&folder))) &&
+                folder) {
+                dialog->SetFolder(folder);
+                folder->Release();
+            }
+        }
+
+        hr = dialog->Show(owner);
+        if (SUCCEEDED(hr)) {
+            IShellItem* item = nullptr;
+            hr = dialog->GetResult(&item);
+            if (SUCCEEDED(hr) && item) {
+                PWSTR path = nullptr;
+                hr = item->GetDisplayName(SIGDN_FILESYSPATH, &path);
+                if (SUCCEEDED(hr) && path) {
+                    u32 i = 0;
+                    for (; path[i] != L'\0' && i + 1 < outCap; ++i) outPath[i] = path[i];
+                    outPath[i] = L'\0';
+                    ok = (i > 0);
+                    if (ok) {
+                        if (wcscmp(outPath, settings.lastOpenDir) != 0) {
+                            wcscpy_s(settings.lastOpenDir, MAX_PATH, outPath);
+                            SaveAppSettings(settings);
+                        }
+                    }
+                    CoTaskMemFree(path);
+                }
+                item->Release();
+            }
+        }
+        dialog->Release();
+    }
+
+    if (needUninit) CoUninitialize();
+    return ok;
+}
+
 bool BuildLaunchCommandLine(const wchar_t* exePath, const wchar_t* filePath,
                              wchar_t* outCmdLine, u32 outCap) {
     if (!exePath || !filePath || !outCmdLine || outCap == 0) return false;

@@ -1,3 +1,4 @@
-// 应用图标资源：把 icon.jpg 转出的多尺寸 app.ico 绑进 exe，
-// 资源 ID 用 1，Windows 默认取 ID 最小的图标作为 exe/任务栏图标。
+// markair 应用图标资源
+// 由 resources/app.svg 矢量母版导出并生成多分辨率 app.ico (16x16 ~ 256x256)
+// 资源 ID 使用 1，Windows 默认选取 ID 最小的图标作为应用程序主图标、任务栏图标及桌面图标
 1 ICON "app.ico"

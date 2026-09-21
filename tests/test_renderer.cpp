@@ -49,7 +49,7 @@ MARKAIR_TEST(Renderer_ImagePlaceholderTextPerStatus) {
     MARKAIR_CHECK_EQ(wcslen(markair::ImagePlaceholderText(markair::ImageStatus::Ok)), 0u);
 }
 
-// 用例:降采样提示标签文案固定为"已压缩·点击看原图"。
+// 用例:降采样提示标签文案固定为"查看原图"。
 MARKAIR_TEST(Renderer_DownsampledBadgeText) {
-    MARKAIR_CHECK(wcscmp(markair::DownsampledBadgeText(), L"已压缩·点击看原图") == 0);
+    MARKAIR_CHECK(wcscmp(markair::DownsampledBadgeText(), L"查看原图") == 0);
 }

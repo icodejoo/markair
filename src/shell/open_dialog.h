@@ -41,6 +41,19 @@ namespace markair {
 bool ShowOpenMarkdownDialog(HWND owner, wchar_t* outPath, u32 outCap);
 
 /**
+ * 弹出标准"选择文件夹"对话框(`IFileOpenDialog` 带 FOS_PICKFOLDERS)。
+ *
+ * @param owner 对话框的父窗口句柄，可为 nullptr。
+ * @param outPath 输出缓冲，选中的文件夹绝对路径(以 '\0' 结尾)。
+ * @param outCap outPath 的容量(wchar_t 个数，含结尾 '\0')。
+ * @return 用户选中了一个文件夹并成功写入 outPath 返回 true；取消/失败返回 false。
+ * @example
+ *   wchar_t folder[MAX_PATH];
+ *   if (markair::ShowOpenFolderDialog(hwnd, folder, MAX_PATH)) { ... }
+ */
+bool ShowOpenFolderDialog(HWND owner, wchar_t* outPath, u32 outCap);
+
+/**
  * 拼接 `CreateProcessW` 用的命令行字符串:`"<exePath>" "<filePath>"`。
  * 两段都加引号防止路径中的空格拆散参数;纯字符串拼接,不涉及进程/IO,
  * 便于单测覆盖(不含空格路径/含空格路径等边界情况)。

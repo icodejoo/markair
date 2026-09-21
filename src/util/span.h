@@ -40,8 +40,26 @@ struct Span {
 template <typename T>
 class Vec {
 public:
+    // 默认构造，初始未绑定 Arena。
+    Vec() : arena_(nullptr), data_(nullptr), size_(0), capacity_(0) {}
+
     // 绑定到一个 Arena,后续所有扩容分配都走这个 Arena。
     explicit Vec(Arena* arena) : arena_(arena), data_(nullptr), size_(0), capacity_(0) {}
+
+    /**
+     * 重置或延迟绑定 Arena，并可选择预留初始容量。
+     * @param arena 用于后续分配的 Arena 指针。
+     * @param initialCapacity 可选的初始容量。
+     */
+    void Init(Arena* arena, u32 initialCapacity = 0) {
+        arena_ = arena;
+        data_ = nullptr;
+        size_ = 0;
+        capacity_ = 0;
+        if (initialCapacity > 0) {
+            Reserve(initialCapacity);
+        }
+    }
 
     /**
      * 追加一个元素到末尾,容量不足时自动扩容(翻倍,首次分配 8 个)。
@@ -92,6 +110,9 @@ public:
 
     // 底层连续内存的起始指针,供需要直接拿到最终缓冲区的场景使用(如字符串转换)。
     T* Data() const { return data_; }
+
+    // 清空元素个数，保留已分配的底层内存供后续复用。
+    void Clear() noexcept { size_ = 0; }
 
 private:
     Arena* arena_;

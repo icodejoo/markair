@@ -50,6 +50,17 @@ int64_t g_tFrameLayoutDone = 0;
 // QPC 频率,首次取样时惰性读取一次。
 int64_t g_qpcFreq = 0;
 
+// 运行期"换文档"分段埋点的五个时间点,0 表示尚未记录。同一进程内多次换
+// 文档会互相覆盖——够用,因为每次换文档后调用方(main.cpp)都会立即
+// EmitSwitchReport 输出,不需要跨多次换文档累积样本。
+int64_t g_tSwitchBegin = 0;
+int64_t g_tSwitchReleaseDone = 0;
+int64_t g_tSwitchFileOpened = 0;
+int64_t g_tSwitchParseDone = 0;
+int64_t g_tSwitchRelayoutDone = 0;
+int64_t g_tSwitchScrollResetDone = 0;
+int64_t g_tSwitchFolderScanDone = 0;
+
 // 对 [0, n) 区间的 float 数组做插入排序(样本量在千级,且只在退出前排一次,
 // 不值得为它引入更复杂的排序;禁 std::sort 之外的考量见 coding-rules)。
 void SortFloats(float* a, uint32_t n) {
@@ -171,6 +182,85 @@ void EmitFrameReport() {
                 g_frameCount > 0 ? g_frameDrawMs[g_frameCount - 1] : 0.0f,
                 first0, firstDraw0);
     fputs(line, stderr);
+}
+
+void MarkSwitchBegin() {
+    if (!g_enabled) return;
+    g_tSwitchBegin = NowCounter();
+}
+
+void MarkSwitchReleaseDone() {
+    if (!g_enabled) return;
+    g_tSwitchReleaseDone = NowCounter();
+}
+
+void MarkSwitchFileOpened() {
+    if (!g_enabled) return;
+    g_tSwitchFileOpened = NowCounter();
+}
+
+void MarkSwitchParseDone() {
+    if (!g_enabled) return;
+    g_tSwitchParseDone = NowCounter();
+}
+
+void MarkSwitchRelayoutDone() {
+    if (!g_enabled) return;
+    g_tSwitchRelayoutDone = NowCounter();
+}
+
+void MarkSwitchScrollResetDone() {
+    if (!g_enabled) return;
+    g_tSwitchScrollResetDone = NowCounter();
+}
+
+void MarkSwitchFolderScanDone() {
+    if (!g_enabled) return;
+    g_tSwitchFolderScanDone = NowCounter();
+}
+
+void EmitSwitchReport(bool folderScanTriggered) {
+    if (!g_enabled) return;
+
+    LARGE_INTEGER freq{};
+    QueryPerformanceFrequency(&freq);
+    int64_t f = freq.QuadPart > 0 ? freq.QuadPart : 1;
+    const double toMs = 1000.0 / static_cast<double>(f);
+
+    const double releaseMs =
+        static_cast<double>(g_tSwitchReleaseDone - g_tSwitchBegin) * toMs;
+    const double openMs =
+        static_cast<double>(g_tSwitchFileOpened - g_tSwitchReleaseDone) * toMs;
+    const double parseMs =
+        static_cast<double>(g_tSwitchParseDone - g_tSwitchFileOpened) * toMs;
+    const double relayoutMs =
+        static_cast<double>(g_tSwitchRelayoutDone - g_tSwitchParseDone) * toMs;
+    const double scrollResetMs =
+        static_cast<double>(g_tSwitchScrollResetDone - g_tSwitchRelayoutDone) * toMs;
+
+    char line[384];
+    int written;
+    if (folderScanTriggered) {
+        const double scanMs =
+            static_cast<double>(g_tSwitchFolderScanDone - g_tSwitchScrollResetDone) * toMs;
+        const double totalMs =
+            static_cast<double>(g_tSwitchFolderScanDone - g_tSwitchBegin) * toMs;
+        written = _snprintf_s(
+            line, sizeof(line), _TRUNCATE,
+            "switch_release_ms=%.3f switch_open_ms=%.3f switch_parse_ms=%.3f "
+            "switch_relayout_ms=%.3f switch_scroll_reset_ms=%.3f switch_folder_scan_ms=%.3f "
+            "switch_total_ms=%.3f\n",
+            releaseMs, openMs, parseMs, relayoutMs, scrollResetMs, scanMs, totalMs);
+    } else {
+        const double totalMs =
+            static_cast<double>(g_tSwitchScrollResetDone - g_tSwitchBegin) * toMs;
+        written = _snprintf_s(
+            line, sizeof(line), _TRUNCATE,
+            "switch_release_ms=%.3f switch_open_ms=%.3f switch_parse_ms=%.3f "
+            "switch_relayout_ms=%.3f switch_scroll_reset_ms=%.3f switch_total_ms=%.3f\n",
+            releaseMs, openMs, parseMs, relayoutMs, scrollResetMs, totalMs);
+    }
+    if (written >= 0) fputs(line, stderr);
 }
 
 size_t FormatReportFromValues(int64_t freq,

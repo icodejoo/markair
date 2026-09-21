@@ -7,6 +7,7 @@ add_executable(markair WIN32
     util/cmdline.cpp
     util/str.cpp
     util/ini.cpp
+    util/updater.cpp
     util/recent_files.cpp
     doc/file_map.cpp
     doc/encoding.cpp
@@ -38,6 +39,8 @@ add_executable(markair WIN32
     shell/history.cpp
     shell/selection.cpp
     shell/open_dialog.cpp
+    shell/folder_scan.cpp
+    shell/edit_box.cpp
     ${CMAKE_SOURCE_DIR}/resources/app.rc
 )
 

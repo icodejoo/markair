@@ -1,6 +1,6 @@
-// 底部操作栏(2026-09-18 改版:左图标 + 右状态)覆盖测试:5 个按钮的固定
-// 宽度矩形几何 + 命中测试 + 文件大小格式化,均为纯数字/字符串函数,不依赖
-// 真实 HWND/D2D(见 shell/bottom_bar.h 顶部注释)。
+// 底部操作栏(2026-09-18 改版:左图标 + 右状态;2026-09-21 新增"打开文件夹"
+// 按钮)覆盖测试:各按钮的固定宽度矩形几何 + 命中测试 + 文件大小格式化,
+// 均为纯数字/字符串函数,不依赖真实 HWND/D2D(见 shell/bottom_bar.h 顶部注释)。
 #include <cwchar>  // wcscmp
 
 #include "markair_test.h"
@@ -16,13 +16,13 @@ using markair::kBottomBarButtonWidthDip;
 using markair::kBottomBarLeftButtonCount;
 using markair::kBottomBarHeightDip;
 
-// 5 个左侧按钮从左侧起紧密排列，History(下标 6)贴最右侧，CopyPath(下标 5)
+// 8 个左侧按钮从左侧起紧密排列，History(下标 9)贴最右侧，CopyPath(下标 8)
 // 紧贴其左边——CopyPath 的矩形本身不受"是否有文档打开"影响，可见性由调用方
 // (HitTestBottomBar 的 hasDocument 参数/渲染层的 hasDocument 判断)另行控制。
 MARKAIR_TEST(BottomBar_ButtonRectsPackedFromLeftAndRight) {
     float clientH = 600.0f;
     float clientW = 800.0f;
-    for (markair::u32 i = 0; i < 5; ++i) {
+    for (markair::u32 i = 0; i < 8; ++i) {
         auto r = BottomBarButtonRectDip(i, clientW, clientH);
         MARKAIR_CHECK(r.left == kBottomBarButtonWidthDip * static_cast<float>(i));
         MARKAIR_CHECK(r.right == kBottomBarButtonWidthDip * static_cast<float>(i + 1));
@@ -48,21 +48,28 @@ MARKAIR_TEST(BottomBar_IsPointInBottomBarChecksBandOnly) {
     MARKAIR_CHECK(IsPointInBottomBar(clientH, clientH - 1.0f));
 }
 
-// 按横坐标分段命中对应按钮,从左到右依次是 Outline/OpenDoc/Theme/ZoomOut/ZoomIn,最右侧是 History。
+// 按横坐标分段命中对应按钮,从左到右依次是
+// FileList/Outline/OpenDoc/OpenFolder/Theme/ZoomOut/ZoomIn/Find,最右侧是 History。
 // hasDocument=false:CopyPath 不存在,不占用任何区域。
 MARKAIR_TEST(BottomBar_HitTestReturnsCorrectButtonByColumn) {
-    float clientW = 800.0f;  // 远大于 7 * kBottomBarButtonWidthDip,中间是状态区
+    float clientW = 800.0f;  // 远大于 8 * kBottomBarButtonWidthDip,中间是状态区
     float w = kBottomBarButtonWidthDip;
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, 5.0f, false)),
-                  static_cast<int>(BottomBarButton::Outline));
+                  static_cast<int>(BottomBarButton::FileList));
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w + 5.0f, false)),
-                  static_cast<int>(BottomBarButton::OpenDoc));
+                  static_cast<int>(BottomBarButton::Outline));
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f + 5.0f, false)),
-                  static_cast<int>(BottomBarButton::Theme));
+                  static_cast<int>(BottomBarButton::OpenDoc));
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 3.0f + 5.0f, false)),
-                  static_cast<int>(BottomBarButton::ZoomOut));
+                  static_cast<int>(BottomBarButton::OpenFolder));
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 4.0f + 5.0f, false)),
+                  static_cast<int>(BottomBarButton::Theme));
+    MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 5.0f + 5.0f, false)),
+                  static_cast<int>(BottomBarButton::ZoomOut));
+    MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 6.0f + 5.0f, false)),
                   static_cast<int>(BottomBarButton::ZoomIn));
+    MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 7.0f + 5.0f, false)),
+                  static_cast<int>(BottomBarButton::Find));
     MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, clientW - 5.0f, false)),
                   static_cast<int>(BottomBarButton::History));
 }
@@ -82,12 +89,12 @@ MARKAIR_TEST(BottomBar_HitTestCopyPathOnlyWhenDocumentOpen) {
                   static_cast<int>(BottomBarButton::History));
 }
 
-// 边界:恰好落在两段交界处(第 2/3 段边界)算作右边那一段(下标用
+// 边界:恰好落在两段交界处(第 4/5 段边界)算作右边那一段(下标用
 // floor(x / btnW)),与渐进递增的分段口径一致。
 MARKAIR_TEST(BottomBar_HitTestBoundaryBelongsToRightSegment) {
     float clientW = 800.0f;
     float w = kBottomBarButtonWidthDip;
-    MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 2.0f, false)),
+    MARKAIR_CHECK_EQ(static_cast<int>(HitTestBottomBar(clientW, w * 4.0f, false)),
                   static_cast<int>(BottomBarButton::Theme));
 }
 
@@ -131,3 +138,20 @@ MARKAIR_TEST(BottomBar_FormatFileSizeHandlesZeroBytes) {
     FormatBottomBarFileSize(0, buf, 32);
     MARKAIR_CHECK(wcscmp(buf, L"0.0 KB") == 0);
 }
+
+// 验证新增的 FileList 按钮下标、标签及矩形位置
+MARKAIR_TEST(BottomBar_FileListButtonLabelAndIndex) {
+    using markair::kBottomBarLabels;
+    int fileListIndex = static_cast<int>(BottomBarButton::FileList);
+    MARKAIR_CHECK(fileListIndex == 0);
+    MARKAIR_CHECK(wcscmp(kBottomBarLabels[0], L"文件列表") == 0);
+
+    float clientH = 600.0f;
+    float clientW = 800.0f;
+    auto r = BottomBarButtonRectDip(0, clientW, clientH);
+    MARKAIR_CHECK(r.left == 0.0f);
+    MARKAIR_CHECK(r.right == kBottomBarButtonWidthDip);
+    MARKAIR_CHECK(r.top == clientH - kBottomBarHeightDip);
+    MARKAIR_CHECK(r.bottom == clientH);
+}
+

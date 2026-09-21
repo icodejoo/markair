@@ -61,7 +61,7 @@ constexpr u32 kMaxFontFamilyChars = 64;
 // 旧键+写回"这条链路(读原文时可能还叠加老版本遗留的若干行)裕量太薄,
 // 故上调到 2048——键总数仍 < 15、单次读仍是几百字节到 1~2KB 量级,不影响
 // "启动期一次性读完"的架构约束,只是把裕量留够。
-constexpr u32 kMaxIniBytes = 2048;
+constexpr u32 kMaxIniBytes = 4096;
 
 // state.ini 写盘用的命名互斥体名字(裁决 #7:读-改-写 + 命名互斥体)。
 // 与 src/app/main.cpp 里"同文件重复打开前置已有窗口"用的是同一套技术手段
@@ -109,6 +109,15 @@ struct AppSettings {
 
     // "打开文件"对话框上次选中文件所在目录,空串表示未存过。
     wchar_t lastOpenDir[MAX_PATH];
+
+    // 自动更新：待安装版本号字符串，空串表示无待安装更新。
+    wchar_t pendingUpdateVersion[32];
+
+    // 自动更新：已下载的待安装新版 exe 临时文件绝对路径，空串表示无待安装更新。
+    wchar_t pendingUpdatePath[MAX_PATH];
+
+    // 自动更新：上次执行版本检查的 Unix 时间戳(秒)，0 表示从未检查过。
+    i64 lastUpdateCheckUnix;
 };
 
 /**

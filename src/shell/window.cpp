@@ -1,18 +1,22 @@
-#include "window.h"
+﻿#include "window.h"
 
 #include <new>         // placement new(T63 侧栏在 outlineArena 上就地构造 OutlinePanel)
 #include <dwmapi.h>    // DwmSetWindowAttribute(T48 标题栏深浅色,/DELAYLOAD)
 #include <imm.h>       // ImmAssociateContextEx(主窗口按窗口关闭 IME,见下方说明)
 #include <uxtheme.h>   // SetWindowTheme(原生滚动条深浅色,/DELAYLOAD)
 #include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM
+#include <shellapi.h>  // DragAcceptFiles / DragQueryFileW / HDROP
 #include <cwchar>      // wcscmp
 
 #include "../assets/data_uri.h"
 #include "../render/theme.h"  // kLightPalette/kDarkPalette/kDarkBackgroundRgb
 #include "../util/str.h"      // Utf8ToUtf16(T80 选区复制)
+#include "../util/updater.h"
 #include "bottom_bar.h"        // 底部操作栏(新需求):几何/命中测试
+#include "edit_box.h"          // 原生 EDIT 子窗口创建/重定位公共组件
 #include "find_bar.h"          // 查找条几何(2026-09-19 改版:原生 EDIT 子窗口定位)
 #include "open_dialog.h"       // 底部栏"打开文档"按钮:IFileOpenDialog + 新开进程
+#include "folder_scan.h"       // 文件夹穿透扫描模块
 
 namespace markair {
 
@@ -58,6 +62,7 @@ constexpr UINT kBenchLoopIntervalMs = 30;
 // 大纲及历史记录侧栏滑动与蒙层淡入淡出动画的定时器 ID 及参数。
 constexpr UINT_PTR kOutlineAnimTimerId = 5;
 constexpr UINT_PTR kHistoryAnimTimerId = 6;
+constexpr UINT_PTR kFolderAnimTimerId = 8;
 constexpr UINT kOutlineAnimIntervalMs = 16;       // ~60 FPS
 constexpr float kOutlineAnimDurationMs = 180.0f;  // 180 ms transition / 180毫秒过渡时长
 
@@ -181,6 +186,71 @@ LRESULT CALLBACK FindEditSubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     if (msg == WM_CHAR && (wparam == VK_RETURN || wparam == VK_ESCAPE)) {
         // 吞掉这两个键对应的 WM_CHAR,否则默认 EDIT 过程会当成"未处理的
         // 控制字符"发出系统提示音(单行 EDIT 对 Enter/Esc 没有默认动作)。
+        return 0;
+    }
+    return CallWindowProcW(orig, hwnd, msg, wparam, lparam);
+}
+
+// 文件夹侧栏过滤 EDIT 子窗口的控件 ID
+constexpr int kFolderFilterEditControlId = 102;
+
+// 文件夹侧栏过滤 EDIT 子窗口的子类过程
+LRESULT CALLBACK FolderFilterEditSubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    WNDPROC orig = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_KEYDOWN) {
+        if (wparam == VK_RETURN) {
+            HWND parent = GetParent(hwnd);
+            if (parent) {
+                WindowState* state = StateOf(parent);
+                if (state && state->folderEntries.Size() > 0 && state->openDocumentInPlace) {
+                    u32 realIdx = 0;
+                    if (state->folderFilterQueryLen > 0) {
+                        if (state->folderFilteredIndices.Size() > 0) {
+                            realIdx = state->folderFilteredIndices[0];
+                        } else {
+                            return 0;
+                        }
+                    } else if (state->folderCurrentItem < state->folderEntries.Size()) {
+                        realIdx = state->folderCurrentItem;
+                    }
+                    state->folderCurrentItem = realIdx;
+                    const wchar_t* targetPath = state->folderEntries[realIdx].fullPath;
+                    state->openDocumentInPlace(state->callbackUserData, targetPath);
+                    SetFocus(parent);
+                }
+            }
+            return 0;
+        }
+        if (wparam == VK_ESCAPE) {
+            HWND parent = GetParent(hwnd);
+            if (parent) {
+                WindowState* state = StateOf(parent);
+                if (state && state->folderFilterQueryLen > 0) {
+                    SetWindowTextW(hwnd, L"");
+                } else if (parent) {
+                    SetFocus(parent);
+                }
+            }
+            return 0;
+        }
+        bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        bool isGlobalShortcut =
+            (!ctrlDown && wparam == VK_F5) ||
+            (ctrlDown && !shiftDown && wparam == 'W') ||
+            (ctrlDown && !shiftDown && wparam == 'O') ||
+            (ctrlDown && shiftDown && wparam == 'O') ||
+            (ctrlDown && !shiftDown &&
+             (wparam == VK_OEM_PLUS || wparam == VK_OEM_MINUS || wparam == '0')) ||
+            (ctrlDown && !shiftDown && wparam == VK_OEM_5) ||
+            (ctrlDown && shiftDown && wparam == 'T');
+        if (isGlobalShortcut) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessageW(parent, WM_KEYDOWN, wparam, lparam);
+            return 0;
+        }
+    }
+    if (msg == WM_CHAR && (wparam == VK_RETURN || wparam == VK_ESCAPE)) {
         return 0;
     }
     return CallWindowProcW(orig, hwnd, msg, wparam, lparam);
@@ -322,32 +392,76 @@ void RepositionFindEdit(HWND hwnd, WindowState* state) {
     if (!state || !state->findEditHwnd) return;
     float scale = DipScaleOf(hwnd);
     FindBarLayout layout = ComputeFindBarLayout(ClientWidthDip(hwnd), 0.0f);
-    int x = static_cast<int>(layout.editLeft * scale + 0.5f);
-    int y = static_cast<int>(layout.editTop * scale + 0.5f);
-    int w = static_cast<int>(layout.editWidth * scale + 0.5f);
-    int h = static_cast<int>(layout.editHeight * scale + 0.5f);
-    SetWindowPos(state->findEditHwnd, HWND_TOP, x, y, w, h, SWP_NOACTIVATE);
-
     // EDIT 控件字号跟 DIP 缩放走,与 renderer.cpp 画的"查找:"前缀/状态文字
     // 用同一个 kFindBarFontSizeDip,DPI 变化(含窗口拖到不同显示器)时字号
-    // 要跟着重算,否则会跟旁边 D2D 画的文字大小不一致。RepositionFindEdit
-    // 本身在纯尺寸变化(WM_SIZE)时也会被频繁调用(拖边框时一秒内触发多次),
-    // scale 没变就不用重新 CreateFontIndirectW/DeleteObject 一次 GDI 字体
-    // 对象——按 findEditFontScale 缓存的上一次缩放系数判断是否真的需要重建。
-    if (state->findEditFontScale != scale) {
-        HFONT oldFont = reinterpret_cast<HFONT>(SendMessageW(state->findEditHwnd, WM_GETFONT, 0, 0));
-        LOGFONTW lf{};
-        lf.lfHeight = -static_cast<LONG>(kFindBarFontSizeDip * scale + 0.5f);
-        lf.lfWeight = FW_NORMAL;
-        lf.lfCharSet = DEFAULT_CHARSET;
-        wcscpy_s(lf.lfFaceName, L"Segoe UI");
-        HFONT newFont = CreateFontIndirectW(&lf);
-        if (newFont) {
-            SendMessageW(state->findEditHwnd, WM_SETFONT, reinterpret_cast<WPARAM>(newFont), TRUE);
-            if (oldFont) DeleteObject(oldFont);
-            state->findEditFontScale = scale;
+    // 要跟着重算,否则会跟旁边 D2D 画的文字大小不一致——由 RepositionEditBox
+    // 内部按 findEditFontScale 缓存的上一次缩放系数判断是否真的需要重建。
+    RepositionEditBox(state->findEditHwnd, scale, layout.editLeft, layout.editTop,
+                       layout.editWidth, layout.editHeight, kFindBarFontSizeDip,
+                       &state->findEditFontScale);
+}
+
+// 忽略大小写的宽字符子串包含匹配
+static bool CaseInsensitiveContains(const wchar_t* str, const wchar_t* sub) {
+    if (!sub || sub[0] == 0) return true;
+    if (!str || str[0] == 0) return false;
+    size_t strLen = wcslen(str);
+    size_t subLen = wcslen(sub);
+    if (subLen > strLen) return false;
+    for (size_t i = 0; i <= strLen - subLen; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < subLen; ++j) {
+            if (towlower(str[i + j]) != towlower(sub[j])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+/**
+ * 根据当前的 folderFilterQuery 对 folderEntries 进行就地低内存过滤。
+ * 仅向 folderFilteredIndices 压入匹配项下标，不产生任何堆分配。
+ */
+void FilterFolderEntries(WindowState* state) {
+    if (!state) return;
+    state->folderFilteredIndices.Clear();
+    if (state->folderFilterQueryLen == 0) {
+        state->folderScrollY = 0.0f;
+        return;
+    }
+    u32 total = state->folderEntries.Size();
+    for (u32 i = 0; i < total; ++i) {
+        const FolderEntry& e = state->folderEntries[i];
+        if (CaseInsensitiveContains(e.relPath, state->folderFilterQuery) ||
+            CaseInsensitiveContains(e.fullPath, state->folderFilterQuery)) {
+            state->folderFilteredIndices.Push(i);
         }
     }
+    state->folderScrollY = 0.0f;
+}
+
+/**
+ * 在侧栏展开或尺寸变化时重新计算并放置文件夹过滤输入框控件位置。
+ */
+void RepositionFolderFilterEdit(HWND hwnd, WindowState* state) {
+    if (!state || !state->folderFilterEditHwnd) return;
+    if (state->folderAnimState != SidebarAnimState::Open) {
+        ShowWindow(state->folderFilterEditHwnd, SW_HIDE);
+        return;
+    }
+    float scale = DipScaleOf(hwnd);
+    // 原生控件用专门的"实际高度居中矩形",不再用整个 36dip 第二行撑满
+    // 控件窗口——那样会导致单行 EDIT 光标不垂直居中(实测截图确认)。
+    // 窗口矩形铺满这个矩形(不再收缩),文字内边距改用 EM_SETMARGINS,
+    // 让原生 EDIT 背景色跟 D2D 画的边框/下划线严丝合缝,不再露出面板底色。
+    SidebarRectDip inputRect = SidebarFolderFilterEditLocalRectDip(state->folderPanelWidthDip);
+    RepositionEditBox(state->folderFilterEditHwnd, scale, inputRect.left,
+                       inputRect.top, inputRect.right - inputRect.left,
+                       inputRect.bottom - inputRect.top, kSidebarRowFontSizeDip,
+                       &state->folderFilterFontScale, 5.0f, 5.0f);
 }
 
 /**
@@ -574,7 +688,21 @@ float ViewportHeightOf(HWND hwnd) {
     float h = ClientHeightDip(hwnd) - kBottomBarHeightDip;
     return h > 0.0f ? h : 0.0f;
 }
-float ViewportWidthOf(HWND hwnd) { return ContentWidthDip(ClientWidthDip(hwnd)); }
+
+float ViewportWidthOf(HWND hwnd, WindowState* state) {
+    float w = ContentWidthDip(ClientWidthDip(hwnd)) - FolderSqueezeWidthDip(state);
+    return w > 0.0f ? w : 0.0f;
+}
+
+// 文件夹侧栏是挤压模式的常驻面板,不是浮在最上层盖住一切的悬浮抽屉,所以
+// 它的高度要跟正文一样让出底部栏那一条,不能像大纲/历史侧栏那样铺满整个
+// 客户区高度——否则侧栏自己的背景/列表会把底部栏("唯一能收起它的入口")
+// 盖在下面,连切换按钮都点不到。大纲/历史侧栏仍按原有语义铺满整个高度
+// (悬浮蒙层本来就该完整盖住正文可交互区域,底部栏也不例外),不受影响。
+float FolderPanelHeightDip(HWND hwnd) {
+    float h = ClientHeightDip(hwnd) - kBottomBarHeightDip;
+    return h > 0.0f ? h : 0.0f;
+}
 
 // 滚动范围计算统一用的"可用视口高度"(原始视口高度收窄掉上下内边距),
 // 喂给 ClampScrollOffset/MaxScrollOffset/ApplyScrollCommand 的 viewportHeight 参数
@@ -606,7 +734,7 @@ bool RelayoutForImagesIfNeeded(HWND hwnd, WindowState* state) {
     if (!state->layout->ImagePlacementChanged(*state->images)) return false;
 
     u32 topBlock = FindTopBlockIndex(*state->layout, state->scrollY);
-    state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd), state->fonts->Scale(),
+    state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd, state), state->fonts->Scale(),
                             state->images);
 
     float usableViewportHeight = UsableViewportHeightOf(hwnd);
@@ -709,6 +837,15 @@ void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
         SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
     }
 
+    // If folder drawer is open/opening, smoothly close it
+    if (state->folderAnimState == SidebarAnimState::Open ||
+        state->folderAnimState == SidebarAnimState::Opening) {
+        state->folderAnimState = SidebarAnimState::Closing;
+        state->folderAnimStartTick = GetTickCount64();
+        state->folderAnimStartProgress = state->folderAnimProgress;
+        SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
     state->outlineAnimState = OutlineAnimState::Opening;
     state->outlineAnimStartTick = GetTickCount64();
     SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
@@ -761,6 +898,15 @@ void ToggleHistoryPanel(HWND hwnd, WindowState* state) {
         state->outlineAnimStartProgress = state->outlineAnimProgress;
         KillTimer(hwnd, kOutlineHighlightTimerId);
         SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
+    // If folder drawer is open/opening, smoothly close it
+    if (state->folderAnimState == SidebarAnimState::Open ||
+        state->folderAnimState == SidebarAnimState::Opening) {
+        state->folderAnimState = SidebarAnimState::Closing;
+        state->folderAnimStartTick = GetTickCount64();
+        state->folderAnimStartProgress = state->folderAnimProgress;
+        SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
     }
 
     state->historyAnimState = SidebarAnimState::Opening;
@@ -949,12 +1095,14 @@ void SetScrollY(HWND hwnd, WindowState* state, float newY, bool forceRefresh = f
 // T35:把一次鼠标事件翻译成命中结果(链接 / 图片 / 什么都没命中)。
 // 坐标换算与命中判定全部委托给 shell/hit_test.h 的纯函数,这里只负责取 DPI。
 // 客户区物理像素坐标 -> 文档坐标(DIP)。内容整体因内边距向右下平移了
-// kContentPaddingDip(渲染时的水平 SetTransform + effectiveScrollY),任何
-// 命中判定都必须用这同一套换算,否则点击位置会和视觉内容错位。
+// kContentPaddingDip(渲染时的水平 SetTransform + effectiveScrollY),文件夹
+// 侧栏挤压模式下还会再额外向右平移 FolderSqueezeWidthDip(state)(与渲染层
+// 同一套平移量),任何命中判定都必须用这同一套换算,否则点击位置会和视觉
+// 内容错位。
 DocPoint ClientToDocumentPoint(HWND hwnd, const WindowState* state, int px, int py) {
     float effectiveScrollY = state->scrollY - kContentPaddingDip;
     DocPoint p = ClientToDocument(px, py, DipScaleOf(hwnd), effectiveScrollY);
-    p.x -= kContentPaddingDip;
+    p.x -= kContentPaddingDip + FolderSqueezeWidthDip(state);
     return p;
 }
 
@@ -1116,7 +1264,9 @@ void OnImageClicked(HWND hwnd, WindowState* state, const ImageBox& box) {
         if (!raw) return;
         rawBytes = raw;
         rawLen = len;
-        extension = L".img";  // 网络图片沿用通用扩展名,由系统按内容关联程序
+        // 按文件头 magic number 猜扩展名——固定用 .img 时 Windows 通常没有关联
+        // 程序,ShellExecuteW 会静默失败,表现为点击后完全无反应。
+        extension = ExtensionForImageBytes(raw, len);
     }
 
     OpenImageOriginal(box.href, box.kind, state->documentDirectory, rawBytes, rawLen,
@@ -1400,8 +1550,9 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
     bool hasSelection = state->selection && state->selection->HasSelection();
     bool hasHistory = state->recentFiles && state->historyAnimState != SidebarAnimState::Closed;
+    bool hasFolder = state->folderAnimState != SidebarAnimState::Closed || state->folderAnimProgress > 0.0001f;
     if (state->find || state->statusMessage || hasCopyButtonState || state->outline ||
-        hasSelection || hasHistory) {
+        hasSelection || hasHistory || hasFolder) {
         // T80:鼠标拖选高亮,选区为空时保持聚合初始化留下的 false/0,渲染层
         // 不画任何高亮,零额外开销。
         if (hasSelection) {
@@ -1464,6 +1615,40 @@ void PaintOnce(HWND hwnd, WindowState* state) {
             overlay.historyAnimProgress = 0.0f;
         }
 
+        // 文件夹穿透侧栏 (左侧抽屉)
+        if (hasFolder) {
+            overlay.folderEntries = state->folderEntries.Data();
+            overlay.folderEntryCount = state->folderEntries.Size();
+            overlay.folderRootName = state->folderRootName;
+            overlay.folderHoverItem = state->folderHoverIndex;
+            overlay.folderCurrentItem = state->folderCurrentItem;
+            overlay.folderScrollY = state->folderScrollY;
+            overlay.folderPanelWidthDip = state->folderPanelWidthDip;
+            overlay.folderAnimProgress = state->folderAnimProgress;
+            overlay.folderScrollbarActive =
+                state->folderScrollbarHover ||
+                state->scrollbarDragTarget == ScrollbarDragTarget::Folder;
+            overlay.folderFilteredIndices = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Data() : nullptr;
+            overlay.folderFilteredCount = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+            overlay.folderHeaderButtonHover = state->folderHeaderButtonHover;
+            overlay.folderFilterQuery = state->folderFilterQuery;
+            overlay.folderItemFolderButtonHover = state->folderItemFolderButtonHover;
+            overlay.folderItemNewWindowButtonHover = state->folderItemNewWindowButtonHover;
+        } else {
+            overlay.folderHoverItem = kInvalidIndex;
+            overlay.folderCurrentItem = kInvalidIndex;
+            overlay.folderAnimProgress = 0.0f;
+            overlay.folderEntries = nullptr;
+            overlay.folderEntryCount = 0;
+            overlay.folderRootName = nullptr;
+            overlay.folderFilteredIndices = nullptr;
+            overlay.folderFilteredCount = 0;
+            overlay.folderHeaderButtonHover = false;
+            overlay.folderFilterQuery = nullptr;
+            overlay.folderItemFolderButtonHover = false;
+            overlay.folderItemNewWindowButtonHover = false;
+        }
+
         overlayPtr = &overlay;
     }
     // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
@@ -1480,7 +1665,7 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         hwnd, *state->layout, effectiveScrollY, kContentPaddingDip, overlayPtr,
         mainScrollbarActive, state->currentDocumentPath, state->currentDocumentSizeBytes,
         static_cast<u32>(state->bottomBarHoverButton), state->bottomBarPathCopied,
-        state->showWelcomeScreen, state->welcomeButtonHover);
+        state->showWelcomeScreen, state->welcomeButtonHover, state->welcomeFolderButtonHover);
 
     if (state->onFrameEnd) state->onFrameEnd(state->callbackUserData);
 
@@ -1503,7 +1688,9 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
         // 换行宽度再收窄掉左右内边距(ContentWidthDip)。
         float scale = DipScaleOf(hwnd);
         float fontScale = state->fonts ? state->fonts->Scale() : 1.0f;
-        float contentWidth = ContentWidthDip(static_cast<float>(width) / scale);
+        float contentWidth =
+            ContentWidthDip(static_cast<float>(width) / scale) - FolderSqueezeWidthDip(state);
+        if (contentWidth < 0.0f) contentWidth = 0.0f;
         state->layout->Relayout(*state->doc, contentWidth, fontScale, state->images);
         // 滚动范围夹取同样要用"可用视口高度"(收窄掉上下内边距),口径与
         // ClampScrollOffset 的其余调用点一致,滚到底才会正确留出底部内边距空白。
@@ -1517,6 +1704,7 @@ void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
     // RepositionFindEdit 内部对 findEditHwnd 为空静默返回,不额外判断可见性
     // (隐藏态重定位没有副作用,下次 Show 时位置已经是对的)。
     RepositionFindEdit(hwnd, state);
+    RepositionFolderFilterEdit(hwnd, state);
     // T56:尺寸变化(含最大化/还原)去抖后写盘;放在这里而不是只放 WM_MOVE,
     // 因为纯拖边框改尺寸不会触发 WM_MOVE。
     OnWindowGeometryMaybeChanged(hwnd, state);
@@ -1537,7 +1725,7 @@ void ApplyZoomChange(HWND hwnd, WindowState* state) {
 
     u32 topBlock = FindTopBlockIndex(*state->layout, state->scrollY);
 
-    state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd), state->fonts->Scale(),
+    state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd, state), state->fonts->Scale(),
                             state->images);
 
     float usableViewportHeight = UsableViewportHeightOf(hwnd);
@@ -1571,6 +1759,17 @@ void TriggerOpenDocument(HWND hwnd, WindowState* state) {
     }
 }
 
+// "打开文件夹"动作本体:弹出文件夹选择框,选中后调用 OpenAndScanFolder 就地
+// 穿透扫描并展开文件列表侧栏。底部栏 OpenFolder 按钮、欢迎屏"打开文件夹"
+// 大按钮、Ctrl+Shift+O 快捷键与文件列表侧栏为空时的点击兜底,四处共用这一份
+// 实现,保证行为完全一致。
+void TriggerOpenFolder(HWND hwnd, WindowState* state) {
+    if (!state) return;
+    wchar_t chosen[MAX_PATH] = {0};
+    if (!ShowOpenFolderDialog(hwnd, chosen, MAX_PATH)) return;  // 用户取消,静默无行为
+    OpenAndScanFolder(hwnd, state, chosen);
+}
+
 // 底部操作栏(新需求):6 个按钮各自的动作全部复用现有函数,不另写一套——
 // 放大/缩小复用 T29 的 FontSubsystem::ZoomIn/ZoomOut + ApplyZoomChange(与
 // Ctrl+± 同一路径),主题复用 T47 的 CycleTheme(与 Ctrl+Shift+T 同一路径),
@@ -1580,6 +1779,9 @@ void TriggerOpenDocument(HWND hwnd, WindowState* state) {
 void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn) {
     if (!state) return;
     switch (btn) {
+    case BottomBarButton::FileList:
+        ToggleFolderPanel(hwnd, state);
+        return;
     case BottomBarButton::ZoomIn:
         if (state->fonts) {
             state->fonts->ZoomIn();
@@ -1603,6 +1805,9 @@ void OnBottomBarButtonClicked(HWND hwnd, WindowState* state, BottomBarButton btn
         return;
     case BottomBarButton::OpenDoc:
         TriggerOpenDocument(hwnd, state);
+        return;
+    case BottomBarButton::OpenFolder:
+        TriggerOpenFolder(hwnd, state);
         return;
     case BottomBarButton::CopyPath:
         OnBottomBarCopyPathClicked(hwnd, state);
@@ -1628,6 +1833,7 @@ void OnDpiChanged(HWND hwnd, WindowState* state, UINT newDpi, const RECT* sugges
         state->renderer->OnDpiChanged(static_cast<float>(newDpi));
     }
     RepositionFindEdit(hwnd, state);
+    RepositionFolderFilterEdit(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -1648,6 +1854,10 @@ void OnDpiChanged(HWND hwnd, WindowState* state, UINT newDpi, const RECT* sugges
 // copy was missing this check, so hover feedback/cursor still showed a
 // "clickable button" while the mask covered it, disagreeing with the
 // actual click behavior (closes the sidebar).
+//
+// 文件夹侧栏是挤压模式的常驻面板(DrawFolderPanel 已经让出底部栏那一条
+// 高度),不是盖住一切的悬浮抽屉,所以不计入这里——底部栏(唯一能收起
+// 它的入口)必须一直可交互,否则侧栏打开后就再也关不掉了。
 bool SidebarMaskCoversBottomBar(const WindowState* state) {
     return state && ((state->outline && state->outlineAnimState != OutlineAnimState::Closed) ||
                       state->historyAnimState != SidebarAnimState::Closed);
@@ -1755,15 +1965,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // 欢迎屏"打开文件"大按钮——只在未打开任何文档时存在,优先级同样
+        // 欢迎屏双按钮(打开文件/打开文件夹)——只在未打开任何文档时存在,优先级同样
         // 高于正文/侧栏命中测试(欢迎屏本就没有正文可点)。
         if (state && state->showWelcomeScreen) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
-            WelcomeButtonRect rect = WelcomeButtonRectDip(ClientWidthDip(hwnd), ClientHeightDip(hwnd));
-            if (IsPointInWelcomeButton(rect, dipX, dipY)) {
+            WelcomeButtonHit hit = HitTestWelcomeButtons(ClientWidthDip(hwnd), ClientHeightDip(hwnd), dipX, dipY);
+            if (hit == WelcomeButtonHit::OpenFile) {
                 TriggerOpenDocument(hwnd, state);
+                return 0;
+            } else if (hit == WelcomeButtonHit::OpenFolder) {
+                TriggerOpenFolder(hwnd, state);
                 return 0;
             }
         }
@@ -1794,6 +2007,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 state->historyPanelResizing = true;
                 state->historyPanelResizeStartMouseXDip = dipX;
                 state->historyPanelResizeStartWidthDip = state->historyPanelWidthDip;
+                SetCapture(hwnd);
+                return 0;
+            }
+        }
+
+        // 文件夹侧栏右边缘拖拽调宽度的抓手——仅在文件夹侧栏完全展开时允许。
+        if (state && state->folderAnimState == SidebarAnimState::Open) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            SidebarHitArea hit = SidebarHitTest(
+                SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                state->folderPanelWidthDip, state->folderAnimProgress, dipX, dipY);
+            if (hit == SidebarHitArea::ResizeHandle) {
+                state->folderPanelResizing = true;
+                state->folderPanelResizeStartMouseXDip = dipX;
+                state->folderPanelResizeStartWidthDip = state->folderPanelWidthDip;
                 SetCapture(hwnd);
                 return 0;
             }
@@ -1859,8 +2089,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
+            } else if (state->folderAnimState == SidebarAnimState::Open &&
+                       dipX <= state->folderPanelWidthDip) {
+                float viewportHeight = FolderPanelHeightDip(hwnd);
+                u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+                float contentHeight =
+                    kFolderSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                ScrollbarMetrics m = CalcScrollbarMetrics(state->folderPanelWidthDip, viewportHeight,
+                                                          contentHeight, state->folderScrollY);
+                if (IsPointInScrollbarThumb(m, dipX, dipY)) {
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Folder;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = state->folderScrollY;
+                    SetCapture(hwnd);
+                    return 0;
+                } else if (m.visible && dipY >= 0.0f && dipY <= viewportHeight &&
+                           IsPointInScrollbarColumn(state->folderPanelWidthDip, dipX)) {
+                    float newY = ScrollYAfterTrackClick(dipY, viewportHeight, contentHeight);
+                    state->folderScrollY = ClampScrollOffset(newY, contentHeight, viewportHeight);
+                    state->scrollbarDragTarget = ScrollbarDragTarget::Folder;
+                    state->scrollbarDragStartMouseYDip = dipY;
+                    state->scrollbarDragStartScrollY = newY;
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
             } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
                        state->historyAnimState == SidebarAnimState::Closed && state->layout) {
+                // 文件夹侧栏是挤压模式:上面的 else-if 分支已经用 dipX <=
+                // folderPanelWidthDip 把"点在抽屉里"的情况接住了,能走到
+                // 这里就说明鼠标在挤压后仍可见的正文区域,不需要再拿
+                // folderAnimState 当门槛。
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
@@ -1928,10 +2187,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                         SidebarRectDip folderRect = SidebarFolderButtonLocalRectDip(
                             state->historyPanelWidthDip, static_cast<u32>(item),
                             state->historyScrollY);
-                        bool onCloseButton = localX >= closeRect.left && localX < closeRect.right &&
-                                             dipY >= closeRect.top && dipY < closeRect.bottom;
-                        bool onFolderButton = localX >= folderRect.left && localX < folderRect.right &&
-                                              dipY >= folderRect.top && dipY < folderRect.bottom;
+                        bool onCloseButton = PointInRectDip(closeRect.left, closeRect.top,
+                                                             closeRect.right, closeRect.bottom, localX, dipY);
+                        bool onFolderButton = PointInRectDip(folderRect.left, folderRect.top,
+                                                              folderRect.right, folderRect.bottom, localX, dipY);
                         if (onCloseButton) {
                             OnHistoryItemDeleteClicked(hwnd, state, static_cast<u32>(item));
                         } else if (onFolderButton) {
@@ -1945,6 +2204,86 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 ToggleHistoryPanel(hwnd, state);
             }
             return 0;
+        }
+
+        // 文件夹侧栏是挤压模式,正文没被蒙层盖住——只短路"点在抽屉本身范围内"
+        // 的情况;点在抽屉之外(被挤压后仍可见的正文区域)要继续往下走正文
+        // 命中测试,不再当成"点了蒙层"去关闭侧栏(挤压模式没有蒙层语义)。
+        if (state && state->folderAnimState != SidebarAnimState::Closed) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            SidebarHitArea hit = SidebarHitTest(
+                SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                state->folderPanelWidthDip, state->folderAnimProgress, dipX, dipY);
+            if (hit == SidebarHitArea::InsideDrawer) {
+                if (state->folderAnimState == SidebarAnimState::Open) {
+                    // 1. 检查是否点击第一行右侧"打开根目录"文件夹按钮
+                    SidebarRectDip headerBtnRect = SidebarFolderHeaderButtonLocalRectDip(state->folderPanelWidthDip);
+                    if (PointInRectDipInclusive(headerBtnRect.left, headerBtnRect.top, headerBtnRect.right,
+                                                 headerBtnRect.bottom, dipX, dipY)) {
+                        if (state->folderRootPath[0] != 0) {
+                            ShellExecuteW(nullptr, L"open", state->folderRootPath, nullptr, nullptr, SW_SHOWNORMAL);
+                        }
+                        return 0;
+                    }
+
+                    // 2. 检查是否点击第二行输入框区域
+                    SidebarRectDip inputRect = SidebarFolderFilterInputLocalRectDip(state->folderPanelWidthDip);
+                    if (PointInRectDipInclusive(inputRect.left, inputRect.top, inputRect.right,
+                                                 inputRect.bottom, dipX, dipY)) {
+                        if (state->folderFilterEditHwnd) {
+                            SetFocus(state->folderFilterEditHwnd);
+                        }
+                        return 0;
+                    }
+
+                    // 3. 检查列表项命中
+                    u32 count = (state->folderFilterQueryLen > 0)
+                                    ? state->folderFilteredIndices.Size()
+                                    : state->folderEntries.Size();
+                    i32 item = SidebarHitTestItem(
+                        SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                        state->folderPanelWidthDip, count,
+                        state->folderScrollY, dipX, dipY,
+                        kSidebarRowHeightDip, kFolderSidebarHeaderHeightDip);
+                    if (item >= 0 && static_cast<u32>(item) < count) {
+                        u32 realIdx = (state->folderFilterQueryLen > 0)
+                                          ? state->folderFilteredIndices[static_cast<u32>(item)]
+                                          : static_cast<u32>(item);
+                        // 检查是否点在项右侧"打开所在文件夹"按钮
+                        SidebarRectDip itemBtnRect = SidebarFolderItemButtonLocalRectDip(
+                            state->folderPanelWidthDip, static_cast<u32>(item), state->folderScrollY);
+                        if (PointInRectDipInclusive(itemBtnRect.left, itemBtnRect.top, itemBtnRect.right,
+                                                     itemBtnRect.bottom, dipX, dipY)) {
+                            OpenContainingFolderAndSelect(state->folderEntries[realIdx].fullPath);
+                            return 0;
+                        }
+
+                        // 检查是否点在项"新窗口打开"按钮——进程内新开一个顶层窗口打开
+                        // 该文件,复用与历史侧栏同一套 openNewWindow 回调,不重新实现。
+                        SidebarRectDip newWinBtnRect = SidebarFolderItemNewWindowButtonLocalRectDip(
+                            state->folderPanelWidthDip, static_cast<u32>(item), state->folderScrollY);
+                        if (PointInRectDipInclusive(newWinBtnRect.left, newWinBtnRect.top, newWinBtnRect.right,
+                                                     newWinBtnRect.bottom, dipX, dipY)) {
+                            if (state->openNewWindow) {
+                                state->openNewWindow(state->callbackUserData,
+                                                     state->folderEntries[realIdx].fullPath);
+                            }
+                            return 0;
+                        }
+
+                        state->folderCurrentItem = realIdx;
+                        const wchar_t* targetPath = state->folderEntries[realIdx].fullPath;
+                        if (state->openDocumentInPlace) {
+                            state->openDocumentInPlace(state->callbackUserData, targetPath);
+                        }
+                    }
+                }
+                return 0;
+            }
+            // hit 落在 InsideDrawer 之外(挤压模式下就是正文区域):不 return,
+            // 继续往下走正文的滚动条/命中测试分支。
         }
 
         // T35/T36/T36b:统一走命中测试 —— 链接走链接行为,图片走"打开原图"
@@ -2011,6 +2350,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
 
+        // 文件夹侧栏右边缘拖拽调宽度——按鼠标横向位移换算新宽度。
+        if (state && state->folderPanelResizing && (wparam & MK_LBUTTON)) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            float dragDelta = dipX - state->folderPanelResizeStartMouseXDip;
+            state->folderPanelWidthDip =
+                ClampSidebarWidth(state->folderPanelResizeStartWidthDip + dragDelta, ClientWidthDip(hwnd));
+            // 挤压模式:侧栏宽度跟着拖拽联动正文换行宽度,拖拽过程中要连续重排。
+            if (state->layout && state->doc) {
+                float scale2 = state->fonts ? state->fonts->Scale() : 1.0f;
+                state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd, state), scale2, state->images);
+                state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
+                                                   UsableViewportHeightOf(hwnd));
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
         // 自绘滚动条(方案A):正在拖滑块——按鼠标位移换算新的滚动偏移。
         // 与 T80 文本拖选互斥(按下时二者只会有一个进入,见 WM_LBUTTONDOWN),
         // 这里提前 return,不再往下走选区更新/悬浮态判定。
@@ -2040,6 +2397,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
                                                    viewportHeight, contentHeight);
                 state->historyScrollY = ClampScrollOffset(newY, contentHeight, viewportHeight);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (state->scrollbarDragTarget == ScrollbarDragTarget::Folder) {
+                float viewportHeight = FolderPanelHeightDip(hwnd);
+                u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+                float contentHeight =
+                    kFolderSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
+                                                   viewportHeight, contentHeight);
+                state->folderScrollY = ClampScrollOffset(newY, contentHeight, viewportHeight);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
@@ -2071,10 +2437,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             TrackMouseEvent(&track);
         }
 
-        // 自绘滚动条 Idle/Active 透明度(见 theme.h):只判"鼠标是否落在滚动条
-        // 横向范围内",纵坐标夹在对应视口高度内(排除底部操作栏这类其他控件
-        // 占用的区域)。侧栏打开时只判侧栏自己的,关闭时只判正文的——与两者
-        // 互斥的绘制/拖动逻辑保持同一套"非此即彼"口径。
+        // 自绘滚动条(方案A):鼠标悬浮在滑块列内时给出视觉反馈(悬浮高亮),
+        // 移出时恢复浅色态。
         if (state) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
@@ -2082,8 +2446,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
             bool newOutlineHover = false;
             bool newHistoryHover = false;
+            bool newFolderHover = false;
             bool newMainHover = false;
             u32 newHistoryItemHover = kInvalidIndex;
+            u32 newFolderItemHover = kInvalidIndex;
+            bool newFolderHeaderBtnHover = false;
+            bool newItemFolderBtnHover = false;
+            bool newItemNewWindowBtnHover = false;
 
             if (state->outline && state->outlineAnimState == OutlineAnimState::Open) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
@@ -2103,8 +2472,38 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                         state->historyScrollY, dipX, dipY);
                     newHistoryItemHover = (hitItem >= 0) ? static_cast<u32>(hitItem) : kInvalidIndex;
                 }
+            } else if (state->folderAnimState == SidebarAnimState::Open) {
+                float drawerWidth = state->folderPanelWidthDip;
+                float viewportHeight = FolderPanelHeightDip(hwnd);
+                if (dipX <= drawerWidth) {
+                    newFolderHover = dipY >= 0.0f && dipY <= viewportHeight &&
+                                     IsPointInScrollbarColumn(drawerWidth, dipX);
+                    SidebarRectDip headerBtn = SidebarFolderHeaderButtonLocalRectDip(drawerWidth);
+                    newFolderHeaderBtnHover = PointInRectDipInclusive(
+                        headerBtn.left, headerBtn.top, headerBtn.right, headerBtn.bottom, dipX, dipY);
+                    u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+                    i32 hitItem = SidebarHitTestItem(
+                        SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                        drawerWidth, count,
+                        state->folderScrollY, dipX, dipY,
+                        kSidebarRowHeightDip, kFolderSidebarHeaderHeightDip);
+                    newFolderItemHover = (hitItem >= 0) ? static_cast<u32>(hitItem) : kInvalidIndex;
+                    if (hitItem >= 0) {
+                        SidebarRectDip itemBtn = SidebarFolderItemButtonLocalRectDip(drawerWidth, static_cast<u32>(hitItem), state->folderScrollY);
+                        newItemFolderBtnHover = PointInRectDipInclusive(
+                            itemBtn.left, itemBtn.top, itemBtn.right, itemBtn.bottom, dipX, dipY);
+                        SidebarRectDip newWinBtn = SidebarFolderItemNewWindowButtonLocalRectDip(
+                            drawerWidth, static_cast<u32>(hitItem), state->folderScrollY);
+                        newItemNewWindowBtnHover = PointInRectDipInclusive(
+                            newWinBtn.left, newWinBtn.top, newWinBtn.right, newWinBtn.bottom, dipX, dipY);
+                    }
+                }
             } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
                        state->historyAnimState == SidebarAnimState::Closed && state->layout) {
+                // 文件夹侧栏是挤压模式:上面的 else-if 分支已经用 dipX <=
+                // folderPanelWidthDip 把"点在抽屉里"的情况接住了,能走到
+                // 这里就说明鼠标在挤压后仍可见的正文区域,不需要再拿
+                // folderAnimState 当门槛。
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
@@ -2112,12 +2511,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             if (newOutlineHover != state->outlineScrollbarHover ||
                 newHistoryHover != state->historyScrollbarHover ||
+                newFolderHover != state->folderScrollbarHover ||
                 newMainHover != state->mainScrollbarHover ||
-                newHistoryItemHover != state->historyHoverIndex) {
+                newHistoryItemHover != state->historyHoverIndex ||
+                newFolderItemHover != state->folderHoverIndex ||
+                newFolderHeaderBtnHover != state->folderHeaderButtonHover ||
+                newItemFolderBtnHover != state->folderItemFolderButtonHover ||
+                newItemNewWindowBtnHover != state->folderItemNewWindowButtonHover) {
                 state->outlineScrollbarHover = newOutlineHover;
                 state->historyScrollbarHover = newHistoryHover;
+                state->folderScrollbarHover = newFolderHover;
                 state->mainScrollbarHover = newMainHover;
                 state->historyHoverIndex = newHistoryItemHover;
+                state->folderHoverIndex = newFolderItemHover;
+                state->folderHeaderButtonHover = newFolderHeaderBtnHover;
+                state->folderItemFolderButtonHover = newItemFolderBtnHover;
+                state->folderItemNewWindowButtonHover = newItemNewWindowBtnHover;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
 
@@ -2138,11 +2547,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
             // 欢迎屏按钮悬浮态,判定口径与上面底部栏按钮同一套。
             if (state->showWelcomeScreen) {
-                WelcomeButtonRect rect =
-                    WelcomeButtonRectDip(ClientWidthDip(hwnd), clientHeightDip);
-                bool newWelcomeHover = IsPointInWelcomeButton(rect, dipX, dipY);
-                if (newWelcomeHover != state->welcomeButtonHover) {
-                    state->welcomeButtonHover = newWelcomeHover;
+                WelcomeButtonHit hit =
+                    HitTestWelcomeButtons(ClientWidthDip(hwnd), clientHeightDip, dipX, dipY);
+                bool newFileHover = (hit == WelcomeButtonHit::OpenFile);
+                bool newFolderHoverBtn = (hit == WelcomeButtonHit::OpenFolder);
+                if (newFileHover != state->welcomeButtonHover ||
+                    newFolderHoverBtn != state->welcomeFolderButtonHover) {
+                    state->welcomeButtonHover = newFileHover;
+                    state->welcomeFolderButtonHover = newFolderHoverBtn;
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
             }
@@ -2158,6 +2570,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         if (state && state->historyPanelResizing) {
             state->historyPanelResizing = false;
+            ReleaseCapture();
+        }
+        if (state && state->folderPanelResizing) {
+            state->folderPanelResizing = false;
             ReleaseCapture();
         }
         // 自绘滚动条(方案A):结束拖动。
@@ -2184,14 +2600,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             changed = true;
         }
         if (state && state->scrollbarDragTarget == ScrollbarDragTarget::None &&
-            (state->mainScrollbarHover || state->outlineScrollbarHover || state->historyScrollbarHover)) {
+            (state->mainScrollbarHover || state->outlineScrollbarHover || state->historyScrollbarHover || state->folderScrollbarHover)) {
             state->mainScrollbarHover = false;
             state->outlineScrollbarHover = false;
             state->historyScrollbarHover = false;
+            state->folderScrollbarHover = false;
             changed = true;
         }
         if (state && state->historyHoverIndex != kInvalidIndex) {
             state->historyHoverIndex = kInvalidIndex;
+            changed = true;
+        }
+        if (state && state->folderHoverIndex != kInvalidIndex) {
+            state->folderHoverIndex = kInvalidIndex;
             changed = true;
         }
         // 底部栏图标悬浮提示同理清掉,鼠标移出窗口就不该再挂着提示气泡。
@@ -2199,7 +2620,45 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             state->bottomBarHoverButton = BottomBarButton::None;
             changed = true;
         }
+        if (state && (state->welcomeButtonHover || state->welcomeFolderButtonHover)) {
+            state->welcomeButtonHover = false;
+            state->welcomeFolderButtonHover = false;
+            changed = true;
+        }
         if (changed) InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+
+    case WM_DROPFILES: {
+        HDROP hdrop = reinterpret_cast<HDROP>(wparam);
+        if (hdrop && state) {
+            wchar_t droppedPath[MAX_PATH];
+            UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
+            if (count > 0) {
+                if (DragQueryFileW(hdrop, 0, droppedPath, MAX_PATH) > 0) {
+                    DWORD attrs = GetFileAttributesW(droppedPath);
+                    if (attrs != INVALID_FILE_ATTRIBUTES) {
+                        if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+                            OpenAndScanFolder(hwnd, state, droppedPath, true /* openSidebar */);
+                        } else {
+                            if (state->openDocumentInPlace) {
+                                state->openDocumentInPlace(state->callbackUserData, droppedPath);
+                            }
+                            // 扫描该单文件所在目录的兄弟目标文件并生成列表，直接显示文件，不自动展开侧栏
+                            wchar_t parentDir[MAX_PATH];
+                            wcscpy_s(parentDir, droppedPath);
+                            wchar_t* lastSlash = wcsrchr(parentDir, L'\\');
+                            if (!lastSlash) lastSlash = wcsrchr(parentDir, L'/');
+                            if (lastSlash) {
+                                *lastSlash = 0;
+                                OpenAndScanFolder(hwnd, state, parentDir, false /* openSidebar */);
+                            }
+                        }
+                    }
+                }
+            }
+            DragFinish(hdrop);
+        }
         return 0;
     }
 
@@ -2306,6 +2765,52 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        // Folder drawer slide & mask fade animation timer tick (~60 FPS).
+        //
+        // 文件夹侧栏滑动与蒙层淡入淡出动画节拍 (~60 FPS)。
+        if (wparam == kFolderAnimTimerId) {
+            if (!state) return 0;
+            ULONGLONG now = GetTickCount64();
+            float elapsed = static_cast<float>(now - state->folderAnimStartTick);
+            float t = elapsed / kSidebarAnimDurationMs;
+            if (t > 1.0f) t = 1.0f;
+            float easeT = EaseOutCubic(t);
+
+            if (state->folderAnimState == SidebarAnimState::Opening) {
+                state->folderAnimProgress =
+                    state->folderAnimStartProgress + (1.0f - state->folderAnimStartProgress) * easeT;
+                if (t >= 1.0f || state->folderAnimProgress >= 1.0f) {
+                    state->folderAnimProgress = 1.0f;
+                    state->folderAnimState = SidebarAnimState::Open;
+                    KillTimer(hwnd, kFolderAnimTimerId);
+                    RepositionFolderFilterEdit(hwnd, state);
+                    if (state->folderFilterEditHwnd) {
+                        ShowWindow(state->folderFilterEditHwnd, SW_SHOW);
+                    }
+                }
+            } else if (state->folderAnimState == SidebarAnimState::Closing) {
+                state->folderAnimProgress =
+                    state->folderAnimStartProgress * (1.0f - easeT);
+                if (t >= 1.0f || state->folderAnimProgress <= 0.0001f) {
+                    state->folderAnimProgress = 0.0f;
+                    state->folderAnimState = SidebarAnimState::Closed;
+                    KillTimer(hwnd, kFolderAnimTimerId);
+                    if (state->folderFilterEditHwnd) {
+                        ShowWindow(state->folderFilterEditHwnd, SW_HIDE);
+                    }
+                }
+            }
+            // 挤压模式:文件夹侧栏宽度随动画进度连续变化,正文换行宽度要
+            // 跟着每一帧重排,而不是只在开/关两态各算一次。
+            if (state->layout && state->doc) {
+                float fontScale2 = state->fonts ? state->fonts->Scale() : 1.0f;
+                state->layout->Relayout(*state->doc, ViewportWidthOf(hwnd, state), fontScale2, state->images);
+                state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
+                                                   UsableViewportHeightOf(hwnd));
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         // T78:内存泄漏排查探针的循环节拍——每次到点执行一次对应动作,
         // 复用与真实快捷键完全相同的代码路径(不是重新实现一遍语义)。
         if (wparam == kBenchLoopTimerId && state && state->benchLoopKind != 0) {
@@ -2346,7 +2851,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_SETCURSOR: {
         // T63b:侧栏调宽度抓手——正在拖拽时,或鼠标悬浮在抓手上时,都给
         // 左右缩放光标,优先级最高(拖动状态下不管光标当前在哪都要保持)。
-        if (state && (state->outlinePanelResizing || state->historyPanelResizing)) {
+        if (state && (state->outlinePanelResizing || state->historyPanelResizing || state->folderPanelResizing)) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
             return TRUE;
         }
@@ -2386,22 +2891,68 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 }
             }
         }
+        if (state && state->folderAnimState == SidebarAnimState::Open &&
+            LOWORD(lparam) == HTCLIENT) {
+            POINT pt{};
+            if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
+                float scale = DipScaleOf(hwnd);
+                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
+                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
+                SidebarHitArea hit = SidebarHitTest(
+                    SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                    state->folderPanelWidthDip, state->folderAnimProgress, dipX, dipY);
+                if (hit == SidebarHitArea::ResizeHandle) {
+                    SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
+                    return TRUE;
+                } else if (hit == SidebarHitArea::InsideDrawer) {
+                    SidebarRectDip headerBtn = SidebarFolderHeaderButtonLocalRectDip(state->folderPanelWidthDip);
+                    if (PointInRectDipInclusive(headerBtn.left, headerBtn.top, headerBtn.right,
+                                                 headerBtn.bottom, dipX, dipY)) {
+                        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+                        return TRUE;
+                    }
+                    u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+                    i32 item = SidebarHitTestItem(
+                        SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                        state->folderPanelWidthDip, count,
+                        state->folderScrollY, dipX, dipY,
+                        kSidebarRowHeightDip, kFolderSidebarHeaderHeightDip);
+                    if (item >= 0) {
+                        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+                        return TRUE;
+                    }
+                }
+            }
+        }
         if (state && state->bottomBarHoverButton != BottomBarButton::None && LOWORD(lparam) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
             return TRUE;
         }
-        if (state && state->showWelcomeScreen && state->welcomeButtonHover &&
+        if (state && state->showWelcomeScreen && (state->welcomeButtonHover || state->welcomeFolderButtonHover) &&
             LOWORD(lparam) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
             return TRUE;
         }
         // T35:鼠标移到链接或可点击的图片/占位块上时给手型光标;
         // T45 的代码块复制按钮同理(它就是个按钮,手型光标是最符合直觉的提示)。
+        // 文件夹侧栏是挤压模式,光标落在抽屉本身范围内时不该按正文命中判定
+        // (会被当前挤压偏移换算成一个越界/无意义的文档坐标),所以这里额外
+        // 排除"光标在文件夹抽屉内"的情况,而不是像旧的悬浮蒙层逻辑那样只要
+        // 侧栏开着就整体禁用。
         if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
             state->historyAnimState == SidebarAnimState::Closed && LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
-                if (ShouldUseHandCursor(HitTestAtClientPoint(hwnd, state, pt.x, pt.y))) {
+                float scale = DipScaleOf(hwnd);
+                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
+                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
+                bool insideFolderDrawer =
+                    state->folderAnimState != SidebarAnimState::Closed &&
+                    SidebarHitTest(SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                                   state->folderPanelWidthDip, state->folderAnimProgress, dipX,
+                                   dipY) == SidebarHitArea::InsideDrawer;
+                if (!insideFolderDrawer &&
+                    ShouldUseHandCursor(HitTestAtClientPoint(hwnd, state, pt.x, pt.y))) {
                     SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
                     return TRUE;
                 }
@@ -2423,16 +2974,34 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        // 文件夹侧栏过滤输入框 EN_CHANGE 通知：就地过滤文件列表
+        if (HIWORD(wparam) == EN_CHANGE && LOWORD(wparam) == kFolderFilterEditControlId &&
+            state && state->folderFilterEditHwnd) {
+            wchar_t buf[128];
+            int len = GetWindowTextW(state->folderFilterEditHwnd, buf, 128);
+            if (len > 0) {
+                wcsncpy_s(state->folderFilterQuery, buf, len);
+                state->folderFilterQuery[len] = 0;
+                state->folderFilterQueryLen = static_cast<u32>(len);
+            } else {
+                state->folderFilterQuery[0] = 0;
+                state->folderFilterQueryLen = 0;
+            }
+            FilterFolderEntries(state);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     case WM_CTLCOLOREDIT: {
-        // 查找条 EDIT 子窗口背景/文字色跟随当前生效主题(render/theme.h 的
+        // 查找条与侧栏过滤 EDIT 子窗口背景/文字色跟随当前生效主题(render/theme.h 的
         // findBarBackground/findBarText),与 renderer.cpp 画的"查找:"前缀/
         // 状态文字用同一份色值,两处视觉才不会一亮一暗对不上。
         HDC dc = reinterpret_cast<HDC>(wparam);
         HWND ctrl = reinterpret_cast<HWND>(lparam);
-        if (ctrl == (state ? state->findEditHwnd : nullptr)) {
+        if (ctrl == (state ? state->findEditHwnd : nullptr) ||
+            ctrl == (state ? state->folderFilterEditHwnd : nullptr)) {
             bool isDark = ResolveEffectiveTheme(state->themeSetting, state->systemIsDark);
             const Palette& palette = isDark ? kDarkPalette : kLightPalette;
             HBRUSH& brush = isDark ? g_findEditBgBrushDark : g_findEditBgBrushLight;
@@ -2446,6 +3015,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
     case kWmRemoteImageDone:
         OnRemoteImageDone(hwnd, state, reinterpret_cast<RemoteImageResult*>(lparam));
+        return 0;
+
+    case kWmUpdateReady:
+        CommitPendingUpdate(hwnd, reinterpret_cast<void*>(lparam));
         return 0;
 
     case WM_MOUSEWHEEL: {
@@ -2507,9 +3080,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // 侧栏打开时,正文被半透明蒙层盖住,不接受滚轮——上面的分支已经
-        // 处理了"滚在侧栏自身范围内"的情况,走到这里说明鼠标落在蒙层区域,
-        // 直接忽略,不能穿透蒙层滚动看不见的正文。
+        // 文件夹侧栏打开且鼠标落在其区域内时,滚轮滚动文件夹侧栏自身
+        if (state && state->folderAnimState == SidebarAnimState::Open) {
+            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (ScreenToClient(hwnd, &pt)) {
+                float scale = DipScaleOf(hwnd);
+                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
+                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
+                SidebarHitArea hit = SidebarHitTest(
+                    SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
+                    state->folderPanelWidthDip, state->folderAnimProgress, dipX, dipY);
+                if (hit == SidebarHitArea::InsideDrawer) {
+                    float panelHeight = FolderPanelHeightDip(hwnd);
+                    u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
+                    float contentHeight =
+                        kFolderSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+                    float newY = ScrollByWheel(state->folderScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
+                                               contentHeight, panelHeight);
+                    state->folderScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        // 大纲/历史侧栏是悬浮蒙层模式:侧栏打开时正文被半透明蒙层盖住,不接受
+        // 滚轮——上面的分支已经处理了"滚在侧栏自身范围内"的情况,走到这里
+        // 说明鼠标落在蒙层区域,直接忽略,不能穿透蒙层滚动看不见的正文。
+        // 文件夹侧栏是挤压模式,正文没有被蒙层盖住而是被挤到一侧、始终可见,
+        // 所以这里不拿 folderAnimState 做门槛——鼠标落在文件夹侧栏范围内的
+        // 滚轮已经在上面的分支里处理并 return 了,能走到这里就说明鼠标在
+        // 被挤压后仍然可见的正文区域上,应该正常滚动正文。
         if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
             state->historyAnimState == SidebarAnimState::Closed) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
@@ -2556,11 +3157,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             ToggleOutlinePanel(hwnd, state);
             return 0;
         }
+        // 文件夹侧栏是挤压模式的常驻面板,不是可以随手"点一下/按个键"就
+        // 意外关掉的悬浮抽屉——按用户要求,只有底部栏按钮能收起/展开它,
+        // Esc 不再对它生效(大纲/历史侧栏仍是悬浮抽屉,Esc 逻辑保留)。
         // Ctrl+W / Esc:关闭当前窗口(每个文件一个独立窗口,关掉即退出本进程)。
         if (wparam == VK_ESCAPE || (ctrlDown && wparam == 'W')) {
             DestroyWindow(hwnd);
             return 0;
         }
+        // Ctrl+Shift+O: 弹出文件夹选择框并穿透扫描
+        if (ctrlDown && shiftDown && wparam == 'O' && state) {
+            TriggerOpenFolder(hwnd, state);
+            return 0;
+        }
+        // Ctrl+P / Ctrl+E 快捷键已下线:文件夹侧栏只认底部栏按钮,不提供
+        // 快捷键入口(与 Esc 一起去掉,理由同上)。
         // T80:Ctrl+C 复制当前选中的正文文本(纯文本,跨块拼接)。查找条打开时
         // 也允许——两者不冲突,查找条本身没有可选文本,复制的是正文选区。
         if (ctrlDown && wparam == 'C' && state) {
@@ -2650,6 +3261,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         KillTimer(hwnd, kOutlineHighlightTimerId);
         KillTimer(hwnd, kOutlineAnimTimerId);
         KillTimer(hwnd, kHistoryAnimTimerId);
+        KillTimer(hwnd, kFolderAnimTimerId);
         // T56:窗口即将销毁前立即兜底写一次(而不是等 500ms 去抖到点,那时
         // 窗口可能已经没了),取消掉可能还在等待的去抖定时器。
         KillTimer(hwnd, kWindowGeometryTimerId);
@@ -2685,6 +3297,194 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 }
 
 }  // namespace
+
+/**
+ * 换文档后把正文滚动位置复位到顶部——SetScrollY 是本 TU 内部匿名命名空间的函数,
+ * app 层看不到,这里薄封装一层导出给 main.cpp 的 OpenDocumentInPlace 用。
+ * forceRefresh 传 true:换文档场景 scrollY 数值可能凑巧还是 0(比如打开的是
+ * 另一篇同样没滚动过的文档),不能靠"数值没变就跳过虚拟化刷新"的短路判断。
+ */
+void ResetScrollToTop(HWND hwnd, WindowState* state) {
+    SetScrollY(hwnd, state, 0.0f, /*forceRefresh=*/true);
+}
+
+/**
+ * 打开并扫描指定文件夹，生成 Markdown 列表，并根据 openSidebar 决定是否展开文件夹侧栏。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态。
+ * @param folderPath 要扫描的文件夹绝对路径。
+ * @param openSidebar 是否在扫描完成后自动启动动画展开侧栏。
+ */
+void OpenAndScanFolder(HWND hwnd, WindowState* state, const wchar_t* folderPath, bool openSidebar) {
+    if (!state || !folderPath || folderPath[0] == 0) return;
+
+    if (!state->folderArena) {
+        void* p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Arena));
+        if (p) {
+            state->folderArena = new (p) Arena();
+        }
+    }
+    if (state->folderArena) {
+        state->folderArena->Init(4 * 1024 * 1024);
+        state->folderArena->Reset();
+    }
+
+    wcscpy_s(state->folderRootPath, folderPath);
+
+    size_t len = wcslen(folderPath);
+    while (len > 0 && (folderPath[len - 1] == L'\\' || folderPath[len - 1] == L'/')) {
+        len--;
+    }
+    size_t start = len;
+    while (start > 0 && folderPath[start - 1] != L'\\' && folderPath[start - 1] != L'/') {
+        start--;
+    }
+    size_t nameLen = len - start;
+    if (nameLen >= MAX_PATH) nameLen = MAX_PATH - 1;
+    if (nameLen > 0) {
+        wcsncpy_s(state->folderRootName, folderPath + start, nameLen);
+        state->folderRootName[nameLen] = 0;
+    } else {
+        wcscpy_s(state->folderRootName, folderPath);
+    }
+
+    state->folderEntries = Vec<FolderEntry>{};
+    ScanMarkdownFolder(folderPath, state->folderArena, &state->folderEntries);
+
+    state->folderFilteredIndices = Vec<u32>{state->folderArena};
+    state->folderFilterQuery[0] = 0;
+    state->folderFilterQueryLen = 0;
+    state->folderHeaderButtonHover = false;
+    state->folderItemFolderButtonHover = false;
+    state->folderItemNewWindowButtonHover = false;
+    if (state->folderFilterEditHwnd) {
+        SetWindowTextW(state->folderFilterEditHwnd, L"");
+    }
+
+    state->folderCurrentItem = kInvalidIndex;
+    if (state->currentDocumentPath[0] != 0 && state->folderEntries.Size() > 0) {
+        for (u32 i = 0; i < state->folderEntries.Size(); ++i) {
+            if (_wcsicmp(state->folderEntries[i].fullPath, state->currentDocumentPath) == 0) {
+                state->folderCurrentItem = i;
+                break;
+            }
+        }
+    }
+
+    state->folderScrollY = 0.0f;
+    state->folderHoverIndex = kInvalidIndex;
+    state->folderScrollbarHover = false;
+    if (state->folderPanelWidthDip <= 0.0f) {
+        state->folderPanelWidthDip = kSidebarDefaultWidthDip;
+    }
+
+    // 若不要求自动展开侧栏（如打开单文件场景），生成列表后直接返回保持折叠
+    if (!openSidebar) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    if (state->historyAnimState == SidebarAnimState::Open ||
+        state->historyAnimState == SidebarAnimState::Opening) {
+        state->historyAnimState = SidebarAnimState::Closing;
+        state->historyAnimStartTick = GetTickCount64();
+        state->historyAnimStartProgress = state->historyAnimProgress;
+        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+    if (state->outlineAnimState == OutlineAnimState::Open ||
+        state->outlineAnimState == OutlineAnimState::Opening) {
+        state->outlineAnimState = OutlineAnimState::Closing;
+        state->outlineAnimStartTick = GetTickCount64();
+        state->outlineAnimStartProgress = state->outlineAnimProgress;
+        KillTimer(hwnd, kOutlineHighlightTimerId);
+        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
+    state->folderAnimState = SidebarAnimState::Opening;
+    state->folderAnimStartTick = GetTickCount64();
+    state->folderAnimStartProgress = (state->folderAnimState == SidebarAnimState::Open) ? 1.0f : state->folderAnimProgress;
+    SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+/**
+ * 切换文件夹侧栏的展开/折叠状态。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态。
+ */
+void ToggleFolderPanel(HWND hwnd, WindowState* state) {
+    if (!state) return;
+
+    if (state->folderAnimState == SidebarAnimState::Open ||
+        state->folderAnimState == SidebarAnimState::Opening) {
+        if (state->folderFilterEditHwnd) {
+            ShowWindow(state->folderFilterEditHwnd, SW_HIDE);
+            if (GetFocus() == state->folderFilterEditHwnd) {
+                SetFocus(hwnd);
+            }
+        }
+        state->folderAnimState = SidebarAnimState::Closing;
+        state->folderAnimStartTick = GetTickCount64();
+        state->folderAnimStartProgress = state->folderAnimProgress;
+        SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
+
+    if (state->folderEntries.Size() == 0) {
+        if (state->currentDocumentPath[0] != 0) {
+            wchar_t dir[MAX_PATH];
+            wcscpy_s(dir, state->currentDocumentPath);
+            wchar_t* lastSlash = wcsrchr(dir, L'\\');
+            if (!lastSlash) lastSlash = wcsrchr(dir, L'/');
+            if (lastSlash) {
+                *lastSlash = 0;
+                OpenAndScanFolder(hwnd, state, dir);
+                return;
+            }
+        }
+        TriggerOpenFolder(hwnd, state);
+        return;
+    }
+
+    if (state->folderAnimState == SidebarAnimState::Closed) {
+        state->folderAnimStartProgress = 0.0f;
+        state->folderAnimProgress = 0.0f;
+        // 有意不重置 folderScrollY:收起再展开应该停在用户上次看到的位置,
+        // 不能每次重新展开都弹回列表顶部(真实换文件夹扫描走的是下面的
+        // OpenAndScanFolder,那里才是"新列表理应从头看"的场景,会自己清零)。
+        state->folderHoverIndex = kInvalidIndex;
+        if (state->folderPanelWidthDip <= 0.0f) {
+            state->folderPanelWidthDip = kSidebarDefaultWidthDip;
+        }
+    } else {
+        state->folderAnimStartProgress = state->folderAnimProgress;
+    }
+
+    if (state->historyAnimState == SidebarAnimState::Open ||
+        state->historyAnimState == SidebarAnimState::Opening) {
+        state->historyAnimState = SidebarAnimState::Closing;
+        state->historyAnimStartTick = GetTickCount64();
+        state->historyAnimStartProgress = state->historyAnimProgress;
+        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+    if (state->outlineAnimState == OutlineAnimState::Open ||
+        state->outlineAnimState == OutlineAnimState::Opening) {
+        state->outlineAnimState = OutlineAnimState::Closing;
+        state->outlineAnimStartTick = GetTickCount64();
+        state->outlineAnimStartProgress = state->outlineAnimProgress;
+        KillTimer(hwnd, kOutlineHighlightTimerId);
+        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    }
+
+    state->folderAnimState = SidebarAnimState::Opening;
+    state->folderAnimStartTick = GetTickCount64();
+    SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 
 /**
  * Request a debounced (500ms) write of the recent-files history to disk.
@@ -2844,6 +3644,24 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     state->historyScrollbarHover = false;
     state->historyHoverIndex = kInvalidIndex;
 
+    // 文件夹穿透侧栏 (左侧抽屉) 初始状态
+    state->welcomeFolderButtonHover = false;
+    state->folderEntries = Vec<FolderEntry>{};
+    state->folderRootPath[0] = 0;
+    state->folderRootName[0] = 0;
+    state->folderCurrentItem = kInvalidIndex;
+    state->folderHoverIndex = kInvalidIndex;
+    state->folderAnimState = SidebarAnimState::Closed;
+    state->folderAnimProgress = 0.0f;
+    state->folderAnimStartTick = 0;
+    state->folderAnimStartProgress = 0.0f;
+    state->folderPanelWidthDip = kSidebarDefaultWidthDip;
+    state->folderScrollY = 0.0f;
+    state->folderScrollbarHover = false;
+    state->folderPanelResizing = false;
+    state->folderPanelResizeStartMouseXDip = 0.0f;
+    state->folderPanelResizeStartWidthDip = 0.0f;
+
     // T56:winW/winH <= 0 表示从未存过窗口矩形(首次启动),走原来的默认
     // 位置/尺寸;否则按上次记住的矩形恢复,先做多显示器越界钳制,再做
     // "同位置已有本程序窗口"的层叠偏移(裁决 #8)。
@@ -2901,6 +3719,11 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
 
+    // 启用文件/文件夹拖拽接收
+    DragAcceptFiles(hwnd, TRUE);
+    ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(hwnd, 0x0049 /* WM_COPYGLOBALDATA */, MSGFLT_ALLOW, nullptr);
+
     // UIPI 穿透:主实例常以管理员权限运行,默认会拦截低完整性级别进程
     // (资源管理器 Explorer.exe 等)发来的 WM_COPYDATA——放行后低权限
     // 进程"用文件打开方式"选中本程序时才能把路径投递给已运行的主实例。
@@ -2919,23 +3742,17 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // (WS_VISIBLE 不设),Ctrl+F 打开查找条时才 ShowWindow;子类化后
     // Enter/Esc/F3 转发给父窗口,其余按键走系统默认 EDIT 处理。
     // find 为空表示这个窗口不支持查找功能(纯渲染场景/单测),不创建。
+    // 创建+子类化+关主题这一套公共步骤收在 edit_box.h::CreateSubclassedEditBox
+    // 里(关主题的原因见该函数注释:主题化 EDIT 在深色背景下会忽略自定义
+    // 文字色)，两处子类化回调按键转发逻辑不同，仍各自实现、作为参数传入。
     if (state->find) {
-        state->findEditHwnd = CreateWindowExW(
-            0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL,
-            0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kFindEditControlId)),
-            instance, nullptr);
-        if (state->findEditHwnd) {
-            LONG_PTR origProc = SetWindowLongPtrW(
-                state->findEditHwnd, GWLP_WNDPROC,
-                reinterpret_cast<LONG_PTR>(FindEditSubclassProc));
-            SetWindowLongPtrW(state->findEditHwnd, GWLP_USERDATA, origProc);
-            // 关掉这个控件的视觉主题(Uxtheme):主题化的 EDIT 在深色背景下会
-            // 忽略 WM_CTLCOLOREDIT 里 SetTextColor 设的文字色,固定按主题引擎
-            // 自己的浅色方案画黑字,在深色查找条底色上完全看不见——这是已知
-            // 的 Win32 坑,禁用主题后才会真正采用经典消息路径的自定义颜色。
-            SetWindowTheme(state->findEditHwnd, L"", L"");
-        }
+        state->findEditHwnd = CreateSubclassedEditBox(hwnd, instance, kFindEditControlId,
+                                                        FindEditSubclassProc);
     }
+
+    // 文件夹侧栏过滤的原生 EDIT 子窗口，创建时保持隐藏
+    state->folderFilterEditHwnd = CreateSubclassedEditBox(
+        hwnd, instance, kFolderFilterEditControlId, FolderFilterEditSubclassProc);
 
     // T48:标题栏深浅色紧跟着 HWND 一起定下来,与窗口类背景刷用的是同一份
     // 生效主题判断(themeSetting/systemIsDark 由调用方在创建窗口前填好)。
@@ -2992,6 +3809,13 @@ float ClientHeightDip(HWND hwnd) {
     RECT rc{};
     GetClientRect(hwnd, &rc);
     return static_cast<float>(rc.bottom - rc.top) / DipScaleOf(hwnd);
+}
+
+// 文件夹侧栏是唯一启用"挤压模式"的侧栏(大纲/历史仍是悬浮模式,不受影响)——
+// 导出实现见 window.h 声明处的注释,口径统一喂给 sidebar.h::SidebarSqueezeWidthDip。
+float FolderSqueezeWidthDip(const WindowState* state) {
+    if (!state) return 0.0f;
+    return SidebarSqueezeWidthDip(state->folderPanelWidthDip, state->folderAnimProgress);
 }
 
 int RunMessageLoop() {

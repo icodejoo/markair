@@ -10,6 +10,8 @@
 #include "../doc/outline.h"
 #include "../doc/search.h"
 #include "../layout/layout.h"
+#include "../shell/button.h"    // Button/IconButton 统一按钮抽象(ButtonRectDip/ButtonIconPaintFn)
+#include "../shell/edit_box.h"  // EditBoxBorderStyle(输入框边框视觉枚举)
 #include "../util/arena.h"
 #include "../util/recent_files.h"
 #include "theme.h"
@@ -17,11 +19,12 @@
 namespace markair {
 
 class Renderer;
+struct FolderEntry;
 
 // 底部栏按钮总数,数值必须与 shell/bottom_bar.h 的 kBottomBarButtonCount
 // 保持一致(render 不反向 include shell 头文件,同一条既有约束)。这里单独
 // 起名是因为 renderer.cpp 内部也有一份同名的文件作用域常量,避免撞名。
-constexpr u32 kBottomBarButtonCountRender = 8;
+constexpr u32 kBottomBarButtonCountRender = 10;
 
 /**
  * 外壳层叠加层视图(T36/T37/T38):查找命中高亮 + 顶部查找条 + 窗口内提示文字。
@@ -119,6 +122,27 @@ struct ShellOverlay {
     //
     // 历史记录侧栏滑动与蒙层淡入淡出动画进度，取值范围 [0.0f, 1.0f]。
     float historyAnimProgress;
+
+    // Folder entries for recursive folder penetrating browser:
+    // 文件夹穿透浏览侧边栏字段:
+    const FolderEntry* folderEntries;
+    u32 folderEntryCount;
+    const wchar_t* folderRootName;
+    u32 folderHoverItem;
+    u32 folderCurrentItem;
+    float folderScrollY;
+    bool folderScrollbarActive;
+    float folderPanelWidthDip;
+    float folderAnimProgress;
+    const u32* folderFilteredIndices;
+    u32 folderFilteredCount;
+    bool folderHeaderButtonHover;
+    const wchar_t* folderFilterQuery;
+    // hover 行右侧"打开所在文件夹"/"新窗口打开"两个按钮各自的悬浮态,
+    // 用来在按钮正上方画一个简短的标题提示气泡(与 folderHoverItem 的路径
+    // 提示气泡是两码事:一个是整行的完整路径,一个是单个按钮的功能说明)。
+    bool folderItemFolderButtonHover;
+    bool folderItemNewWindowButtonHover;
 };
 
 /**
@@ -216,6 +240,27 @@ private:
     ImageCache* cache_;         // 不拥有
     Arena* scratch_;            // 不拥有,data: URI 解码缓冲
     const wchar_t* docDir_;     // 不拥有,文档所在目录
+};
+
+// 侧边栏单行项按钮类型位掩码。
+enum SidebarItemButtonMask : u32 {
+    kSidebarItemBtnNone      = 0,
+    kSidebarItemBtnClose     = 1 << 0,  // 关闭/删除按钮 (X)
+    kSidebarItemBtnFolder    = 1 << 1,  // 打开所在文件夹按钮 (Folder)
+    kSidebarItemBtnNewWindow = 1 << 2,  // 新窗口打开按钮 (仅文件夹侧栏使用)
+};
+
+// 侧边栏列表单行项绘制参数。
+struct SidebarListItemParams {
+    float rowLeft;
+    float rowTop;
+    float rowWidth;
+    float rowHeight;
+    const wchar_t* text;
+    u32 textLen;
+    bool isCurrent;
+    bool isHover;
+    u32 buttonMask;  // 支持的按钮组合 (SidebarItemButtonMask)
 };
 
 /**
@@ -344,7 +389,7 @@ public:
                       u64 documentSizeBytes = 0,
                       u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender,
                       bool bottomBarPathCopied = false, bool welcomeScreen = false,
-                      bool welcomeButtonHover = false);
+                      bool welcomeButtonHover = false, bool welcomeFolderButtonHover = false);
 
     /**
      * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
@@ -421,7 +466,7 @@ private:
 
     // 画一个块内的全部图片(T33):缓存里有位图就 DrawBitmap,否则画统一样式的
     // 占位块(灰底圆角矩形 + 居中文案);画完位图后若该图被降采样过,再叠加
-    // 右下角的"已压缩·点击看原图"提示标签。
+    // 右下角的"查看原图"提示标签。
     void DrawImages(const BlockGeometry& g, float scrollY,
                      ID2D1SolidColorBrush* textBrush,
                      ID2D1SolidColorBrush* placeholderBgBrush,
@@ -453,7 +498,8 @@ private:
     // @param buttonFillBrush 按钮默认态底色。
     // @param buttonHoverFillBrush 按钮悬浮态底色。
     // @param buttonBorderBrush 按钮描边色。
-    void DrawWelcomeScreen(float targetWidth, float targetHeight, bool buttonHover,
+    void DrawWelcomeScreen(float targetWidth, float targetHeight,
+                            bool buttonHover, bool folderButtonHover,
                             ID2D1SolidColorBrush* textBrush,
                             ID2D1SolidColorBrush* buttonFillBrush,
                             ID2D1SolidColorBrush* buttonHoverFillBrush,
@@ -620,6 +666,58 @@ private:
                           ID2D1SolidColorBrush* scrollbarTrackBrush,
                           ID2D1SolidColorBrush* scrollbarThumbBrush);
 
+    /**
+     * 按边框视觉方案(EditBoxBorderStyle)绘制一个输入框容器的边框——
+     * Bordered 画四周完整圆角描边，UnderlineOnly 只画底部一条线。
+     * 只画边框线，不填充背景，调用方需要背景色时自行 FillRoundedRectangle。
+     *
+     * @param rect 输入框容器矩形(DIP)。
+     * @param borderBrush 描边颜色。
+     * @param style 边框视觉方案。
+     * @param strokeWidth 描边宽度(DIP)。
+     * @example renderer.DrawEditBoxBorder(rect, textBrush, EditBoxBorderStyle::Bordered, 0.8f);
+     */
+    void DrawEditBoxBorder(D2D1_RECT_F rect, ID2D1SolidColorBrush* borderBrush,
+                           EditBoxBorderStyle style, float strokeWidth);
+
+    /**
+     * 在窗口左侧绘制抽屉式文件夹 Markdown 列表侧边栏。
+     *
+     * 注意:文件夹侧栏是"挤压模式"(与悬浮模式的大纲/历史侧栏不同)——
+     * 展开时不再画半透明蒙层盖住正文,正文可用宽度改由外壳层
+     * (window.cpp/main.cpp)按 FolderSqueezeWidthDip 动态收窄并重新换行,
+     * 因此本函数不再需要配套的 DrawFolderOverlayMask。
+     *
+     * @param tooltipBgBrush hover 行完整路径提示气泡的底色(与窗口内提示条
+     *   overlayBar 共用同一套"主题反差半透明深色气泡"画刷,不跟随侧栏
+     *   自身底色,保证在亮/暗主题下都能跟正文/侧栏拉开视觉反差)。
+     * @param tooltipTextBrush 提示气泡的文字色,同上与 overlayBar 共用。
+     */
+    void DrawFolderPanel(float targetWidth, float targetHeight,
+                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                         ID2D1SolidColorBrush* highlightBgBrush,
+                         ID2D1SolidColorBrush* currentItemBrush,
+                         ID2D1SolidColorBrush* buttonBgBrush,
+                         ID2D1SolidColorBrush* scrollbarTrackBrush,
+                         ID2D1SolidColorBrush* scrollbarThumbBrush,
+                         ID2D1SolidColorBrush* tooltipBgBrush,
+                         ID2D1SolidColorBrush* tooltipTextBrush);
+
+    /**
+     * 绘制通用的侧边栏列表行项（背景、单行省略号截断文本与悬浮操作按钮）。
+     *
+     * @param params 列表项几何与状态参数。
+     * @param textBrush 文本与图标画刷。
+     * @param highlightBgBrush 悬浮行背景画刷。
+     * @param currentItemBrush 当前激活项背景画刷。
+     * @param buttonBgBrush 悬浮操作按钮遮罩底色画刷。
+     */
+    void DrawSidebarListItem(const SidebarListItemParams& params,
+                            ID2D1SolidColorBrush* textBrush,
+                            ID2D1SolidColorBrush* highlightBgBrush,
+                            ID2D1SolidColorBrush* currentItemBrush,
+                            ID2D1SolidColorBrush* buttonBgBrush);
+
     // 画底部操作栏(2026-09-18 改版):左侧 5 个固定宽度图标按钮(纯 D2D 几何
     // 线条,不带常驻文字标签),按钮间用竖分隔线区分;右侧状态区画当前文档
     // 路径 + 大小(documentPath 为空/空串时不画任何文字)。不参与任何布局
@@ -667,6 +765,30 @@ private:
     // @param zoomIn true 建放大("A+"),false 建缩小("A-")。
     // @return 新建的路径几何;factory_ 未就绪或创建失败返回 nullptr。
     ID2D1PathGeometry* BuildZoomFontIconGeometry(bool zoomIn);
+
+    // 以下是 5 套按钮系统统一接入 Button/IconButton(shell/button.h)之后,
+    // 各自图标内容的 ButtonIconPaintFn 实现——按钮"这是一个按钮"这件事
+    // (矩形/命中测试/悬浮态)已经由 Button/IconButton 承载,这里只负责在
+    // 给定矩形内画出图标本身(手绘矢量图形,不是图标字体/位图)。全部是
+    // static 成员函数,签名匹配 ButtonIconPaintFn;renderCtx 固定是发起
+    // 调用的 Renderer* this,按需 static_cast 回来访问 target_/画笔等成员。
+
+    // 底部栏图标(时钟/放大镜/文档等,按 userData 里的按钮下标分派到原有画法)。
+    static void PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 欢迎屏"打开文件"按钮的文档图标。
+    static void PaintWelcomeFileIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 欢迎屏"打开文件夹"按钮的文件夹图标。
+    static void PaintWelcomeFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 侧栏行内"关闭"按钮图标(X 两条交叉线)。
+    static void PaintSidebarCloseIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 侧栏行内"打开所在文件夹"按钮图标。
+    static void PaintSidebarFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 侧栏行内"新窗口打开"按钮图标。
+    static void PaintSidebarNewWindowIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 侧栏头部"打开根目录文件夹"按钮图标。
+    static void PaintSidebarHeaderFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
+    // 代码块复制按钮默认态的"两张叠压纸"图标(复用 DrawCopySheetsGlyph)。
+    static void PaintCodeCopySheetsIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
 
     ID2D1Factory* factory_;              // 不拥有,生命周期由调用方保证
     FontSubsystem* fonts_;                // 不拥有,可为空;供 T28 脚注标签与 T33 占位文案使用

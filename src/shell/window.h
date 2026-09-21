@@ -21,9 +21,11 @@
 #include "../render/renderer.h"
 #include "../text/font.h"
 #include "bottom_bar.h"
+#include "button.h"
 #include "clipboard.h"
 #include "copy_data.h"
 #include "find.h"
+#include "folder_scan.h"
 #include "history.h"
 #include "hit_test.h"
 #include "navigate.h"
@@ -49,6 +51,7 @@ enum class ScrollbarDragTarget {
     Main,     // 正文滚动条
     Outline,  // 大纲侧栏滚动条
     History,  // 历史记录侧栏滚动条
+    Folder,   // 文件夹列表侧栏滚动条
 };
 
 /**
@@ -380,7 +383,68 @@ struct WindowState {
     // 而不是每次 WM_SIZE(交互式拖边框时会连续触发很多次)都重新分配一个
     // GDI 字体对象。
     float findEditFontScale;
+
+    // 欢迎屏"打开文件夹"按钮悬浮态
+    bool welcomeFolderButtonHover;
+
+    // 文件夹穿透功能状态:
+    Arena* folderArena;               // 文件夹条目专用 Arena
+    Vec<FolderEntry> folderEntries;    // 扫描到的文件夹条目动态数组
+    wchar_t folderRootPath[MAX_PATH];  // 选中的文件夹绝对根路径
+    wchar_t folderRootName[MAX_PATH];  // 选中的文件夹根目录名称
+    u32 folderCurrentItem;             // 当前打开文件匹配的条目下标; kInvalidIndex 表示无
+    u32 folderHoverIndex;              // 鼠标悬浮的条目下标; kInvalidIndex 表示无
+    SidebarAnimState folderAnimState;  // 侧栏滑动动画状态机
+    float folderAnimProgress;          // 动画进度 [0.0f, 1.0f]
+    ULONGLONG folderAnimStartTick;     // 动画开始时间戳
+    float folderAnimStartProgress;     // 动画过渡初值
+    float folderPanelWidthDip;         // 侧栏宽度(DIP)
+    float folderScrollY;               // 纵向滚动偏移(DIP)
+    bool folderScrollbarHover;         // 滚动条是否处于悬浮态
+    bool folderPanelResizing;          // 是否正在拖拽调宽
+    float folderPanelResizeStartMouseXDip; // 拖拽调宽起始时的鼠标横坐标(DIP)
+    float folderPanelResizeStartWidthDip;  // 拖拽调宽起始时的初始宽度(DIP)
+
+    // 文件夹侧栏增强：过滤输入框与按钮交互状态
+    HWND folderFilterEditHwnd;               // 过滤原生 EDIT 控件句柄
+    float folderFilterFontScale;             // 过滤输入框当前 HFONT 对应的 DPI 缩放系数
+    wchar_t folderFilterQuery[128];          // 当前过滤文本
+    u32 folderFilterQueryLen;                // 当前过滤文本长度
+    Vec<u32> folderFilteredIndices;          // 过滤后的条目在 folderEntries 中的原始下标数组
+    bool folderHeaderButtonHover;            // 顶部"打开根目录"文件夹按钮悬浮态
+    bool folderItemFolderButtonHover;        // 条目"打开所在文件夹"按钮悬浮态
+    bool folderItemNewWindowButtonHover;     // 条目"新窗口打开"按钮悬浮态
 };
+
+/**
+ * 打开并扫描指定文件夹，生成 Markdown 列表并展开文件夹侧栏。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态。
+ * @param folderPath 要扫描的文件夹绝对路径。
+ * @param openSidebar 是否在扫描完成后自动启动动画展开侧栏，打开单文件时为 false。
+ */
+void OpenAndScanFolder(HWND hwnd, WindowState* state, const wchar_t* folderPath, bool openSidebar = true);
+
+/**
+ * 换文档后把正文滚动位置复位到顶部,并同步刷新虚拟化可见区间。
+ * 供 app 层(main.cpp 的 OpenDocumentInPlace)在换文档/侧栏切换文档时调用——
+ * 换文档前后 state->layout 已经是新文档的布局,直接调用带 forceRefresh 的
+ * 内部滚动收尾逻辑,不需要 app 层重复实现一遍夹取/虚拟化刷新。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态,scrollY 与虚拟化区间都会被更新。
+ * @example markair::ResetScrollToTop(hwnd, state);
+ */
+void ResetScrollToTop(HWND hwnd, WindowState* state);
+
+/**
+ * 切换文件夹侧栏的展开/折叠状态。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态。
+ */
+void ToggleFolderPanel(HWND hwnd, WindowState* state);
 
 /**
  * Prompt the user (Yes/No) to remove a history entry whose target file no
@@ -531,6 +595,18 @@ float ClientWidthDip(HWND hwnd);
  * @example float vh = markair::ClientHeightDip(hwnd);
  */
 float ClientHeightDip(HWND hwnd);
+
+/**
+ * 计算文件夹侧栏（挤压模式）当前应从正文可用宽度中占用的宽度（DIP）。
+ * 正文换行宽度需要在窗口内换文档（main.cpp::OpenDocumentInPlace）、窗口
+ * 尺寸变化（OnSize）与侧栏自身动画/拖拽调宽（window.cpp 内部）这几处
+ * 保持同一口径，因此抽成导出函数，不各自重复算一遍。
+ *
+ * @param state 窗口运行期状态，可为 nullptr（此时返回 0）。
+ * @return 挤压宽度（DIP），文件夹侧栏关闭时为 0。
+ * @example float w = markair::ContentWidthDip(markair::ClientWidthDip(hwnd)) - markair::FolderSqueezeWidthDip(state);
+ */
+float FolderSqueezeWidthDip(const WindowState* state);
 
 /**
  * 跑标准的 `GetMessage` 消息循环,直到窗口关闭(收到 `WM_QUIT`)。

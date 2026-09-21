@@ -159,4 +159,33 @@ const wchar_t* ExtensionForMime(StrSlice mime) {
     return L".bin";
 }
 
+const wchar_t* ExtensionForImageBytes(const u8* bytes, u32 len) {
+    if (!bytes) return L".jpg";
+    if (len >= 8 && bytes[0] == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+        return L".png";
+    }
+    if (len >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+        return L".jpg";
+    }
+    if (len >= 6 && bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == '8' &&
+        (bytes[4] == '7' || bytes[4] == '9') && bytes[5] == 'a') {
+        return L".gif";
+    }
+    if (len >= 2 && bytes[0] == 'B' && bytes[1] == 'M') {
+        return L".bmp";
+    }
+    if (len >= 12 && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F' &&
+        bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+        return L".webp";
+    }
+    if (len >= 4 &&
+        ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
+         (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A))) {
+        return L".tif";
+    }
+    // 未识别的字节流兜底为 .jpg 而不是 .img/.bin —— 前者 Windows 通常没有默认
+    // 关联程序,ShellExecuteW 会静默失败(SE_ERR_NOASSOC),表现为"点击完全无反应"。
+    return L".jpg";
+}
+
 }  // namespace markair

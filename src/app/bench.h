@@ -89,6 +89,45 @@ void MarkFrameEnd();
  */
 void EmitFrameReport();
 
+// ---------------------------------------------------------------------------
+// 运行期"换文档"分段埋点(排查侧栏切换/文档内链接跳转普遍偏慢的问题)。
+//
+// 与上面启动期五段埋点是完全独立的一条时间线,覆盖 main.cpp 的
+// OpenDocumentInPlace:
+//   MarkSwitchBegin        -> 函数入口,旧状态还没释放
+//   MarkSwitchReleaseDone  -> 位图/图片缓存/文件映射/文档 Arena 释放完成
+//   MarkSwitchFileOpened   -> 新文件 FileMap::Open 完成(读盘)
+//   MarkSwitchParseDone    -> LoadMarkdownFile 解析完成
+//   MarkSwitchRelayoutDone -> BlockLayoutEngine::Relayout 完成
+//   MarkSwitchFolderScanDone -> 仅目录变更触发 OpenAndScanFolder 时调用
+// 未 Enable() 时全部只做一次布尔判断即返回。
+// ---------------------------------------------------------------------------
+
+// 记录一次换文档开始的时刻。
+void MarkSwitchBegin();
+// 记录旧状态(位图/图片 Arena/文件映射/文档 Arena)释放完成的时刻。
+void MarkSwitchReleaseDone();
+// 记录新文件读盘完成(FileMap::Open 返回)的时刻。
+void MarkSwitchFileOpened();
+// 记录 Markdown 解析完成(LoadMarkdownFile 返回)的时刻。
+void MarkSwitchParseDone();
+// 记录块级重排完成(Relayout 返回)的时刻。
+void MarkSwitchRelayoutDone();
+// 记录滚动位置复位(ResetScrollToTop 内部 UpdateVisibleRange,含可见区间
+// IDWriteTextLayout 创建与图片解码)完成的时刻。
+void MarkSwitchScrollResetDone();
+// 记录目录扫描完成(OpenAndScanFolder 返回)的时刻;目录未变更时不调用。
+void MarkSwitchFolderScanDone();
+
+/**
+ * 把本次换文档各阶段耗时(释放旧状态 / 读盘 / 解析 / 重排 / 可选的目录扫描 /
+ * 总计)以单行 KV 格式输出到 stderr。仅在 Enable() 被调用过之后才产生任何
+ * 效果/输出。
+ * @param folderScanTriggered 本次是否触发了目录扫描(决定是否输出该字段)。
+ * @example markair::bench::EmitSwitchReport(false);
+ */
+void EmitSwitchReport(bool folderScanTriggered);
+
 /**
  * 纯函数:给定 QueryPerformanceCounter 的频率、五个计数值与 PrivateUsage
  * 字节数,格式化成一行机器可读的 KV 文本(以 '\n' 结尾)。不依赖任何全局

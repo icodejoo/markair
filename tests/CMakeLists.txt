@@ -48,15 +48,20 @@ add_executable(markair_tests
     test_licensing.cpp
     test_selection.cpp
     test_bottom_bar.cpp
+    test_button.cpp
     test_open_dialog.cpp
     test_welcome_screen.cpp
     test_recent_files.cpp
     test_copy_data.cpp
+    test_updater.cpp
+    test_folder_scan.cpp
+    test_sidebar.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp
     ../src/util/str.cpp
     ../src/util/ini.cpp
+    ../src/util/updater.cpp
     ../src/util/recent_files.cpp
     ../src/doc/file_map.cpp
     ../src/doc/encoding.cpp
@@ -89,6 +94,8 @@ add_executable(markair_tests
     ../src/shell/history.cpp
     ../src/shell/selection.cpp
     ../src/shell/open_dialog.cpp
+    ../src/shell/folder_scan.cpp
+    ../src/shell/edit_box.cpp
 )
 
 # 测试代码同样要求 /W4 零警告,并遵循禁异常/禁 RTTI 的硬性约束。
@@ -121,8 +128,10 @@ target_compile_definitions(markair_tests PRIVATE
 # test_navigate.cpp 需要 shell32,remote.cpp 需要 winhttp。测试目标不做 /DELAYLOAD ——
 # 延迟/惰性加载是 markair.exe 的验收项,测试进程本来就是要去用这些库的。
 # test_navigate.cpp 的 T36 路径规范化用 PathCchCombineEx,需要 pathcch。
+# edit_box.cpp 的 SetWindowTheme 需要 uxtheme(与 markair.exe 主目标同一个库,
+# 测试目标不做 /DELAYLOAD,直接静态导入)。
 target_link_libraries(markair_tests PRIVATE
-    md4c lunasvg dwrite psapi d2d1 ole32 winhttp shell32 pathcch)
+    md4c lunasvg dwrite psapi d2d1 ole32 winhttp shell32 pathcch uxtheme)
 
 enable_testing()
 add_test(NAME markair_tests COMMAND markair_tests)

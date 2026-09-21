@@ -54,4 +54,16 @@ DataUriPayload ParseDataUri(StrSlice uri, Arena* arena);
  */
 const wchar_t* ExtensionForMime(StrSlice mime);
 
+/**
+ * 按文件头 magic number 猜一个常见图片扩展名(含点号),供网络图片(T34)
+ * 写临时文件命名用——网络响应没有可靠的 Content-Type 缓存,只能从字节本身判断。
+ * 无法识别时返回 ".jpg"(网络图片里最常见的兜底格式,好过用户点击后完全无反应)。
+ *
+ * @param bytes 原始压缩字节,可为 nullptr(此时直接返回兜底值)。
+ * @param len bytes 的字节数。
+ * @return 以 '\0' 结尾的静态字符串,如 L".png";调用方不得释放。
+ * @example const wchar_t* ext = markair::ExtensionForImageBytes(raw, len); // L".png"
+ */
+const wchar_t* ExtensionForImageBytes(const u8* bytes, u32 len);
+
 }  // namespace markair

@@ -56,3 +56,6 @@ Thumbs.db
 # AI Agent / CodeGraph 本地缓存
 .agents/
 .codegraph/
+
+# 本地打包出的 release 构建产物，不进版本控制
+/bench/artifacts/

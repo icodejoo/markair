@@ -146,6 +146,36 @@ struct BlockGeometry {
 };
 
 /**
+ * 文字实际绘制/命中测试用的 left 坐标(DIP)。渲染(renderer.cpp::DrawBlock 等)
+ * 与命中测试(shell/hit_test.cpp)必须用同一份公式,否则视觉上的文字位置和
+ * 鼠标点击/拖选算出来的字符位置会错位——真实 bug:此前 hit_test.cpp 只减了
+ * g.indent/g.listMarkerPad,漏减 g.textPad,导致围栏代码块(textPad 非零)
+ * 点击位置与实际文字整体错位一份内边距。
+ *
+ * @param g 目标块几何。
+ * @return 文字左边界的绝对文档坐标(DIP)。
+ * @example float left = markair::TextDrawLeft(geometry);
+ */
+inline float TextDrawLeft(const BlockGeometry& g) { return g.indent + g.textPad + g.listMarkerPad; }
+
+/**
+ * 文字实际绘制/命中测试用的 top 坐标(DIP),口径与 TextDrawLeft 相同,见其注释。
+ * 围栏代码块下移一份 textPad;表格单元格按"行高与真实内容高度之差"整体
+ * 垂直居中(contentHeight 由排版阶段预先算好,这里不重复调用 GetMetrics)。
+ *
+ * @param g 目标块几何。
+ * @return 文字上边界的绝对文档坐标(DIP)。
+ * @example float top = markair::TextDrawTop(geometry);
+ */
+inline float TextDrawTop(const BlockGeometry& g) {
+    float top = g.top + g.textPad;
+    if (g.contentHeight <= 0.0f) return top;
+    float rowHeight = g.bottom - g.top;
+    float offset = (rowHeight - g.contentHeight) * 0.5f;
+    return offset > 0.0f ? top + offset : top;
+}
+
+/**
  * 图片解码位图的"驻留控制器"(T32 第二次裁决):把解码位图的生死挂到已有的
  * 块级虚拟化触发点上,与 IDWriteTextLayout 走同一条创建/释放路径。
  *

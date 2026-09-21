@@ -120,3 +120,26 @@ MARKAIR_TEST(DataUri_ExtensionForMime) {
     MARKAIR_CHECK(wcscmp(markair::ExtensionForMime(Lit("application/octet-stream")), L".bin") == 0);
     MARKAIR_CHECK(wcscmp(markair::ExtensionForMime(StrSlice{nullptr, 0}), L".bin") == 0);
 }
+
+// 用例:网络图片没有可靠 MIME 时,按文件头 magic number 猜扩展名(T36b 修复)。
+MARKAIR_TEST(DataUri_ExtensionForImageBytes) {
+    const unsigned char png[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(png, sizeof(png)), L".png") == 0);
+
+    const unsigned char jpg[] = {0xFF, 0xD8, 0xFF, 0xE0};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(jpg, sizeof(jpg)), L".jpg") == 0);
+
+    const unsigned char gif[] = {'G', 'I', 'F', '8', '9', 'a'};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(gif, sizeof(gif)), L".gif") == 0);
+
+    const unsigned char bmp[] = {'B', 'M', 0, 0};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(bmp, sizeof(bmp)), L".bmp") == 0);
+
+    const unsigned char webp[] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(webp, sizeof(webp)), L".webp") == 0);
+
+    // 未识别字节流(以及 nullptr)兜底为 .jpg,而不是当前会导致点击无反应的 .img。
+    const unsigned char unknown[] = {0, 1, 2, 3};
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(unknown, sizeof(unknown)), L".jpg") == 0);
+    MARKAIR_CHECK(wcscmp(markair::ExtensionForImageBytes(nullptr, 0), L".jpg") == 0);
+}

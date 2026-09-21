@@ -6,6 +6,7 @@
 #include "../src/doc/parser.h"
 #include "../src/text/font.h"
 #include "../src/layout/layout.h"
+#include "../src/shell/hit_test.h"
 
 #include <cstdio>
 #include <cstring>
@@ -704,4 +705,46 @@ MARKAIR_TEST(Layout_TruncatedDocumentStillLaysOutParsedPrefix) {
         if (g.top == 0.0f && g.bottom == 0.0f) ++degenerate;
     }
     MARKAIR_CHECK_EQ(degenerate, 0u);
+}
+
+// 真实 bug 回归用例:围栏代码块的 g.textPad(内边距,16 DIP,接近一整行的
+// kMonoLineHeightDip=18 DIP)此前只在渲染(TextDrawTop)里下移了绘制起点,
+// hit_test.cpp 命中测试却仍然按 docY - g.top 换算,两边公式不一致,导致点击
+// 位置比实际文字整体低了一份 textPad——几乎正好一行,于是鼠标停在代码块
+// "看起来是第一行"的地方,命中测试算出来的字符位置却落进了第二行。
+// 现在两边共用 layout.h::TextDrawLeft/TextDrawTop,这个用例验证不再跑偏:
+// 拿真实渲染高度(IDWriteTextLayout::GetMetrics)反推第一行的真实垂直居中
+// Y 坐标,命中测试应该仍然落在第一行(offset 落在第一行文本范围内)。
+MARKAIR_TEST(Layout_CodeBlockHitTestMatchesTextDrawTop) {
+    FontSubsystem fonts;
+    if (!fonts.Init()) {
+        fprintf(stderr, "Layout_CodeBlockHitTestMatchesTextDrawTop: FontSubsystem::Init 失败,跳过\n");
+        return;
+    }
+    MARKAIR_MAKE_TEST_ARENA();
+    const char src[] = "```\nline one\nline two\nline three\n```\n";
+    Document doc = ParseMarkdown(StrSlice{src, sizeof(src) - 1}, &arena);
+    BlockLayoutEngine layout;
+    MARKAIR_CHECK(layout.Relayout(doc, 760.0f));
+    layout.UpdateVisibleRange(0.0f, 2000.0f, fonts);
+
+    u32 codeIdx = FindBlockOfType(doc, BlockType::CodeBlock, 0);
+    MARKAIR_CHECK(codeIdx != markair::kInvalidIndex);
+    const BlockGeometry& g = layout.Geometry(codeIdx);
+    MARKAIR_CHECK(g.textLayout != nullptr);
+    MARKAIR_CHECK(g.textPad > 0.0f);  // 前提:确实是有内边距的围栏代码块
+
+    // 探测点:第一行文字真实绘制区域的垂直中点(与渲染层 TextDrawTop 同一
+    // 口径),水平位置取文字真实绘制起点往右一点,同样对齐 TextDrawLeft。
+    float lineHeight = 18.0f;  // 与 layout.cpp::kMonoLineHeightDip 一致
+    float probeX = markair::TextDrawLeft(g) + 2.0f;
+    float probeY = markair::TextDrawTop(g) + lineHeight * 0.5f;
+
+    markair::DocTextHit hit = markair::HitTestTextPosition(layout, probeX, probeY);
+    MARKAIR_CHECK(hit.valid);
+    MARKAIR_CHECK_EQ(hit.blockIndex, codeIdx);
+
+    // 命中的字符偏移应当落在源码第一行("line one\n")范围内,不应该越过
+    // 第一个换行符跑到第二行去。
+    MARKAIR_CHECK(hit.charOffset <= 9u);  // "line one\n" 的 UTF-16 长度是 9
 }

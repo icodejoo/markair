@@ -62,6 +62,26 @@ bool ParseInt(StrSlice s, i32* out) {
     return true;
 }
 
+// 把一段十进制文本解析成 64 位整数(供 update_last_check 时间戳使用)。
+bool ParseInt64(StrSlice s, i64* out) {
+    if (s.len == 0) return false;
+    u32 i = 0;
+    bool negative = false;
+    if (s.data[0] == '-' || s.data[0] == '+') {
+        negative = s.data[0] == '-';
+        i = 1;
+        if (s.len == 1) return false;
+    }
+    i64 value = 0;
+    for (; i < s.len; ++i) {
+        char c = s.data[i];
+        if (c < '0' || c > '9') return false;
+        value = value * 10 + (c - '0');
+    }
+    *out = negative ? -value : value;
+    return true;
+}
+
 // 把一段十进制文本(允许一个小数点、一个前导 '-'/'+')解析成浮点数;
 // 整段必须都是数字/小数点,否则返回 false 让调用方保持原值——与 ParseInt
 // 的"非法值不生效"口径一致(T57:zoom 键用)。
@@ -151,12 +171,13 @@ void Utf8ToWideFixed(StrSlice s, wchar_t* out, u32 cap) {
     out[w] = 0;
 }
 
-// T55/T56:已知键的固定顺序,写盘时按此顺序追加磁盘原文里缺失的键。
+// T55/T56/自动更新:已知键的固定顺序,写盘时按此顺序追加磁盘原文里缺失的键。
 constexpr const char* kKnownKeys[] = {
     "load_remote_images", "font_body_primary", "font_body_fallback",
     "font_mono_primary",  "font_mono_fallback", "theme", "zoom",
-    "win_x", "win_y", "win_w", "win_h", "win_maximized", "last_open_dir"};
-constexpr u32 kKnownKeyCount = 13;
+    "win_x", "win_y", "win_w", "win_h", "win_maximized", "last_open_dir",
+    "update_pending_version", "update_pending_path", "update_last_check"};
+constexpr u32 kKnownKeyCount = 16;
 
 // T55:本进程最近一次 Load/Save 成功后"磁盘上应该有"的配置快照,用来判断
 // SaveAppSettings 调用时哪些键是"本进程真正改动过的"——只有 target 与这份
@@ -271,6 +292,19 @@ bool AppendKnownKeyLine(const char* key, const AppSettings& s, char* out, u32 ca
         char valueBuf[MAX_PATH * 3 + 1];
         WideToUtf8Fixed(s.lastOpenDir, valueBuf, sizeof(valueBuf));
         if (!AppendCStr(out, cap, pos, valueBuf)) return false;
+    } else if (strcmp(key, "update_pending_version") == 0) {
+        char valueBuf[32 * 3 + 1];
+        WideToUtf8Fixed(s.pendingUpdateVersion, valueBuf, sizeof(valueBuf));
+        if (!AppendCStr(out, cap, pos, valueBuf)) return false;
+    } else if (strcmp(key, "update_pending_path") == 0) {
+        char valueBuf[MAX_PATH * 3 + 1];
+        WideToUtf8Fixed(s.pendingUpdatePath, valueBuf, sizeof(valueBuf));
+        if (!AppendCStr(out, cap, pos, valueBuf)) return false;
+    } else if (strcmp(key, "update_last_check") == 0) {
+        char buf[32];
+        int n = sprintf_s(buf, sizeof(buf), "%lld", s.lastUpdateCheckUnix);
+        if (n < 0) return false;
+        if (!AppendBytes(out, cap, pos, buf, static_cast<u32>(n))) return false;
     } else {
         const wchar_t* wide = nullptr;
         if (strcmp(key, "font_body_primary") == 0) wide = s.fontBodyPrimary;
@@ -384,6 +418,15 @@ AppSettings ComputeEffectiveSettings(const AppSettings& diskCurrent, const AppSe
     if (wcscmp(target.lastOpenDir, g_baseline.lastOpenDir) != 0) {
         wcscpy_s(effective.lastOpenDir, MAX_PATH, target.lastOpenDir);
     }
+    if (wcscmp(target.pendingUpdateVersion, g_baseline.pendingUpdateVersion) != 0) {
+        wcscpy_s(effective.pendingUpdateVersion, 32, target.pendingUpdateVersion);
+    }
+    if (wcscmp(target.pendingUpdatePath, g_baseline.pendingUpdatePath) != 0) {
+        wcscpy_s(effective.pendingUpdatePath, MAX_PATH, target.pendingUpdatePath);
+    }
+    if (target.lastUpdateCheckUnix != g_baseline.lastUpdateCheckUnix) {
+        effective.lastUpdateCheckUnix = target.lastUpdateCheckUnix;
+    }
     return effective;
 }
 
@@ -474,6 +517,9 @@ void DefaultAppSettings(AppSettings* out) {
     out->winH = 0;
     out->winMaximized = false;
     out->lastOpenDir[0] = 0;
+    out->pendingUpdateVersion[0] = 0;
+    out->pendingUpdatePath[0] = 0;
+    out->lastUpdateCheckUnix = 0;
 }
 
 u32 ParseIniSettings(StrSlice text, AppSettings* out) {
@@ -581,6 +627,27 @@ u32 ParseIniSettings(StrSlice text, AppSettings* out) {
         if (KeyEquals(key, "last_open_dir")) {
             Utf8ToWideFixed(value, out->lastOpenDir, MAX_PATH);
             applied++;
+            continue;
+        }
+
+        if (KeyEquals(key, "update_pending_version")) {
+            Utf8ToWideFixed(value, out->pendingUpdateVersion, 32);
+            applied++;
+            continue;
+        }
+
+        if (KeyEquals(key, "update_pending_path")) {
+            Utf8ToWideFixed(value, out->pendingUpdatePath, MAX_PATH);
+            applied++;
+            continue;
+        }
+
+        if (KeyEquals(key, "update_last_check")) {
+            i64 v = 0;
+            if (ParseInt64(value, &v)) {
+                out->lastUpdateCheckUnix = v;
+                applied++;
+            }
             continue;
         }
 

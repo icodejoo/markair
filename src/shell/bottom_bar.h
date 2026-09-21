@@ -1,8 +1,10 @@
-// markair 底部操作栏:常驻显示,左侧 6 个纯图标按钮
-// (大纲/打开文档/主题切换/字体缩小/字体放大/查找),中间是状态文字区,最右侧是历史记录按钮。
+// markair 底部操作栏:常驻显示,左侧 8 个纯图标按钮
+// (文件列表/大纲/打开文件/打开文件夹/主题切换/字体缩小/字体放大/查找),
+// 中间是状态文字区,最右侧固定贴右的是复制路径与历史记录按钮。
 #pragma once
 
 #include "../util/types.h"
+#include "button.h"
 
 namespace markair {
 
@@ -10,8 +12,8 @@ namespace markair {
 constexpr float kBottomBarHeightDip = 24.0f;
 
 // 底部栏左侧按钮数量与总按钮数。
-constexpr u32 kBottomBarLeftButtonCount = 6;
-constexpr u32 kBottomBarButtonCount = 8;  // 6 个在左侧 + 复制路径 + 历史,均在最右侧
+constexpr u32 kBottomBarLeftButtonCount = 8;
+constexpr u32 kBottomBarButtonCount = 10;  // 8 个在左侧 + 复制路径 + 历史,均在最右侧
 
 // "复制路径"按钮距最右侧历史按钮的间距(DIP)——两者都固定贴右,不随中间
 // 状态文字区宽度变化;仅当前有打开文件(currentDocumentPath 非空)时才
@@ -33,20 +35,22 @@ constexpr float kBottomBarBytesPerKb = 1024.0f;
  * 底部栏按钮的语义枚举。
  */
 enum class BottomBarButton : u32 {
-    Outline = 0,  // 打开/关闭大纲侧栏
-    OpenDoc = 1,  // 打开文档
-    Theme = 2,    // 主题切换
-    ZoomOut = 3,  // 字体缩小
-    ZoomIn = 4,   // 字体放大
-    Find = 5,     // 打开查找条(放大镜,与 Ctrl+F 同一路径)
-    CopyPath = 6, // 复制当前文档全路径(紧贴历史按钮左侧;未打开文档时不存在)
-    History = 7,  // 历史记录（位于底部栏最右侧）
+    FileList = 0,   // 打开/关闭文件列表侧栏 (左侧抽屉)
+    Outline = 1,    // 打开/关闭大纲侧栏
+    OpenDoc = 2,    // 打开文件
+    OpenFolder = 3, // 打开文件夹
+    Theme = 4,      // 主题切换
+    ZoomOut = 5,    // 字体缩小
+    ZoomIn = 6,     // 字体放大
+    Find = 7,       // 打开查找条(放大镜,与 Ctrl+F 同一路径)
+    CopyPath = 8,   // 复制当前文档全路径(紧贴历史按钮左侧;未打开文档时不存在)
+    History = 9,    // 历史记录（位于底部栏最右侧）
     None = kBottomBarButtonCount,
 };
 
 // 按钮文字标签数组。
 constexpr const wchar_t* kBottomBarLabels[kBottomBarButtonCount] = {
-    L"大纲", L"打开", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
+    L"文件列表", L"大纲", L"打开文件", L"打开文件夹", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
 };
 
 // 一个按钮在客户区坐标系里的矩形(DIP)。
@@ -85,25 +89,33 @@ inline BottomBarButtonRect BottomBarButtonRectDip(u32 index, float clientWidthDi
     float top = clientHeightDip - kBottomBarHeightDip;
     float bottom = clientHeightDip;
 
+    // 排布算法(每个按钮的锚点在哪)仍然是本系统自己的:左侧 8 个按钮定宽
+    // 网格从左往右排,History/CopyPath 固定贴右——这部分本来就允许 5 套
+    // 按钮系统各不相同(网格 vs 并排 vs 从右向左分槽位)。算出 left/right/
+    // top/bottom 之后,统一交给 Button 的矩形函数(ButtonRectFromCenterDip)
+    // 从几何中心点重新构造一遍——这一步与直接返回 {left,top,right,bottom}
+    // 数值上恒等(中心点就是这四个数算出来的),但确保"这是一个按钮"这件事
+    // 真的经过 Button 抽象,而不是绕过它。
+    float left, right;
     if (index == static_cast<u32>(BottomBarButton::History)) {
-        float right = clientWidthDip;
-        float left = right - kBottomBarButtonWidthDip;
+        right = clientWidthDip;
+        left = right - kBottomBarButtonWidthDip;
         if (left < 0.0f) left = 0.0f;
-        return BottomBarButtonRect{left, top, right, bottom};
-    }
-
-    if (index == static_cast<u32>(BottomBarButton::CopyPath)) {
+    } else if (index == static_cast<u32>(BottomBarButton::CopyPath)) {
         // 紧贴历史按钮左侧,同样固定宽度的正方形按钮区。
         float historyLeft = clientWidthDip - kBottomBarButtonWidthDip;
-        float right = historyLeft;
-        float left = right - kBottomBarButtonWidthDip;
+        right = historyLeft;
+        left = right - kBottomBarButtonWidthDip;
         if (left < 0.0f) left = 0.0f;
-        return BottomBarButtonRect{left, top, right, bottom};
+    } else {
+        left = kBottomBarButtonWidthDip * static_cast<float>(index);
+        right = kBottomBarButtonWidthDip * static_cast<float>(index + 1);
     }
 
-    float left = kBottomBarButtonWidthDip * static_cast<float>(index);
-    float right = kBottomBarButtonWidthDip * static_cast<float>(index + 1);
-    return BottomBarButtonRect{left, top, right, bottom};
+    Button btn{right - left, bottom - top, 0.0f, kBottomBarLabels[index], kBottomBarLabels[index],
+               nullptr, nullptr};
+    ButtonRectDip r = ButtonRectFromCenterDip(btn, (left + right) * 0.5f, (top + bottom) * 0.5f);
+    return BottomBarButtonRect{r.left, r.top, r.right, r.bottom};
 }
 
 /**
@@ -155,17 +167,29 @@ inline BottomBarButton HitTestBottomBar(float clientWidthDip, float pointXDip, b
     if (clientWidthDip <= 0.0f || pointXDip < 0.0f || pointXDip >= clientWidthDip) {
         return BottomBarButton::None;
     }
+    // HitTestBottomBar 本来就只判定横坐标(纵坐标是否落在栏高度内由调用方
+    // 另外用 IsPointInBottomBar 判过)——这里把 clientHeightDip 固定取
+    // kBottomBarHeightDip(令 top=0/bottom=kBottomBarHeightDip),pointYDip
+    // 固定取栏纵向中点,这样就能直接喂给 PointInButtonRectDip 做统一命中
+    // 测试,不再手写一遍 `x>=left && x<right`。
+    const float pointYDip = kBottomBarHeightDip * 0.5f;
 
     // Check rightmost History button first
-    float rightButtonLeft = clientWidthDip - kBottomBarButtonWidthDip;
-    if (rightButtonLeft > 0.0f && pointXDip >= rightButtonLeft) {
+    BottomBarButtonRect historyRect =
+        BottomBarButtonRectDip(static_cast<u32>(BottomBarButton::History), clientWidthDip, kBottomBarHeightDip);
+    if (historyRect.right > historyRect.left &&
+        PointInButtonRectDip(ButtonRectDip{historyRect.left, historyRect.top, historyRect.right, historyRect.bottom},
+                              pointXDip, pointYDip)) {
         return BottomBarButton::History;
     }
 
     // CopyPath sits immediately left of History, only when a document is open.
     if (hasDocument) {
-        float copyPathLeft = rightButtonLeft - kBottomBarButtonWidthDip;
-        if (copyPathLeft > 0.0f && pointXDip >= copyPathLeft) {
+        BottomBarButtonRect copyRect =
+            BottomBarButtonRectDip(static_cast<u32>(BottomBarButton::CopyPath), clientWidthDip, kBottomBarHeightDip);
+        if (copyRect.right > copyRect.left &&
+            PointInButtonRectDip(ButtonRectDip{copyRect.left, copyRect.top, copyRect.right, copyRect.bottom},
+                                  pointXDip, pointYDip)) {
             return BottomBarButton::CopyPath;
         }
     }

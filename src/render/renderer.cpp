@@ -1,11 +1,16 @@
 #include "renderer.h"
 
 #include <cstring>
+#include <cwchar>
+#include <cstdio>
 
 #include "../assets/data_uri.h"
 #include "../assets/svg_decoder.h"
 #include "../doc/file_map.h"
 #include "../hl/lexer.h"
+#include "../shell/button.h"
+#include "../shell/folder_scan.h"
+#include "../shell/sidebar.h"
 #include "../util/str.h"
 
 namespace markair {
@@ -18,27 +23,10 @@ constexpr float kThematicBreakRightMarginDip = 16.0f;
 
 // 背景色:主题背景(浅色),与窗口类的 GDI 背景色保持一致,避免首帧白闪
 // (架构 §6,已在窗口类里落地;这里只是让 D2D 清屏色跟 GDI 背景一致)。
-// 文字的实际绘制 left——代码高亮区(g.textPad > 0)固定右移一份内边距,
-// 让文字离背景左边框有留白;非任务列表项的列表符号(T44,g.listMarkerPad > 0)
-// 同理右移让出符号/序号的位置,indent 本身不含这份偏移(见 layout.h 的
-// listMarkerPad 字段注释);其余情况两者恒为 0,原样返回 g.indent。
-float TextDrawLeft(const BlockGeometry& g) { return g.indent + g.textPad + g.listMarkerPad; }
-
-// 文字的实际绘制 top,两种场景各自独立生效(互不相关,一个块不会同时是
-// 表格单元格和代码块):
-//  - 代码高亮区(g.textPad > 0):固定下移一份内边距,让文字离背景上边框
-//    有留白。
-//  - 表格单元格(g.contentHeight > 0):同一行所有单元格共用一份"行高"(取该
-//    行各单元格估算高度的最大值,见 LayoutTableSubtree),但单个单元格文字的
-//    真实高度(g.contentHeight,来自 GetMetrics)往往比行高小,直接从 g.top
-//    起画会贴在行顶部,这里按 (行高 - 真实内容高度) / 2 算一份垂直居中偏移。
-float TextDrawTop(const BlockGeometry& g) {
-    float top = g.top + g.textPad;
-    if (g.contentHeight <= 0.0f) return top;
-    float rowHeight = g.bottom - g.top;
-    float offset = (rowHeight - g.contentHeight) * 0.5f;
-    return offset > 0.0f ? top + offset : top;
-}
+// TextDrawLeft/TextDrawTop 现在是 layout.h 里的共享函数,渲染(这里)与
+// 命中测试(shell/hit_test.cpp)必须用同一份实现,不能各自维护一份——
+// 之前两边各写一份、hit_test.cpp 漏加 textPad 导致点击位置与实际文字错位
+// 一份内边距,是真实 bug,详见 layout.h 那两个函数的头注释。
 
 // 代码高亮区圆角半径(DIP),对齐 GitHub Primer 代码块的 6px 圆角。
 constexpr float kCodeBlockCornerRadiusDip = 6.0f;
@@ -162,15 +150,15 @@ constexpr u32 kMaxOutlineTitleChars = 256;
 // 到 24px,同一条理由更适用),图标改为在整条栏
 // 高度内垂直居中,不再画常驻文字标签;左侧 5 个按钮固定宽度紧贴排列,右侧最右边是历史记录按钮,中间是状态文字区。
 constexpr float kBottomBarHeightDip = 24.0f;
-constexpr u32 kBottomBarButtonCount = 8;
-constexpr u32 kBottomBarLeftButtonCount = 6;
+constexpr u32 kBottomBarButtonCount = 10;
+constexpr u32 kBottomBarLeftButtonCount = 8;
 // 右侧固定图标位下标(与 shell/bottom_bar.h::BottomBarButton 保持一致)。
 // CopyPath 仅当前有打开文档时存在,不存在时不占位、不参与命中/绘制。
-constexpr u32 kBottomBarCopyPathIndex = 6;
-constexpr u32 kBottomBarHistoryIndex = 7;
+constexpr u32 kBottomBarCopyPathIndex = 8;
+constexpr u32 kBottomBarHistoryIndex = 9;
 constexpr float kBottomBarButtonWidthDip = kBottomBarHeightDip;  // 正方形按钮,与栏高相等
 constexpr float kBottomBarIconSizeDip = 14.0f;   // 图标绘制区正方形边长(右侧固定按钮群)
-// 左侧 6 个按钮(大纲/打开/主题/缩小/放大/查找)整体比右侧固定按钮群小 2px,
+// 左侧 8 个按钮整体比右侧固定按钮群小 2px,
 // 视觉上更轻——2026-09-19 新增查找按钮时一并调整。
 constexpr float kBottomBarLeftIconSizeDip = kBottomBarIconSizeDip - 2.0f;
 constexpr float kBottomBarIconStrokeWidthDip = 1.4f;
@@ -184,18 +172,28 @@ constexpr float kBottomBarTooltipPaddingDip = 6.0f;    // 气泡文字左右各�
 constexpr float kBottomBarTooltipHeightDip = 22.0f;
 constexpr float kBottomBarTooltipGapDip = 4.0f;        // 气泡底边与底部栏顶边的间隙
 
-// 7 个按钮从左到右的悬浮提示文案,下标须与 shell/bottom_bar.h 的
+// 10 个按钮从左到右的悬浮提示文案,下标须与 shell/bottom_bar.h 的
 // BottomBarButton 枚举顺序一一对应。数值/文案必须与那边的 kBottomBarLabels
 // 保持一致——同一条"render 不反向 include shell"的约束。
 constexpr const wchar_t* kBottomBarTooltipLabels[kBottomBarButtonCount] = {
-    L"大纲", L"打开", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
+    L"文件列表", L"大纲", L"打开文件", L"打开文件夹", L"主题", L"缩小", L"放大", L"查找", L"复制当前文件路径", L"历史",
 };
+
+// 文件夹侧栏条目 hover 完整路径提示气泡几何常量:与底部栏提示气泡
+// (kBottomBarTooltip*)同一套画法,区别是宽度按内容自适应、超出宽度自动换行
+// (显示完整绝对路径,不允许像正文里那样省略号截断)。
+constexpr float kFolderTooltipFontSizeDip = 12.0f;
+constexpr float kFolderTooltipPaddingDip = 8.0f;   // 气泡文字四周留白
+constexpr float kFolderTooltipMaxWidthDip = 320.0f; // 超过这个宽度自动换行
+constexpr float kFolderTooltipGapDip = 6.0f;        // 气泡左边距、以及气泡与所在行的竖直间隙
+constexpr float kFolderTooltipScreenMarginDip = 4.0f; // 气泡与屏幕边缘的最小间距
 
 // 欢迎屏几何/文案常量。按钮尺寸/位置数值必须与 shell/welcome_screen.h 的
 // 同名常量保持一致——同一条"render 不反向 include shell"的约束,这里只
 // 重复几个纯数字,真正的"唯一权威定义"(含命中测试)在 shell 侧。
 constexpr float kWelcomeButtonWidthDip = 140.0f;
 constexpr float kWelcomeButtonHeightDip = 32.0f;
+constexpr float kWelcomeButtonGapDip = 16.0f;
 constexpr float kWelcomeButtonTopRatio = 0.46f;
 constexpr float kWelcomeButtonCornerRadiusDip = 8.0f;
 constexpr float kWelcomeButtonLabelFontSizeDip = 14.0f;    // 按钮文案字号
@@ -205,21 +203,7 @@ constexpr float kWelcomeIconSizeDip = 14.0f;               // 文件夹图标外
 constexpr float kWelcomeIconLabelGapDip = 8.0f;            // 图标与文字标签的横向间距
 constexpr const wchar_t kWelcomeHeadingText[] = L"Welcome To Markair";
 constexpr const wchar_t kWelcomeButtonLabel[] = L"打开文件";
-
-// 侧栏列表项通用几何常量（与 shell/sidebar.h 保持数值一致）。
-constexpr float kSidebarRowHeightDip = 28.0f;
-constexpr float kSidebarPanelPaddingDip = 10.0f;
-constexpr float kSidebarRowFontSizeDip = 13.0f;
-// 顶部标题栏高度，必须与 shell/sidebar.h::kSidebarHeaderHeightDip 一致——
-// SidebarHitTestItem 命中测试按这个高度偏移，这里画的行必须同样偏移，
-// 否则视觉行位置与命中判定的行位置错位(T曾经的 bug:此处漏画标题栏偏移)。
-constexpr float kSidebarHeaderHeightDip = 40.0f;
-constexpr float kSidebarHeaderFontSizeDip = 14.0f;
-// 每行关闭/删除按钮几何，须与 shell/sidebar.h 的同名常量一致。
-constexpr float kSidebarCloseButtonSizeDip = 20.0f;
-constexpr float kSidebarCloseButtonMarginDip = 6.0f;
-constexpr float kSidebarCloseButtonGlyphPaddingDip = 6.0f;  // X 图标相对按钮矩形的内边距
-constexpr float kSidebarFolderButtonGapDip = 4.0f;  // 须与 shell/sidebar.h 的同名常量一致
+constexpr const wchar_t kWelcomeFolderButtonLabel[] = L"打开文件夹";
 
 // 标题级别 -> 缩进量,口径与 markair::OutlineItemIndentDip 一致。
 float OutlineRowIndentDip(u8 level) {
@@ -312,7 +296,7 @@ const wchar_t* ImagePlaceholderText(ImageStatus status) {
     return L"图片加载失败";
 }
 
-const wchar_t* DownsampledBadgeText() { return L"已压缩·点击看原图"; }
+const wchar_t* DownsampledBadgeText() { return L"查看原图"; }
 
 namespace {
 
@@ -1052,6 +1036,161 @@ void Renderer::DrawHistoryOverlayMask(float targetWidth, float targetHeight,
     target_->FillRectangle(maskRect, maskBrush);
 }
 
+// 侧栏行内"关闭"按钮图标(X 两条交叉线)。userData 是 textBrush。
+void Renderer::PaintSidebarCloseIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !brush) return;
+    float pad = kSidebarCloseButtonGlyphPaddingDip;
+    self->target_->DrawLine(D2D1::Point2F(rect.left + pad, rect.top + pad),
+                            D2D1::Point2F(rect.right - pad, rect.bottom - pad), brush, 1.4f);
+    self->target_->DrawLine(D2D1::Point2F(rect.right - pad, rect.top + pad),
+                            D2D1::Point2F(rect.left + pad, rect.bottom - pad), brush, 1.4f);
+}
+
+// 侧栏行内"打开所在文件夹"按钮图标(文件夹矩形轮廓 + 左上角标签)。
+void Renderer::PaintSidebarFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !brush) return;
+    ID2D1HwndRenderTarget* target_ = self->target_;
+    float pad = kSidebarCloseButtonGlyphPaddingDip;
+    float bodyLeft = rect.left + pad;
+    float bodyRight = rect.right - pad;
+    float bodyTop = rect.top + pad + 2.0f;
+    float bodyBottom = rect.bottom - pad;
+    target_->DrawRectangle(D2D1::RectF(bodyLeft, bodyTop, bodyRight, bodyBottom), brush, 1.2f);
+    float tabWidth = (bodyRight - bodyLeft) * 0.45f;
+    target_->DrawLine(D2D1::Point2F(bodyLeft, bodyTop),
+                      D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f), brush, 1.2f);
+    target_->DrawLine(D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f),
+                      D2D1::Point2F(bodyLeft + tabWidth, bodyTop), brush, 1.2f);
+}
+
+// 侧栏行内"新窗口打开"按钮图标(小方框 + 右上角引出箭头)。
+void Renderer::PaintSidebarNewWindowIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !brush) return;
+    ID2D1HwndRenderTarget* target_ = self->target_;
+    float pad = kSidebarCloseButtonGlyphPaddingDip;
+    float bodyLeft = rect.left + pad;
+    float bodyRight = rect.right - pad - 2.5f;
+    float bodyTop = rect.top + pad + 2.5f;
+    float bodyBottom = rect.bottom - pad;
+    target_->DrawRectangle(D2D1::RectF(bodyLeft, bodyTop, bodyRight, bodyBottom), brush, 1.2f);
+    D2D1_POINT_2F arrowTip = D2D1::Point2F(rect.right - pad, rect.top + pad);
+    D2D1_POINT_2F arrowBase = D2D1::Point2F(bodyRight - 0.5f, bodyTop + 3.0f);
+    target_->DrawLine(arrowBase, arrowTip, brush, 1.2f);
+    target_->DrawLine(arrowTip, D2D1::Point2F(arrowTip.x - 3.2f, arrowTip.y), brush, 1.2f);
+    target_->DrawLine(arrowTip, D2D1::Point2F(arrowTip.x, arrowTip.y + 3.2f), brush, 1.2f);
+}
+
+void Renderer::DrawSidebarListItem(const SidebarListItemParams& params,
+                                  ID2D1SolidColorBrush* textBrush,
+                                  ID2D1SolidColorBrush* highlightBgBrush,
+                                  ID2D1SolidColorBrush* currentItemBrush,
+                                  ID2D1SolidColorBrush* buttonBgBrush) {
+    if (!target_) return;
+
+    // 1. 行背景（当前激活项或鼠标悬浮项圆角底色）
+    D2D1_RECT_F rowRect = D2D1::RectF(
+        params.rowLeft + kSidebarPanelPaddingDip * 0.5f,
+        params.rowTop + 1.0f,
+        params.rowLeft + params.rowWidth - kSidebarPanelPaddingDip * 0.5f,
+        params.rowTop + params.rowHeight - 1.0f);
+    if (params.isCurrent && currentItemBrush) {
+        target_->FillRoundedRectangle(D2D1::RoundedRect(rowRect, 4.0f, 4.0f), currentItemBrush);
+    } else if (params.isHover && highlightBgBrush) {
+        target_->FillRoundedRectangle(D2D1::RoundedRect(rowRect, 4.0f, 4.0f), highlightBgBrush);
+    }
+
+    // 2. 文字排版与 DirectWrite 原生 Trimming 省略号截断
+    if (params.text && params.textLen > 0 && fonts_ && textBrush) {
+        float maxTextWidth = params.rowWidth - kSidebarPanelPaddingDip * 2.0f;
+        if (maxTextWidth > 0.0f) {
+            IDWriteTextLayout* textLayout = fonts_->CreateTextLayout(
+                params.text, params.textLen, FontRole::Body, maxTextWidth, params.rowHeight);
+            if (textLayout) {
+                textLayout->SetFontSize(kSidebarRowFontSizeDip, DWRITE_TEXT_RANGE{0, params.textLen});
+                textLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                IDWriteInlineObject* ellipsisSign = nullptr;
+                if (fonts_->Factory() &&
+                    SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(textLayout, &ellipsisSign))) {
+                    DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+                    textLayout->SetTrimming(&trimming, ellipsisSign);
+                    ellipsisSign->Release();
+                }
+                float textTop = params.rowTop + (params.rowHeight - kSidebarRowFontSizeDip - 4.0f) * 0.5f;
+                target_->DrawTextLayout(D2D1::Point2F(params.rowLeft + kSidebarPanelPaddingDip, textTop),
+                                        textLayout, textBrush,
+                                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                textLayout->Release();
+            }
+        }
+    }
+
+    // 3. 悬浮操作按钮与底色遮罩
+    if (params.isHover && textBrush && params.buttonMask != kSidebarItemBtnNone) {
+        float rowRight = params.rowLeft + params.rowWidth;
+        float rowCenterY = params.rowTop + params.rowHeight * 0.5f;
+        // 排布算法(第 slotIndex 个槽位的几何中心在哪)是本系统自己的
+        // "从右向左分槽位"公式——与 sidebar.h::SidebarItemButtonSlotRectDip
+        // 同一口径(那边是给 window.cpp 命中测试用的 shell 层版本,这里是
+        // render 层自己的绘制坐标,两者允许独立存在)。算出中心点后统一交给
+        // IconButtonRectDip 得到最终矩形,不再手写 left = right - size。
+        auto slotCenterX = [&](u32 slotIndex) {
+            float right = rowRight - kSidebarCloseButtonMarginDip -
+                          static_cast<float>(slotIndex) * (kSidebarCloseButtonSizeDip + kSidebarFolderButtonGapDip);
+            return right - kSidebarCloseButtonSizeDip * 0.5f;
+        };
+
+        bool hasClose = (params.buttonMask & kSidebarItemBtnClose) != 0;
+        bool hasFolder = (params.buttonMask & kSidebarItemBtnFolder) != 0;
+        bool hasNewWindow = (params.buttonMask & kSidebarItemBtnNewWindow) != 0;
+
+        IconButton closeBtn{kSidebarCloseButtonSizeDip, 0.0f, L"关闭", &Renderer::PaintSidebarCloseIcon, nullptr};
+        IconButton folderBtn{kSidebarCloseButtonSizeDip, 0.0f, L"打开所在文件夹", &Renderer::PaintSidebarFolderIcon,
+                             nullptr};
+        IconButton newWindowBtn{kSidebarCloseButtonSizeDip, 0.0f, L"新窗口打开", &Renderer::PaintSidebarNewWindowIcon,
+                                nullptr};
+        ButtonRectDip closeRect{}, folderRect{}, newWindowRect{};
+        float coverLeft = rowRight;
+
+        // 槽位按"关闭 -> 文件夹 -> 新窗口"的优先级从右向左依次分配,只有
+        // 存在的按钮才占用一个槽位——与 sidebar.h 里各按钮矩形计算函数
+        // (SidebarCloseButtonLocalRectDip 等,均固定引用槽位 0/1)的口径一致。
+        u32 slot = 0;
+        if (hasClose) {
+            closeRect = IconButtonRectDip(closeBtn, slotCenterX(slot++), rowCenterY);
+            coverLeft = closeRect.left;
+        }
+        if (hasFolder) {
+            folderRect = IconButtonRectDip(folderBtn, slotCenterX(slot++), rowCenterY);
+            coverLeft = folderRect.left;
+        }
+        if (hasNewWindow) {
+            newWindowRect = IconButtonRectDip(newWindowBtn, slotCenterX(slot++), rowCenterY);
+            coverLeft = newWindowRect.left;
+        }
+
+        // 遮罩底色：覆盖右侧按钮区域下方的文字，避免文字与矢量图标重叠
+        if (buttonBgBrush) {
+            target_->FillRectangle(
+                D2D1::RectF(coverLeft - 4.0f, params.rowTop,
+                            rowRight - kSidebarPanelPaddingDip * 0.5f,
+                            params.rowTop + params.rowHeight),
+                buttonBgBrush);
+        }
+
+        // 图标内容经各自的 paintIcon 回调画出(hover 遮罩/矩形几何已经由
+        // Button 抽象承载,这里只负责把回调接上)。
+        if (hasClose && closeBtn.paintIcon) closeBtn.paintIcon(this, closeRect, textBrush);
+        if (hasFolder && folderBtn.paintIcon) folderBtn.paintIcon(this, folderRect, textBrush);
+        if (hasNewWindow && newWindowBtn.paintIcon) newWindowBtn.paintIcon(this, newWindowRect, textBrush);
+    }
+}
+
 void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
                                 ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                                 ID2D1SolidColorBrush* highlightBgBrush,
@@ -1133,96 +1272,370 @@ void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
                        overlay_->historyScrollY;
         if (rowTop + kSidebarRowHeightDip < kSidebarHeaderHeightDip || rowTop > targetHeight) continue;
 
-        bool highlighted = (i == overlay_->historyHoverItem);
-        if (highlighted && highlightBgBrush) {
-            target_->FillRectangle(
-                D2D1::RectF(0.0f, rowTop, panelWidth, rowTop + kSidebarRowHeightDip),
-                highlightBgBrush);
-        }
-
         const wchar_t* path = overlay_->historyEntries[i].path;
         u32 pathLen = WideLength(path);
-        if (pathLen != 0) {
-            // 效率排查(2026-09-19)发现:此前用手写二分查找 + 每次二分探测都
-            // 重新 CreateTextLayout 来算省略号截断点,单行最坏要建 10+ 份
-            // IDWriteTextLayout,而这是每帧(侧栏可见/动画时)、每一可见行都
-            // 要跑一遍的路径。改成直接让 DirectWrite 原生截断
-            // (IDWriteTextLayout::SetTrimming + CreateEllipsisTrimmingSign)
-            // ——用已经为绘制而创建的这一份 layout 本身,不再额外建任何探测
-            // 用的 layout。
-            //
-            // Efficiency review (2026-09-19) found: this used to hand-roll a
-            // binary search for the ellipsis cut point, creating a fresh
-            // IDWriteTextLayout on every probe (10+ layouts per row in the
-            // worst case) — on a path that runs every visible row, every
-            // frame the sidebar is visible or animating. Switched to native
-            // DirectWrite trimming (SetTrimming + CreateEllipsisTrimmingSign)
-            // on the single layout already needed for drawing — no extra
-            // probe layouts at all.
-            IDWriteTextLayout* rowLayout = fonts_->CreateTextLayout(
-                path, pathLen, FontRole::Body, maxTextWidth, kSidebarRowHeightDip);
-            if (rowLayout) {
-                rowLayout->SetFontSize(kSidebarRowFontSizeDip, DWRITE_TEXT_RANGE{0, pathLen});
-                IDWriteInlineObject* ellipsisSign = nullptr;
-                if (fonts_->Factory() &&
-                    SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(rowLayout, &ellipsisSign))) {
-                    DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-                    rowLayout->SetTrimming(&trimming, ellipsisSign);
-                    ellipsisSign->Release();
-                }
-                float textTop = rowTop + (kSidebarRowHeightDip - kSidebarRowFontSizeDip - 4.0f) * 0.5f;
-                target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, textTop),
-                                        rowLayout, textBrush,
-                                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
-                rowLayout->Release();
-            }
-        }
 
-        // 悬浮该行时,右侧画关闭按钮("X")+ 紧贴其左侧的文件夹按钮,点击
-        // 分别删除该项/打开所在文件夹——命中测试矩形须与 shell/sidebar.h::
-        // SidebarCloseButtonLocalRectDip / SidebarFolderButtonLocalRectDip
-        // 的几何公式保持一致。文案永远铺满整行(见上面 maxTextWidth 的
-        // 注释),两个按钮会悬浮在文案之上——先用与悬浮高亮同色、铺满整个
-        // 行高的底色盖住这段文案,图标不至于跟文字重叠糊在一起;颜色与
-        // 行高亮相同,视觉上是"融进"高亮底色,不会显得像多贴了一块。
-        if (highlighted && textBrush) {
-            float btnRight = panelWidth - kSidebarCloseButtonMarginDip;
-            float btnLeft = btnRight - kSidebarCloseButtonSizeDip;
-            float btnTop = rowTop + (kSidebarRowHeightDip - kSidebarCloseButtonSizeDip) * 0.5f;
-            float btnBottom = btnTop + kSidebarCloseButtonSizeDip;
-            float pad = kSidebarCloseButtonGlyphPaddingDip;
+        SidebarListItemParams itemParams{};
+        itemParams.rowLeft = 0.0f;
+        itemParams.rowTop = rowTop;
+        itemParams.rowWidth = panelWidth;
+        itemParams.rowHeight = kSidebarRowHeightDip;
+        itemParams.text = path;
+        itemParams.textLen = pathLen;
+        itemParams.isCurrent = false;
+        itemParams.isHover = (i == overlay_->historyHoverItem);
+        itemParams.buttonMask = kSidebarItemBtnClose | kSidebarItemBtnFolder;
 
-            float folderRight = btnLeft - kSidebarFolderButtonGapDip;
-            float folderLeft = folderRight - kSidebarCloseButtonSizeDip;
-
-            if (buttonBgBrush) {
-                target_->FillRectangle(
-                    D2D1::RectF(folderLeft, rowTop, btnRight, rowTop + kSidebarRowHeightDip),
-                    buttonBgBrush);
-            }
-
-            target_->DrawLine(D2D1::Point2F(btnLeft + pad, btnTop + pad),
-                              D2D1::Point2F(btnRight - pad, btnBottom - pad), textBrush, 1.4f);
-            target_->DrawLine(D2D1::Point2F(btnRight - pad, btnTop + pad),
-                              D2D1::Point2F(btnLeft + pad, btnBottom - pad), textBrush, 1.4f);
-
-            // "打开所在文件夹"按钮:图标画一个简化的文件夹轮廓(矩形 + 左上角标签)。
-            float bodyLeft = folderLeft + pad;
-            float bodyRight = folderRight - pad;
-            float bodyTop = btnTop + pad + 2.0f;
-            float bodyBottom = btnBottom - pad;
-            target_->DrawRectangle(D2D1::RectF(bodyLeft, bodyTop, bodyRight, bodyBottom), textBrush, 1.2f);
-            float tabWidth = (bodyRight - bodyLeft) * 0.45f;
-            target_->DrawLine(D2D1::Point2F(bodyLeft, bodyTop),
-                              D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f), textBrush, 1.2f);
-            target_->DrawLine(D2D1::Point2F(bodyLeft + tabWidth * 0.5f, bodyTop - 2.5f),
-                              D2D1::Point2F(bodyLeft + tabWidth, bodyTop), textBrush, 1.2f);
-        }
+        DrawSidebarListItem(itemParams, textBrush, highlightBgBrush, nullptr, buttonBgBrush);
     }
 
     float contentHeight = kSidebarHeaderHeightDip +
                           kSidebarRowHeightDip * static_cast<float>(overlay_->historyItemCount);
     DrawScrollbar(panelWidth, targetHeight, contentHeight, overlay_->historyScrollY,
+                  scrollbarTrackBrush, scrollbarThumbBrush);
+
+    target_->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+void Renderer::DrawEditBoxBorder(D2D1_RECT_F rect, ID2D1SolidColorBrush* borderBrush,
+                                  EditBoxBorderStyle style, float strokeWidth) {
+    if (!target_ || !borderBrush) return;
+    if (style == EditBoxBorderStyle::Borderless) {
+        // 无边框:不画任何描边/下划线,靠输入框自身背景色跟容器融为一体。
+        return;
+    }
+    if (style == EditBoxBorderStyle::UnderlineOnly) {
+        target_->DrawLine(D2D1::Point2F(rect.left, rect.bottom),
+                          D2D1::Point2F(rect.right, rect.bottom), borderBrush, strokeWidth);
+        return;
+    }
+    D2D1_ROUNDED_RECT rounded{rect, 4.0f, 4.0f};
+    target_->DrawRoundedRectangle(rounded, borderBrush, strokeWidth);
+}
+
+// 侧栏头部"打开根目录文件夹"按钮图标:与行内文件夹图标同一个视觉家族,
+// 但热区更大(24dip)、图标视觉本身缩小并做了形状比例微调——保留独立的
+// 绘制函数,不套用 PaintSidebarFolderIcon(避免为了共用而扭曲既有视觉)。
+void Renderer::PaintSidebarHeaderFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !textBrush) return;
+    ID2D1HwndRenderTarget* target_ = self->target_;
+    // 按钮热区仍是24x24，图标视觉再缩小到12px((24-12)/2=6.0)，在按钮内居中
+    float hPad = 6.0f;
+    float hBodyLeft = rect.left + hPad;
+    float hBodyRight = rect.right - hPad;
+    // 标签凸起偏移量按图标缩小比例(12/14)在上一轮2.1f基础上继续等比例收窄，保持形状比例不变
+    float hBodyTop = rect.top + hPad + 1.8f;
+    float hBodyBottom = rect.bottom - hPad;
+    target_->DrawRectangle(D2D1::RectF(hBodyLeft, hBodyTop, hBodyRight, hBodyBottom), textBrush, 1.2f);
+    float hTabWidth = (hBodyRight - hBodyLeft) * 0.45f;
+    target_->DrawLine(D2D1::Point2F(hBodyLeft, hBodyTop),
+                      D2D1::Point2F(hBodyLeft + hTabWidth * 0.5f, hBodyTop - 1.8f), textBrush, 1.2f);
+    target_->DrawLine(D2D1::Point2F(hBodyLeft + hTabWidth * 0.5f, hBodyTop - 1.8f),
+                      D2D1::Point2F(hBodyLeft + hTabWidth, hBodyTop), textBrush, 1.2f);
+}
+
+void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
+                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                               ID2D1SolidColorBrush* highlightBgBrush,
+                               ID2D1SolidColorBrush* currentItemBrush,
+                               ID2D1SolidColorBrush* buttonBgBrush,
+                               ID2D1SolidColorBrush* scrollbarTrackBrush,
+                               ID2D1SolidColorBrush* scrollbarThumbBrush,
+                               ID2D1SolidColorBrush* tooltipBgBrush,
+                               ID2D1SolidColorBrush* tooltipTextBrush) {
+    // 注意:folderEntries 为空文件夹时可能是 nullptr,不能拿它当"侧栏是否
+    // 打开"的判据,否则空文件夹侧栏本身也画不出来(真实 bug 教训)。
+    if (!overlay_) return;
+    if (!fonts_ || !bgBrush || !textBrush || !target_) return;
+
+    float animProgress = overlay_->folderAnimProgress;
+    if (animProgress <= 0.0001f) return;
+
+    // 挤压模式的常驻面板,不是盖住一切的悬浮抽屉,高度要跟正文一样让出
+    // 底部栏那一条,否则侧栏自己的背景/列表会把底部栏(唯一能收起它的
+    // 入口)盖在下面。这里之后的 targetHeight 全部指"侧栏可用高度"。
+    targetHeight -= kBottomBarHeightDip;
+    if (targetHeight < 0.0f) targetHeight = 0.0f;
+
+    float panelWidth = overlay_->folderPanelWidthDip;
+    float slideOffset = 0.0f;
+    if (animProgress < 1.0f) {
+        slideOffset = (animProgress - 1.0f) * panelWidth;
+    }
+
+    target_->SetTransform(D2D1::Matrix3x2F::Translation(slideOffset, 0.0f));
+
+    // 侧栏面板底色与右边框
+    D2D1_RECT_F panelRect = D2D1::RectF(0.0f, 0.0f, panelWidth, targetHeight);
+    target_->FillRectangle(panelRect, bgBrush);
+
+    if (highlightBgBrush) {
+        target_->DrawLine(D2D1::Point2F(panelWidth, 0.0f), D2D1::Point2F(panelWidth, targetHeight),
+                          highlightBgBrush, 1.0f);
+    }
+
+    u32 displayCount = overlay_->folderFilteredIndices ? overlay_->folderFilteredCount : overlay_->folderEntryCount;
+
+    // 顶部工具栏（分两行，总高度 kFolderSidebarHeaderHeightDip = 72.0f）
+    // 第一行：文件夹标题 + 右侧"打开所在根目录"文件夹按钮 (0 ~ 36.0f)
+    {
+        wchar_t headerText[128];
+        const wchar_t* rootName = (overlay_->folderRootName && overlay_->folderRootName[0] != 0)
+                                      ? overlay_->folderRootName
+                                      : L"文档列表";
+        if (overlay_->folderFilteredIndices && overlay_->folderFilteredCount < overlay_->folderEntryCount) {
+            swprintf_s(headerText, L"文件夹: %s (%u/%u)", rootName, overlay_->folderFilteredCount, overlay_->folderEntryCount);
+        } else {
+            swprintf_s(headerText, L"文件夹: %s (%u)", rootName, overlay_->folderEntryCount);
+        }
+        u32 headerLen = static_cast<u32>(wcslen(headerText));
+        float titleMaxWidth = panelWidth - kSidebarPanelPaddingDip - 28.0f;
+        IDWriteTextLayout* headerLayout = fonts_->CreateTextLayout(
+            headerText, headerLen, FontRole::Body,
+            titleMaxWidth > 10.0f ? titleMaxWidth : 10.0f, kFolderHeaderRow1HeightDip);
+        if (headerLayout) {
+            headerLayout->SetFontSize(kSidebarHeaderFontSizeDip, DWRITE_TEXT_RANGE{0, headerLen});
+            headerLayout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_RANGE{0, headerLen});
+            headerLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            IDWriteInlineObject* headerEllipsis = nullptr;
+            if (fonts_->Factory() &&
+                SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(headerLayout, &headerEllipsis))) {
+                DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+                headerLayout->SetTrimming(&trimming, headerEllipsis);
+                headerEllipsis->Release();
+            }
+            float textTop = (kFolderHeaderRow1HeightDip - kSidebarHeaderFontSizeDip - 4.0f) * 0.5f;
+            target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, textTop),
+                                    headerLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            headerLayout->Release();
+        }
+
+        // 第一行右侧"打开根目录"文件夹按钮:矩形几何来自 sidebar.h 的
+        // SidebarFolderHeaderButtonLocalRectDip(该函数内部已经统一经
+        // IconButtonRectDip 构造),这里只需要构造一个 IconButton 把
+        // paintIcon 接上,图标内容通过回调画出。
+        IconButton headerBtn{kSidebarFolderHeaderButtonSizeDip, 0.0f, L"打开根目录文件夹",
+                             &Renderer::PaintSidebarHeaderFolderIcon, nullptr};
+        SidebarRectDip headerBtnRectRaw = SidebarFolderHeaderButtonLocalRectDip(panelWidth);
+        ButtonRectDip headerBtnRect{headerBtnRectRaw.left, headerBtnRectRaw.top, headerBtnRectRaw.right,
+                                    headerBtnRectRaw.bottom};
+        if (overlay_->folderHeaderButtonHover && highlightBgBrush) {
+            target_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(headerBtnRect.left, headerBtnRect.top,
+                                              headerBtnRect.right, headerBtnRect.bottom),
+                                  4.0f, 4.0f),
+                highlightBgBrush);
+        }
+        if (headerBtn.paintIcon) headerBtn.paintIcon(this, headerBtnRect, textBrush);
+    }
+
+    // 第二行：过滤输入框外框背景 (36.0f ~ 72.0f)
+    {
+        SidebarRectDip inputRect = SidebarFolderFilterInputLocalRectDip(panelWidth);
+        D2D1_ROUNDED_RECT roundedBox{
+            D2D1::RectF(inputRect.left, inputRect.top, inputRect.right, inputRect.bottom),
+            4.0f, 4.0f
+        };
+        // 改为无边框样式:不画任何描边/下划线,靠输入框背景色跟侧栏面板融为一体
+        DrawEditBoxBorder(roundedBox.rect, textBrush, EditBoxBorderStyle::Borderless, 0.8f);
+
+        // 抽屉正在动画中或 Win32 原生输入框未显示时，绘制占位/当前文字以保证视觉连续平滑
+        if (animProgress < 0.999f) {
+            const wchar_t* qText = (overlay_->folderFilterQuery && overlay_->folderFilterQuery[0] != 0)
+                                       ? overlay_->folderFilterQuery
+                                       : L"过滤文件...";
+            u32 qLen = static_cast<u32>(wcslen(qText));
+            IDWriteTextLayout* qLayout = fonts_->CreateTextLayout(
+                qText, qLen, FontRole::Body, inputRect.right - inputRect.left - 12.0f, inputRect.bottom - inputRect.top);
+            if (qLayout) {
+                qLayout->SetFontSize(kSidebarRowFontSizeDip, DWRITE_TEXT_RANGE{0, qLen});
+                float qTop = inputRect.top + (inputRect.bottom - inputRect.top - kSidebarRowFontSizeDip - 4.0f) * 0.5f;
+                target_->DrawTextLayout(D2D1::Point2F(inputRect.left + 6.0f, qTop), qLayout, textBrush,
+                                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                qLayout->Release();
+            }
+        }
+
+        // 第二行底部与列表内容区的分割线
+        target_->DrawLine(D2D1::Point2F(0.0f, kFolderSidebarHeaderHeightDip),
+                          D2D1::Point2F(panelWidth, kFolderSidebarHeaderHeightDip),
+                          textBrush, 0.8f);
+    }
+
+    float maxTextWidth = panelWidth - kSidebarPanelPaddingDip * 2.0f;
+
+    if (displayCount == 0) {
+        const wchar_t* emptyText = (overlay_->folderEntryCount == 0) ? L"未找到 Markdown 文件" : L"无匹配文件";
+        u32 emptyLen = static_cast<u32>(wcslen(emptyText));
+        float emptyAreaTop = kFolderSidebarHeaderHeightDip;
+        float emptyAreaHeight = targetHeight - emptyAreaTop;
+        IDWriteTextLayout* emptyLayout = fonts_->CreateTextLayout(
+            emptyText, emptyLen, FontRole::Body, maxTextWidth, emptyAreaHeight);
+        if (emptyLayout) {
+            emptyLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            emptyLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, emptyAreaTop),
+                                    emptyLayout, textBrush,
+                                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            emptyLayout->Release();
+        }
+        target_->SetTransform(D2D1::Matrix3x2F::Identity());
+        return;
+    }
+
+    // 裁剪区域：行只在标题栏下到视口底部之间可见
+    D2D1_RECT_F clipRect = D2D1::RectF(0.0f, kFolderSidebarHeaderHeightDip, panelWidth, targetHeight);
+    target_->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    // hover 行的完整路径提示气泡要画在裁剪区域之外(否则会被行列表的裁剪矩形
+    // 截断),这里先记下 hover 行的几何与全路径文本，等 PopAxisAlignedClip 后
+    // 再画。
+    bool hoverRowValid = false;
+    float hoverRowTop = 0.0f;
+    const wchar_t* hoverFullPath = nullptr;
+    u32 hoverFullPathLen = 0;
+
+    // 同理,行内"打开所在文件夹"/"新窗口打开"按钮的悬浮标题小气泡也要画在
+    // 裁剪区域之外,先记下按钮矩形与对应文案。
+    bool hoverButtonValid = false;
+    SidebarRectDip hoverButtonRect{};
+    const wchar_t* hoverButtonLabel = nullptr;
+
+    float baseTop = kFolderSidebarHeaderHeightDip - overlay_->folderScrollY;
+    for (u32 i = 0; i < displayCount; ++i) {
+        float rowTop = baseTop + static_cast<float>(i) * kSidebarRowHeightDip;
+        float rowBottom = rowTop + kSidebarRowHeightDip;
+        if (rowBottom < kFolderSidebarHeaderHeightDip || rowTop > targetHeight) continue;
+
+        u32 realIdx = overlay_->folderFilteredIndices ? overlay_->folderFilteredIndices[i] : i;
+        bool isCurrent = (realIdx == overlay_->folderCurrentItem);
+        bool isHover = (i == overlay_->folderHoverItem);
+
+        const FolderEntry& entry = overlay_->folderEntries[realIdx];
+        u32 pathLen = static_cast<u32>(wcslen(entry.relPath));
+
+        SidebarListItemParams itemParams{};
+        itemParams.rowLeft = 0.0f;
+        itemParams.rowTop = rowTop;
+        itemParams.rowWidth = panelWidth;
+        itemParams.rowHeight = kSidebarRowHeightDip;
+        itemParams.text = entry.relPath;
+        itemParams.textLen = pathLen;
+        itemParams.isCurrent = isCurrent;
+        itemParams.isHover = isHover;
+        itemParams.buttonMask = kSidebarItemBtnFolder | kSidebarItemBtnNewWindow;
+
+        DrawSidebarListItem(itemParams, textBrush, highlightBgBrush, currentItemBrush, buttonBgBrush);
+
+        if (isHover) {
+            hoverRowValid = true;
+            hoverRowTop = rowTop;
+            hoverFullPath = entry.fullPath;
+            hoverFullPathLen = static_cast<u32>(wcslen(entry.fullPath));
+
+            if (overlay_->folderItemNewWindowButtonHover) {
+                hoverButtonValid = true;
+                hoverButtonRect = SidebarFolderItemNewWindowButtonLocalRectDip(
+                    panelWidth, i, overlay_->folderScrollY);
+                hoverButtonLabel = L"新窗口打开";
+            } else if (overlay_->folderItemFolderButtonHover) {
+                hoverButtonValid = true;
+                hoverButtonRect =
+                    SidebarFolderItemButtonLocalRectDip(panelWidth, i, overlay_->folderScrollY);
+                hoverButtonLabel = L"打开所在文件夹";
+            }
+        }
+    }
+
+    target_->PopAxisAlignedClip();
+
+    // hover 行完整绝对路径提示气泡：自适应宽度(不超过 kFolderTooltipMaxWidthDip)、
+    // 超宽自动换行，不做单行省略号截断——与正文里省略号截断的路径展示区分开。
+    // 气泡底色/文字色改用 tooltipBgBrush/tooltipTextBrush(与窗口内提示条
+    // overlayBar 共用同一套"主题反差半透明深色气泡"配色)而不是侧栏自己的
+    // bgBrush/textBrush——侧栏底色下的气泡几乎融进背景,起不到提示效果。
+    if (hoverRowValid && fonts_ && tooltipBgBrush && tooltipTextBrush && hoverFullPathLen > 0) {
+        IDWriteTextLayout* tipLayout = fonts_->CreateTextLayout(
+            hoverFullPath, hoverFullPathLen, FontRole::Body, kFolderTooltipMaxWidthDip, 400.0f);
+        if (tipLayout) {
+            tipLayout->SetFontSize(kFolderTooltipFontSizeDip, DWRITE_TEXT_RANGE{0, hoverFullPathLen});
+            DWRITE_TEXT_METRICS metrics{};
+            tipLayout->GetMetrics(&metrics);
+            float bubbleWidth = metrics.width + kFolderTooltipPaddingDip * 2.0f;
+            float bubbleHeight = metrics.height + kFolderTooltipPaddingDip * 2.0f;
+
+            // 水平方向:气泡左边对齐列表项的水平中点(而不是贴左边),看起来
+            // 像是从行中间"弹出来"的;超出面板宽度也没关系——挤压模式下
+            // 侧栏右边就是正文,不像悬浮蒙层那样怕盖住别的东西,只需要不
+            // 越过屏幕右边缘。
+            // 水平方向的左右边距不对称(左边贴 0,右边留屏幕边距),不是
+            // ClampTooltipLeftDip 覆盖的"左右同一 margin"情形,这里保留原样
+            // 两步钳制。
+            float bubbleLeft = panelWidth * 0.5f;
+            if (bubbleLeft + bubbleWidth > targetWidth - kFolderTooltipScreenMarginDip) {
+                bubbleLeft = targetWidth - kFolderTooltipScreenMarginDip - bubbleWidth;
+            }
+            if (bubbleLeft < 0.0f) bubbleLeft = 0.0f;
+
+            // 竖直方向出现在该行上方,与行之间留一条小缝隙;若行本身太靠近
+            // 顶部、上方放不下,退化成显示在行下方,保证气泡始终完整可见。
+            TooltipVerticalDip bubbleV = TooltipBubbleVerticalDip(
+                hoverRowTop, hoverRowTop + kSidebarRowHeightDip, bubbleHeight, kFolderTooltipGapDip,
+                kFolderSidebarHeaderHeightDip, targetHeight - kFolderTooltipScreenMarginDip);
+            float bubbleTop = bubbleV.top;
+
+            D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
+                D2D1::RectF(bubbleLeft, bubbleTop, bubbleLeft + bubbleWidth, bubbleTop + bubbleHeight),
+                4.0f, 4.0f);
+            target_->FillRoundedRectangle(bubble, tooltipBgBrush);
+            target_->DrawTextLayout(
+                D2D1::Point2F(bubbleLeft + kFolderTooltipPaddingDip, bubbleTop + kFolderTooltipPaddingDip),
+                tipLayout, tooltipTextBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            tipLayout->Release();
+        }
+    }
+
+    // 行内"打开所在文件夹"/"新窗口打开"按钮的悬浮标题小气泡——单行、固定
+    // 高度,画法与底部栏图标的悬浮提示(kBottomBarTooltip*)同一套,只是
+    // 位置换成按钮正上方、水平居中于按钮。
+    if (hoverButtonValid && fonts_ && tooltipBgBrush && tooltipTextBrush && hoverButtonLabel) {
+        u32 labelLen = WideLength(hoverButtonLabel);
+        IDWriteTextLayout* btnTipLayout =
+            fonts_->CreateTextLayout(hoverButtonLabel, labelLen, FontRole::Body, 200.0f,
+                                     kBottomBarTooltipHeightDip);
+        if (btnTipLayout) {
+            btnTipLayout->SetFontSize(kBottomBarTooltipFontSizeDip, DWRITE_TEXT_RANGE{0, labelLen});
+            DWRITE_TEXT_METRICS metrics{};
+            btnTipLayout->GetMetrics(&metrics);
+            float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
+            float buttonCenterX = (hoverButtonRect.left + hoverButtonRect.right) * 0.5f;
+            float bubbleLeft = ClampTooltipLeftDip(buttonCenterX - bubbleWidth * 0.5f, bubbleWidth,
+                                                    targetWidth, kFolderTooltipScreenMarginDip);
+            // 按钮太靠近顶部、上方放不下时,退化到按钮下方(与行完整路径气泡
+            // 同一套 TooltipBubbleVerticalDip 定位逻辑)。
+            TooltipVerticalDip bubbleV =
+                TooltipBubbleVerticalDip(hoverButtonRect.top, hoverButtonRect.bottom,
+                                         kBottomBarTooltipHeightDip, kBottomBarTooltipGapDip,
+                                         kFolderSidebarHeaderHeightDip);
+            float bubbleTop = bubbleV.top;
+            float bubbleBottom = bubbleV.bottom;
+            D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
+                D2D1::RectF(bubbleLeft, bubbleTop, bubbleLeft + bubbleWidth, bubbleBottom), 4.0f, 4.0f);
+            target_->FillRoundedRectangle(bubble, tooltipBgBrush);
+            target_->DrawTextLayout(
+                D2D1::Point2F(bubbleLeft + kBottomBarTooltipPaddingDip,
+                              bubbleTop + (kBottomBarTooltipHeightDip - metrics.height) * 0.5f),
+                btnTipLayout, tooltipTextBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            btnTipLayout->Release();
+        }
+    }
+
+    float contentHeight = kFolderSidebarHeaderHeightDip +
+                          kSidebarRowHeightDip * static_cast<float>(displayCount);
+    DrawScrollbar(panelWidth, targetHeight, contentHeight, overlay_->folderScrollY,
                   scrollbarTrackBrush, scrollbarThumbBrush);
 
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -1290,6 +1703,190 @@ ID2D1PathGeometry* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
     return geo;
 }
 
+// 传给 Renderer::PaintBottomBarIcon 的 userData:底部栏图标画法按下标分派
+// (原先内联在 DrawBottomBar 里的一整套 switch),需要知道画的是第几个按钮、
+// 复制路径按钮是否处于"已复制"态、以及两支画笔。
+struct BottomBarIconPaintCtx {
+    u32 index;
+    bool pathCopied;
+    ID2D1SolidColorBrush* iconBrush;
+    ID2D1SolidColorBrush* bgBrush;
+};
+
+// 底部栏各按钮图标内容(手绘矢量图形,零图标字体零位图)。renderCtx 固定是
+// 发起绘制的 Renderer* this;rect 是 IconButtonRectDip 算出的按钮矩形——
+// 图标本身按原有视觉再从矩形中心收缩一圈画(与迁移前逐像素一致)。
+void Renderer::PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    auto* ctx = static_cast<BottomBarIconPaintCtx*>(userData);
+    if (!self || !self->target_ || !ctx || !ctx->iconBrush) return;
+
+    ID2D1HwndRenderTarget* target_ = self->target_;  // 复用下面搬过来的原始代码,变量名保持一致
+    ID2D1SolidColorBrush* iconBrush = ctx->iconBrush;
+    ID2D1SolidColorBrush* bgBrush = ctx->bgBrush;
+    bool pathCopied = ctx->pathCopied;
+    u32 i = ctx->index;
+    float centerX = (rect.left + rect.right) * 0.5f;
+    float iconCenterY = (rect.top + rect.bottom) * 0.5f;
+    // 左侧 8 个按钮用略小一档的图标尺寸(kBottomBarLeftIconSizeDip),
+    // 右侧固定按钮群(CopyPath/History)保持原尺寸——两组独立计算 half。
+    float half = (i < kBottomBarLeftButtonCount ? kBottomBarLeftIconSizeDip
+                                                  : kBottomBarIconSizeDip) * 0.5f;
+
+    switch (static_cast<int>(i)) {
+    case 0: {  // 文件列表: List 图标(三行: 左边实心小圆点 + 右边短横线)
+        float dotR = 1.0f;
+        float lineLeft = centerX - half * 0.15f;
+        float lineRight = centerX + half * 0.75f;
+        float dotX = centerX - half * 0.55f;
+        float lineTop = iconCenterY - half;
+        for (int row = 0; row < 3; ++row) {
+            float y = lineTop + kBottomBarLeftIconSizeDip * (0.25f + 0.3f * row);
+            D2D1_ELLIPSE dot{D2D1::Point2F(dotX, y), dotR, dotR};
+            target_->FillEllipse(dot, iconBrush);
+            target_->DrawLine(D2D1::Point2F(lineLeft, y),
+                              D2D1::Point2F(lineRight, y), iconBrush,
+                              kBottomBarIconStrokeWidthDip);
+        }
+        break;
+    }
+    case 1: {  // 大纲:三条横线(列表/层级图标)
+        float w = half * 1.6f;
+        float lineTop = iconCenterY - half;
+        for (int line = 0; line < 3; ++line) {
+            float y = lineTop + kBottomBarLeftIconSizeDip * (0.25f + 0.3f * line);
+            target_->DrawLine(D2D1::Point2F(centerX - w * 0.5f, y),
+                              D2D1::Point2F(centerX + w * 0.5f, y), iconBrush,
+                              kBottomBarIconStrokeWidthDip);
+        }
+        break;
+    }
+    case 2: {  // 打开文件:带折角的文档矩形
+        float w = half * 1.3f, h = half * 1.7f;
+        float fold = w * 0.35f;  // 右上角折角大小
+        D2D1_POINT_2F pts[5] = {
+            {centerX - w * 0.5f, iconCenterY - h * 0.5f},
+            {centerX + w * 0.5f - fold, iconCenterY - h * 0.5f},
+            {centerX + w * 0.5f, iconCenterY - h * 0.5f + fold},
+            {centerX + w * 0.5f, iconCenterY + h * 0.5f},
+            {centerX - w * 0.5f, iconCenterY + h * 0.5f},
+        };
+        for (int p = 0; p < 5; ++p) {
+            D2D1_POINT_2F next = pts[(p + 1) % 5];
+            target_->DrawLine(pts[p], next, iconBrush, kBottomBarIconStrokeWidthDip);
+        }
+        // 折角内的斜线,呼应"折角"的视觉细节。
+        target_->DrawLine(D2D1::Point2F(centerX + w * 0.5f - fold, iconCenterY - h * 0.5f),
+                          D2D1::Point2F(centerX + w * 0.5f, iconCenterY - h * 0.5f + fold),
+                          iconBrush, kBottomBarIconStrokeWidthDip);
+        // 文档内两条短横线代表正文。
+        target_->DrawLine(D2D1::Point2F(centerX - w * 0.25f, iconCenterY + h * 0.05f),
+                          D2D1::Point2F(centerX + w * 0.2f, iconCenterY + h * 0.05f),
+                          iconBrush, kBottomBarIconStrokeWidthDip);
+        target_->DrawLine(D2D1::Point2F(centerX - w * 0.25f, iconCenterY + h * 0.3f),
+                          D2D1::Point2F(centerX + w * 0.2f, iconCenterY + h * 0.3f),
+                          iconBrush, kBottomBarIconStrokeWidthDip);
+        break;
+    }
+    case 3: {  // 打开文件夹:文件夹轮廓(矩形 + 顶部小凸起)
+        float w = half * 1.7f, h = half * 1.2f;
+        D2D1_RECT_F body =
+            D2D1::RectF(centerX - w * 0.5f, iconCenterY - h * 0.3f,
+                        centerX + w * 0.5f, iconCenterY + h * 0.7f);
+        target_->DrawRectangle(body, iconBrush, kBottomBarIconStrokeWidthDip);
+        D2D1_RECT_F tab = D2D1::RectF(body.left, body.top - h * 0.35f,
+                                       body.left + w * 0.4f, body.top);
+        target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
+        break;
+    }
+    case 4: {  // 主题:太阳(圆 + 8条短射线,包含顶部)
+        float r = half * 0.45f;
+        D2D1_ELLIPSE sun{D2D1::Point2F(centerX, iconCenterY), r, r};
+        target_->DrawEllipse(sun, iconBrush, kBottomBarIconStrokeWidthDip);
+        float rayLen = half * 0.32f;
+        const float kDiag = 0.7071f;
+        D2D1_POINT_2F dirs[8] = {
+            {0.0f, -1.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {1.0f, 0.0f},
+            {kDiag, -kDiag}, {-kDiag, -kDiag}, {kDiag, kDiag}, {-kDiag, kDiag},
+        };
+        for (int d = 0; d < 8; ++d) {
+            float sx = centerX + dirs[d].x * (r + 1.5f);
+            float sy = iconCenterY + dirs[d].y * (r + 1.5f);
+            float ex = centerX + dirs[d].x * (r + 1.5f + rayLen);
+            float ey = iconCenterY + dirs[d].y * (r + 1.5f + rayLen);
+            target_->DrawLine(D2D1::Point2F(sx, sy), D2D1::Point2F(ex, ey), iconBrush,
+                              kBottomBarIconStrokeWidthDip);
+        }
+        break;
+    }
+    case 5:    // 缩小:给定 SVG("A" + 右下角 "-")的精确复刻几何
+    case 6: {  // 放大:给定 SVG("A" + 右下角 "+")的精确复刻几何,
+               // 首次用到才建、按角色缓存复用(见 zoomInIconGeometry_ /
+               // zoomOutIconGeometry_ 的注释)。
+        bool isZoomIn = (i == 6);
+        ID2D1PathGeometry*& cached = isZoomIn ? self->zoomInIconGeometry_ : self->zoomOutIconGeometry_;
+        if (!cached) cached = self->BuildZoomFontIconGeometry(isZoomIn);
+        if (cached && iconBrush) {
+            // 原 SVG viewBox 是 24x24,换算到本图标的正方形绘制区(用
+            // half*2 而不是固定常量,自动跟随左侧图标缩小 2px 的尺寸)。
+            float iconBoxSize = half * 2.0f * 1.35f;
+            float svgScale = iconBoxSize / 24.0f;
+            float iconLeft = centerX - iconBoxSize * 0.5f;
+            float iconTop = iconCenterY - iconBoxSize * 0.5f;
+            target_->SetTransform(D2D1::Matrix3x2F::Scale(svgScale, svgScale) *
+                                  D2D1::Matrix3x2F::Translation(iconLeft, iconTop));
+            target_->FillGeometry(cached, iconBrush);
+            target_->SetTransform(D2D1::Matrix3x2F::Identity());
+        }
+        break;
+    }
+    case 7: {  // 查找:放大镜(圆 + 右下角短柄),点击唤起查找条
+        float r = half * 0.55f;
+        D2D1_POINT_2F center = D2D1::Point2F(centerX - half * 0.15f, iconCenterY - half * 0.15f);
+        D2D1_ELLIPSE lens{center, r, r};
+        target_->DrawEllipse(lens, iconBrush, kBottomBarIconStrokeWidthDip);
+        const float kDiag = 0.7071f;
+        D2D1_POINT_2F handleStart{center.x + r * kDiag, center.y + r * kDiag};
+        D2D1_POINT_2F handleEnd{centerX + half * 0.55f, iconCenterY + half * 0.55f};
+        target_->DrawLine(handleStart, handleEnd, iconBrush,
+                          kBottomBarIconStrokeWidthDip * 1.2f);
+        break;
+    }
+    case kBottomBarCopyPathIndex: {
+        if (pathCopied) {
+            // 短暂的"已复制"成功态:一个对勾,与代码块复制按钮的
+            // 反馈图案同一画法(两段折线),只是复用底部栏的单色
+            // iconBrush,不额外引入绿色刷子。
+            D2D1_POINT_2F p1 = D2D1::Point2F(centerX - half * 0.5f, iconCenterY);
+            D2D1_POINT_2F p2 = D2D1::Point2F(centerX - half * 0.1f, iconCenterY + half * 0.4f);
+            D2D1_POINT_2F p3 = D2D1::Point2F(centerX + half * 0.55f, iconCenterY - half * 0.4f);
+            target_->DrawLine(p1, p2, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
+            target_->DrawLine(p2, p3, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
+        } else {
+            // "复制"图标:与代码块复制按钮同一份画法(DrawCopySheetsGlyph),
+            // 前纸用底部栏背景色填实,保证两处图标视觉一致。
+            float iconSize = kBottomBarIconSizeDip;
+            self->DrawCopySheetsGlyph(centerX - iconSize * 0.5f, iconCenterY - iconSize * 0.5f,
+                                iconSize, iconBrush, bgBrush);
+        }
+        break;
+    }
+    case kBottomBarHistoryIndex:
+    default: {  // 历史记录:时钟图标(圆圈 + 12点/3点表针)
+        float r = half * 0.65f;
+        D2D1_ELLIPSE clockCircle{D2D1::Point2F(centerX, iconCenterY), r, r};
+        target_->DrawEllipse(clockCircle, iconBrush, kBottomBarIconStrokeWidthDip);
+        target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
+                          D2D1::Point2F(centerX, iconCenterY - r * 0.5f), iconBrush,
+                          kBottomBarIconStrokeWidthDip);
+        target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
+                          D2D1::Point2F(centerX + r * 0.45f, iconCenterY), iconBrush,
+                          kBottomBarIconStrokeWidthDip);
+        break;
+    }
+    }
+}
+
 // 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
 // 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧最右边是历史按钮,
 // 中间是状态文字(当前文档路径 + 大小)。
@@ -1325,10 +1922,6 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
     float centerXs[kBottomBarButtonCount] = {};
 
     for (u32 i = 0; i < kBottomBarButtonCount; ++i) {
-        // 左侧 6 个按钮用略小一档的图标尺寸(kBottomBarLeftIconSizeDip),
-        // 右侧固定按钮群(CopyPath/History)保持原尺寸——两组独立计算 half。
-        float half = (i < kBottomBarLeftButtonCount ? kBottomBarLeftIconSizeDip
-                                                      : kBottomBarIconSizeDip) * 0.5f;
         // CopyPath 仅当前有打开文档时存在——未打开文档时整个跳过(不占位、
         // 不画、不留分隔线),该区域让给中间的状态文字区。
         if (i == kBottomBarCopyPathIndex && !hasDocument) continue;
@@ -1358,115 +1951,15 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
         }
 
         if (iconBrush) {
-            switch (static_cast<int>(i)) {
-            case 0: {  // 大纲:三条横线(列表图标)
-                float w = half * 1.6f;
-                float lineTop = iconCenterY - half;
-                for (int line = 0; line < 3; ++line) {
-                    float y = lineTop + kBottomBarIconSizeDip * (0.25f + 0.3f * line);
-                    target_->DrawLine(D2D1::Point2F(centerX - w * 0.5f, y),
-                                      D2D1::Point2F(centerX + w * 0.5f, y), iconBrush,
-                                      kBottomBarIconStrokeWidthDip);
-                }
-                break;
-            }
-            case 1: {  // 打开文档:文件夹轮廓
-                float w = half * 1.7f, h = half * 1.2f;
-                D2D1_RECT_F body =
-                    D2D1::RectF(centerX - w * 0.5f, iconCenterY - h * 0.3f,
-                                centerX + w * 0.5f, iconCenterY + h * 0.7f);
-                target_->DrawRectangle(body, iconBrush, kBottomBarIconStrokeWidthDip);
-                D2D1_RECT_F tab = D2D1::RectF(body.left, body.top - h * 0.35f,
-                                               body.left + w * 0.4f, body.top);
-                target_->DrawRectangle(tab, iconBrush, kBottomBarIconStrokeWidthDip);
-                break;
-            }
-            case 2: {  // 主题:太阳(圆 + 8条短射线,包含顶部)
-                float r = half * 0.45f;
-                D2D1_ELLIPSE sun{D2D1::Point2F(centerX, iconCenterY), r, r};
-                target_->DrawEllipse(sun, iconBrush, kBottomBarIconStrokeWidthDip);
-                float rayLen = half * 0.32f;
-                const float kDiag = 0.7071f;
-                D2D1_POINT_2F dirs[8] = {
-                    {0.0f, -1.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {1.0f, 0.0f},
-                    {kDiag, -kDiag}, {-kDiag, -kDiag}, {kDiag, kDiag}, {-kDiag, kDiag},
-                };
-                for (int d = 0; d < 8; ++d) {
-                    float sx = centerX + dirs[d].x * (r + 1.5f);
-                    float sy = iconCenterY + dirs[d].y * (r + 1.5f);
-                    float ex = centerX + dirs[d].x * (r + 1.5f + rayLen);
-                    float ey = iconCenterY + dirs[d].y * (r + 1.5f + rayLen);
-                    target_->DrawLine(D2D1::Point2F(sx, sy), D2D1::Point2F(ex, ey), iconBrush,
-                                      kBottomBarIconStrokeWidthDip);
-                }
-                break;
-            }
-            case 3:    // 缩小:给定 SVG("A" + 右下角 "-")的精确复刻几何
-            case 4: {  // 放大:给定 SVG("A" + 右下角 "+")的精确复刻几何,
-                       // 首次用到才建、按角色缓存复用(见 zoomInIconGeometry_ /
-                       // zoomOutIconGeometry_ 的注释)。
-                bool isZoomIn = (i == 4);
-                ID2D1PathGeometry*& cached = isZoomIn ? zoomInIconGeometry_ : zoomOutIconGeometry_;
-                if (!cached) cached = BuildZoomFontIconGeometry(isZoomIn);
-                if (cached && iconBrush) {
-                    // 原 SVG viewBox 是 24x24,换算到本图标的正方形绘制区(用
-                    // half*2 而不是固定常量,自动跟随左侧图标缩小 2px 的尺寸)。
-                    float iconBoxSize = half * 2.0f * 1.35f;
-                    float svgScale = iconBoxSize / 24.0f;
-                    float iconLeft = centerX - iconBoxSize * 0.5f;
-                    float iconTop = iconCenterY - iconBoxSize * 0.5f;
-                    target_->SetTransform(D2D1::Matrix3x2F::Scale(svgScale, svgScale) *
-                                          D2D1::Matrix3x2F::Translation(iconLeft, iconTop));
-                    target_->FillGeometry(cached, iconBrush);
-                    target_->SetTransform(D2D1::Matrix3x2F::Identity());
-                }
-                break;
-            }
-            case 5: {  // 查找:放大镜(圆 + 右下角短柄),点击唤起查找条
-                float r = half * 0.55f;
-                D2D1_POINT_2F center = D2D1::Point2F(centerX - half * 0.15f, iconCenterY - half * 0.15f);
-                D2D1_ELLIPSE lens{center, r, r};
-                target_->DrawEllipse(lens, iconBrush, kBottomBarIconStrokeWidthDip);
-                const float kDiag = 0.7071f;
-                D2D1_POINT_2F handleStart{center.x + r * kDiag, center.y + r * kDiag};
-                D2D1_POINT_2F handleEnd{centerX + half * 0.55f, iconCenterY + half * 0.55f};
-                target_->DrawLine(handleStart, handleEnd, iconBrush,
-                                  kBottomBarIconStrokeWidthDip * 1.2f);
-                break;
-            }
-            case kBottomBarCopyPathIndex: {
-                if (pathCopied) {
-                    // 短暂的"已复制"成功态:一个对勾,与代码块复制按钮的
-                    // 反馈图案同一画法(两段折线),只是复用底部栏的单色
-                    // iconBrush,不额外引入绿色刷子。
-                    D2D1_POINT_2F p1 = D2D1::Point2F(centerX - half * 0.5f, iconCenterY);
-                    D2D1_POINT_2F p2 = D2D1::Point2F(centerX - half * 0.1f, iconCenterY + half * 0.4f);
-                    D2D1_POINT_2F p3 = D2D1::Point2F(centerX + half * 0.55f, iconCenterY - half * 0.4f);
-                    target_->DrawLine(p1, p2, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
-                    target_->DrawLine(p2, p3, iconBrush, kBottomBarIconStrokeWidthDip * 1.3f);
-                } else {
-                    // "复制"图标:与代码块复制按钮同一份画法(DrawCopySheetsGlyph),
-                    // 前纸用底部栏背景色填实,保证两处图标视觉一致。
-                    float iconSize = kBottomBarIconSizeDip;
-                    DrawCopySheetsGlyph(centerX - iconSize * 0.5f, iconCenterY - iconSize * 0.5f,
-                                        iconSize, iconBrush, bgBrush);
-                }
-                break;
-            }
-            case kBottomBarHistoryIndex:
-            default: {  // 历史记录:时钟图标(圆圈 + 12点/3点表针)
-                float r = half * 0.65f;
-                D2D1_ELLIPSE clockCircle{D2D1::Point2F(centerX, iconCenterY), r, r};
-                target_->DrawEllipse(clockCircle, iconBrush, kBottomBarIconStrokeWidthDip);
-                target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
-                                  D2D1::Point2F(centerX, iconCenterY - r * 0.5f), iconBrush,
-                                  kBottomBarIconStrokeWidthDip);
-                target_->DrawLine(D2D1::Point2F(centerX, iconCenterY),
-                                  D2D1::Point2F(centerX + r * 0.45f, iconCenterY), iconBrush,
-                                  kBottomBarIconStrokeWidthDip);
-                break;
-            }
-            }
+            // "这是一个按钮"这件事(矩形几何 + 图标绘制入口)交给 IconButton
+            // 承载:排布算法(上面算出的 centerX/iconCenterY)仍是底部栏自己的,
+            // 但最终矩形经 IconButtonRectDip 得到,图标内容经 paintIcon
+            // 回调(PaintBottomBarIcon,见文件末尾实现)画出,不再由这里直接
+            // 内联一整套 switch。
+            IconButton btn{btnW, 0.0f, kBottomBarTooltipLabels[i], &Renderer::PaintBottomBarIcon, nullptr};
+            ButtonRectDip iconRect = IconButtonRectDip(btn, centerX, iconCenterY);
+            BottomBarIconPaintCtx ctx{i, pathCopied, iconBrush, bgBrush};
+            if (btn.paintIcon) btn.paintIcon(this, iconRect, &ctx);
         }
     }
 
@@ -1482,11 +1975,15 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
             tipLayout->GetMetrics(&metrics);
             float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
             float buttonCenterX = centerXs[hoverButtonIndex];
-            float bubbleLeft = buttonCenterX - bubbleWidth * 0.5f;
-            if (bubbleLeft < 4.0f) bubbleLeft = 4.0f;
-            if (bubbleLeft + bubbleWidth > targetWidth - 4.0f) bubbleLeft = targetWidth - 4.0f - bubbleWidth;
-            float bubbleBottom = barTop - kBottomBarTooltipGapDip;
-            float bubbleTop = bubbleBottom - kBottomBarTooltipHeightDip;
+            float bubbleLeft = ClampTooltipLeftDip(buttonCenterX - bubbleWidth * 0.5f, bubbleWidth,
+                                                    targetWidth, 4.0f);
+            // 底部栏气泡永远画在栏顶边上方,不会像侧栏按钮气泡那样退化到锚点
+            // 下方(minTopDip 传一个极小值,TooltipBubbleVerticalDip 的下方
+            // 退化分支永远不会触发,行为与原实现一致)。
+            TooltipVerticalDip bubbleV = TooltipBubbleVerticalDip(
+                barTop, barTop, kBottomBarTooltipHeightDip, kBottomBarTooltipGapDip, -1e9f);
+            float bubbleTop = bubbleV.top;
+            float bubbleBottom = bubbleV.bottom;
             D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
                 D2D1::RectF(bubbleLeft, bubbleTop, bubbleLeft + bubbleWidth, bubbleBottom),
                 4.0f, 4.0f);
@@ -1549,6 +2046,21 @@ void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
     }
 }
 
+// 传给 Renderer::PaintCodeCopySheetsIcon 的 userData。
+struct CodeCopyIconPaintCtx {
+    ID2D1SolidColorBrush* strokeBrush;
+    ID2D1SolidColorBrush* paperBrush;
+};
+
+// 代码块复制按钮默认态图标:两张叠压纸(复用 DrawCopySheetsGlyph,与底部栏
+// "复制路径"按钮的默认图标同一份画法,保证两处视觉一致)。
+void Renderer::PaintCodeCopySheetsIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    auto* ctx = static_cast<CodeCopyIconPaintCtx*>(userData);
+    if (!self || !ctx) return;
+    self->DrawCopySheetsGlyph(rect.left, rect.top, rect.Width(), ctx->strokeBrush, ctx->paperBrush);
+}
+
 void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float scrollY,
                                    ID2D1SolidColorBrush* iconBrush,
                                    ID2D1SolidColorBrush* hoverBgBrush,
@@ -1559,12 +2071,20 @@ void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float 
     bool hovered = overlay_ && overlay_->copyButtonHoverBlock == blockIndex;
     bool copied = overlay_ && overlay_->copyButtonCopiedBlock == blockIndex;
 
-    float left = g.codeCopyButton.x;
-    float top = g.codeCopyButton.y - scrollY;
-    float size = g.codeCopyButton.width;
-    D2D1_RECT_F box = D2D1::RectF(left, top, left + size, top + g.codeCopyButton.height);
-    float buttonRadius = size * kCopyButtonCornerRadiusRatio;
-    D2D1_ROUNDED_RECT roundedBox = D2D1::RoundedRect(box, buttonRadius, buttonRadius);
+    // 矩形几何:排布算法(x/y/width/height)来自文档布局引擎(与其它 4 套
+    // 按钮系统"各自算锚点"同一个道理,只是这里的锚点是代码块在文档流里的
+    // 位置,由 layout 层算出),算出锚点/尺寸之后统一交给 Button 抽象的
+    // ButtonRectFromCenterDip 得到最终矩形。
+    Button btn{g.codeCopyButton.width, g.codeCopyButton.height, g.codeCopyButton.width * kCopyButtonCornerRadiusRatio,
+               nullptr, nullptr, &Renderer::PaintCodeCopySheetsIcon, nullptr};
+    float centerX = g.codeCopyButton.x + g.codeCopyButton.width * 0.5f;
+    float centerY = (g.codeCopyButton.y - scrollY) + g.codeCopyButton.height * 0.5f;
+    ButtonRectDip rect = ButtonRectFromCenterDip(btn, centerX, centerY);
+    float left = rect.left;
+    float top = rect.top;
+    float size = rect.Width();
+    D2D1_RECT_F box = D2D1::RectF(rect.left, rect.top, rect.right, rect.bottom);
+    D2D1_ROUNDED_RECT roundedBox = D2D1::RoundedRect(box, btn.radius, btn.radius);
     float stroke = size * kCopyStrokeWidthRatio;
 
     if (copied) {
@@ -1583,7 +2103,10 @@ void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float 
     // 悬浮:先铺一层浅灰圆角底,盖住代码块背景,底色本身就是悬浮反馈。
     if (hovered && hoverBgBrush) target_->FillRoundedRectangle(roundedBox, hoverBgBrush);
 
-    DrawCopySheetsGlyph(left, top, size, iconBrush, paperBrush);
+    if (btn.paintIcon) {
+        CodeCopyIconPaintCtx ctx{iconBrush, paperBrush};
+        btn.paintIcon(this, rect, &ctx);
+    }
 }
 
 // "复制"图标本体(T45,2026-09-19 抽成公共函数供底部栏复制路径按钮复用):
@@ -2014,19 +2537,59 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 
 // 画欢迎屏(未打开任何文档时,取代正文 DrawBlock 循环,详见 renderer.h 的
 // 声明处注释)。
-void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight, bool buttonHover,
+// 欢迎屏"打开文件"按钮图标:单文档文件图标(带折角矩形效果)。rect 是
+// 图标应绘制在其中的矩形区域(contentLeft/iconTop 起、kWelcomeIconSizeDip
+// 见方),userData 是文字/图标共用的 textBrush。
+void Renderer::PaintWelcomeFileIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !textBrush) return;
+    ID2D1HwndRenderTarget* target_ = self->target_;
+    float contentLeft = rect.left;
+    float iconTop = rect.top;
+    float size = rect.Width();
+    D2D1_RECT_F docRect = D2D1::RectF(contentLeft + 1.0f, iconTop, contentLeft + size - 1.0f, iconTop + size);
+    target_->DrawRoundedRectangle(D2D1::RoundedRect(docRect, 1.5f, 1.5f), textBrush, 1.2f);
+    target_->DrawLine(D2D1::Point2F(contentLeft + 4.0f, iconTop + 5.0f),
+                      D2D1::Point2F(contentLeft + size - 4.0f, iconTop + 5.0f), textBrush, 1.0f);
+    target_->DrawLine(D2D1::Point2F(contentLeft + 4.0f, iconTop + 9.0f),
+                      D2D1::Point2F(contentLeft + size - 4.0f, iconTop + 9.0f), textBrush, 1.0f);
+}
+
+// 欢迎屏"打开文件夹"按钮图标:文件夹轮廓(带顶端标签)。
+void Renderer::PaintWelcomeFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
+    Renderer* self = static_cast<Renderer*>(renderCtx);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
+    if (!self || !self->target_ || !textBrush) return;
+    ID2D1HwndRenderTarget* target_ = self->target_;
+    float contentLeft = rect.left;
+    float iconTop = rect.top;
+    float size = rect.Width();
+    float tabWidth = size * 0.46f;
+    float tabHeight = size * 0.20f;
+    D2D1_RECT_F tabRect = D2D1::RectF(contentLeft, iconTop, contentLeft + tabWidth, iconTop + tabHeight);
+    target_->FillRoundedRectangle(D2D1::RoundedRect(tabRect, 1.5f, 1.5f), textBrush);
+
+    float bodyTop = iconTop + tabHeight * 0.7f;
+    D2D1_RECT_F bodyRect = D2D1::RectF(contentLeft, bodyTop, contentLeft + size, iconTop + size);
+    target_->FillRoundedRectangle(D2D1::RoundedRect(bodyRect, 2.0f, 2.0f), textBrush);
+}
+
+void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight,
+                                  bool buttonHover, bool folderButtonHover,
                                   ID2D1SolidColorBrush* textBrush,
                                   ID2D1SolidColorBrush* buttonFillBrush,
                                   ID2D1SolidColorBrush* buttonHoverFillBrush,
                                   ID2D1SolidColorBrush* buttonBorderBrush) {
     float buttonTop = targetHeight * kWelcomeButtonTopRatio;
-    float buttonLeft = targetWidth * 0.5f - kWelcomeButtonWidthDip * 0.5f;
-    D2D1_RECT_F buttonRect = D2D1::RectF(buttonLeft, buttonTop, buttonLeft + kWelcomeButtonWidthDip,
-                                          buttonTop + kWelcomeButtonHeightDip);
+    float totalButtonsWidth = kWelcomeButtonWidthDip * 2.0f + kWelcomeButtonGapDip;
+    float startX = (targetWidth - totalButtonsWidth) * 0.5f;
+    float buttonCenterY = buttonTop + kWelcomeButtonHeightDip * 0.5f;
 
-    // 标题:与正文一级标题同一套"CreateTextLayout(Body) + 放大字号 + 加粗"
-    // 手法(见 layout.cpp::CreateLayoutForBlock 对 BlockType::Heading 的处理),
-    // 不新增字体角色。
+    float fileButtonCenterX = startX + kWelcomeButtonWidthDip * 0.5f;
+    float folderButtonCenterX = startX + kWelcomeButtonWidthDip + kWelcomeButtonGapDip + kWelcomeButtonWidthDip * 0.5f;
+
+    // 标题:与正文一级标题同一套字号与加粗
     constexpr u32 kHeadingLen = sizeof(kWelcomeHeadingText) / sizeof(wchar_t) - 1;
     if (fonts_ && textBrush) {
         IDWriteTextLayout* headingLayout = fonts_->CreateTextLayout(
@@ -2049,62 +2612,65 @@ void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight, bool but
         }
     }
 
-    // 按钮本体:圆角矩形,默认态/悬浮态两档底色 + 描边。
-    D2D1_ROUNDED_RECT rounded =
-        D2D1::RoundedRect(buttonRect, kWelcomeButtonCornerRadiusDip, kWelcomeButtonCornerRadiusDip);
-    ID2D1SolidColorBrush* fillBrush = buttonHover ? buttonHoverFillBrush : buttonFillBrush;
-    if (fillBrush) target_->FillRoundedRectangle(rounded, fillBrush);
-    if (buttonBorderBrush) target_->DrawRoundedRectangle(rounded, buttonBorderBrush, 1.0f);
+    // isFolder 决定这个按钮的图标画法(paintIcon)——两枚按钮各自构造一个
+    // Button 值(label/title/paintIcon 都填好),最终矩形统一经
+    // ButtonRectFromCenterDip 得到,不再各自手写 left/right 展开式。
+    auto drawOneButton = [&](float centerX, bool isHover, const Button& btn) {
+        ButtonRectDip rect = ButtonRectFromCenterDip(btn, centerX, buttonCenterY);
+        D2D1_RECT_F buttonRect = D2D1::RectF(rect.left, rect.top, rect.right, rect.bottom);
+        D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(buttonRect, btn.radius, btn.radius);
+        ID2D1SolidColorBrush* fillBrush = isHover ? buttonHoverFillBrush : buttonFillBrush;
+        if (fillBrush) target_->FillRoundedRectangle(rounded, fillBrush);
+        if (buttonBorderBrush) target_->DrawRoundedRectangle(rounded, buttonBorderBrush, 1.0f);
 
-    // 按钮内容:文件夹图标(纯 D2D 几何——一个小"标签"矩形叠一个大"主体"
-    // 矩形,零图标字体零位图)+ 居中文字标签,两者水平并排、整体在按钮内居中。
-    constexpr u32 kLabelLen = sizeof(kWelcomeButtonLabel) / sizeof(wchar_t) - 1;
-    IDWriteTextLayout* labelLayout = nullptr;
-    float labelWidth = 0.0f;
-    float labelHeight = 0.0f;
-    if (fonts_) {
-        labelLayout = fonts_->CreateTextLayout(kWelcomeButtonLabel, kLabelLen, FontRole::Body,
-                                                 kWelcomeButtonWidthDip, kWelcomeButtonHeightDip);
+        u32 labelLen = static_cast<u32>(wcslen(btn.label));
+        IDWriteTextLayout* labelLayout = nullptr;
+        float labelWidth = 0.0f;
+        float labelHeight = 0.0f;
+        if (fonts_) {
+            labelLayout = fonts_->CreateTextLayout(btn.label, labelLen, FontRole::Body,
+                                                   kWelcomeButtonWidthDip, kWelcomeButtonHeightDip);
+            if (labelLayout) {
+                labelLayout->SetFontSize(kWelcomeButtonLabelFontSizeDip * fonts_->Scale(),
+                                          DWRITE_TEXT_RANGE{0, labelLen});
+                DWRITE_TEXT_METRICS metrics{};
+                labelLayout->GetMetrics(&metrics);
+                labelWidth = metrics.width;
+                labelHeight = metrics.height;
+            }
+        }
+
+        float contentWidth = kWelcomeIconSizeDip + (labelLayout ? kWelcomeIconLabelGapDip + labelWidth : 0.0f);
+        float contentLeft = rect.left + (kWelcomeButtonWidthDip - contentWidth) * 0.5f;
+        float iconTop = buttonTop + (kWelcomeButtonHeightDip - kWelcomeIconSizeDip) * 0.5f;
+
+        if (textBrush && btn.paintIcon) {
+            ButtonRectDip iconRect{contentLeft, iconTop, contentLeft + kWelcomeIconSizeDip,
+                                    iconTop + kWelcomeIconSizeDip};
+            btn.paintIcon(this, iconRect, textBrush);
+        }
+
         if (labelLayout) {
-            // 按钮文字字号须跟随底部栏缩放档位一起变,否则放大/缩小对欢迎屏
-            // 按钮文字无效(真实 bug:此前是固定字面量,不读 fonts_->Scale())。
-            labelLayout->SetFontSize(kWelcomeButtonLabelFontSizeDip * fonts_->Scale(),
-                                      DWRITE_TEXT_RANGE{0, kLabelLen});
-            DWRITE_TEXT_METRICS metrics{};
-            labelLayout->GetMetrics(&metrics);
-            labelWidth = metrics.width;
-            labelHeight = metrics.height;
+            float labelLeft = contentLeft + kWelcomeIconSizeDip + kWelcomeIconLabelGapDip;
+            float labelTop = buttonTop + (kWelcomeButtonHeightDip - labelHeight) * 0.5f;
+            if (textBrush) {
+                target_->DrawTextLayout(D2D1::Point2F(labelLeft, labelTop), labelLayout, textBrush,
+                                          D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            }
+            labelLayout->Release();
         }
-    }
+    };
 
-    float contentWidth = kWelcomeIconSizeDip + (labelLayout ? kWelcomeIconLabelGapDip + labelWidth : 0.0f);
-    float contentLeft = buttonLeft + (kWelcomeButtonWidthDip - contentWidth) * 0.5f;
-    float iconTop = buttonTop + (kWelcomeButtonHeightDip - kWelcomeIconSizeDip) * 0.5f;
+    Button fileBtn{kWelcomeButtonWidthDip, kWelcomeButtonHeightDip, kWelcomeButtonCornerRadiusDip,
+                    kWelcomeButtonLabel, kWelcomeButtonLabel, &Renderer::PaintWelcomeFileIcon, nullptr};
+    Button folderBtn{kWelcomeButtonWidthDip, kWelcomeButtonHeightDip, kWelcomeButtonCornerRadiusDip,
+                      kWelcomeFolderButtonLabel, kWelcomeFolderButtonLabel, &Renderer::PaintWelcomeFolderIcon,
+                      nullptr};
 
-    if (textBrush) {
-        // 文件夹标签:贴在主体左上方的小圆角矩形。
-        float tabWidth = kWelcomeIconSizeDip * 0.46f;
-        float tabHeight = kWelcomeIconSizeDip * 0.20f;
-        D2D1_RECT_F tabRect =
-            D2D1::RectF(contentLeft, iconTop, contentLeft + tabWidth, iconTop + tabHeight);
-        target_->FillRoundedRectangle(D2D1::RoundedRect(tabRect, 1.5f, 1.5f), textBrush);
-
-        // 文件夹主体:紧接标签下方的大圆角矩形。
-        float bodyTop = iconTop + tabHeight * 0.7f;
-        D2D1_RECT_F bodyRect = D2D1::RectF(contentLeft, bodyTop, contentLeft + kWelcomeIconSizeDip,
-                                            iconTop + kWelcomeIconSizeDip);
-        target_->FillRoundedRectangle(D2D1::RoundedRect(bodyRect, 2.0f, 2.0f), textBrush);
-    }
-
-    if (labelLayout) {
-        float labelLeft = contentLeft + kWelcomeIconSizeDip + kWelcomeIconLabelGapDip;
-        float labelTop = buttonTop + (kWelcomeButtonHeightDip - labelHeight) * 0.5f;
-        if (textBrush) {
-            target_->DrawTextLayout(D2D1::Point2F(labelLeft, labelTop), labelLayout, textBrush,
-                                      D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
-        }
-        labelLayout->Release();
-    }
+    // 绘制 1：打开文件按钮
+    drawOneButton(fileButtonCenterX, buttonHover, fileBtn);
+    // 绘制 2：打开文件夹按钮
+    drawOneButton(folderButtonCenterX, folderButtonHover, folderBtn);
 }
 
 bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
@@ -2112,7 +2678,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                             bool mainScrollbarActive, const wchar_t* documentPath,
                             u64 documentSizeBytes, u32 bottomBarHoverButtonIndex,
                             bool bottomBarPathCopied, bool welcomeScreen,
-                            bool welcomeButtonHover) {
+                            bool welcomeButtonHover, bool welcomeFolderButtonHover) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -2183,9 +2749,11 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
     target_->CreateSolidColorBrush(palette_->historyRowButtonBackground, &historyRowButtonBgBrush);
 
-    // Fade-in / fade-out alpha animation for outline & history mask overlay.
+    // Fade-in / fade-out alpha animation for outline & history & folder mask overlay.
     //
-    // 大纲及历史记录蒙层淡入淡出透明度动画。
+    // 大纲/历史/文件夹侧栏共用同一个蒙层画笔,透明度必须覆盖"当前所有用到它的
+    // 侧栏"的动画进度——以后再新增第四个用这个画笔的侧栏时,也要记得在这里加一行,
+    // 否则会重演"只开某个侧栏时蒙层恒透明"的漏算 bug。
     D2D1_COLOR_F maskColor = palette_->outlineOverlayMaskBackground;
     float animProgress = 0.0f;
     // 不能再拿 itemCount > 0 当"侧栏打开"判据(空大纲/空历史/欢迎屏空状态
@@ -2197,6 +2765,10 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     }
     if (overlay_ && overlay_->historyAnimProgress > animProgress) {
         animProgress = overlay_->historyAnimProgress;
+    }
+    // 文件夹侧栏动画进度此前漏算,导致单独打开文件夹侧栏时蒙层恒为全透明。
+    if (overlay_ && overlay_->folderAnimProgress > animProgress) {
+        animProgress = overlay_->folderAnimProgress;
     }
     if (animProgress < 0.0f) animProgress = 0.0f;
     if (animProgress > 1.0f) animProgress = 1.0f;
@@ -2222,19 +2794,28 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
 
     D2D1_SIZE_F targetSize = target_->GetSize();
     frameViewportHeight_ = targetSize.height;
-    // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)——下面画
-    // 分割线/脚注分隔线的右边界要按这个来算,否则会画到内边距的空白区域里去。
-    float contentWidth = targetSize.width - 2.0f * leftPaddingDip;
+    // 文件夹侧栏是挤压模式(唯一一个):展开时正文要整体右移让出这块空间,
+    // 而不是被悬浮蒙层盖住。挤压宽度与外壳层(window.cpp/main.cpp)重排布局
+    // 用的 FolderSqueezeWidthDip 同一口径(面板宽度 * 动画进度)。
+    float folderSqueezeDip = 0.0f;
+    if (overlay_ && overlay_->folderAnimProgress > 0.0f) {
+        folderSqueezeDip = SidebarSqueezeWidthDip(overlay_->folderPanelWidthDip, overlay_->folderAnimProgress);
+    }
+    // 正文可用宽度:客户区宽度收窄掉左右内边距(各 leftPaddingDip)与文件夹
+    // 侧栏挤压宽度——下面画分割线/脚注分隔线的右边界要按这个来算,否则会画到
+    // 内边距/侧栏区域的空白里去。
+    float contentWidth = targetSize.width - 2.0f * leftPaddingDip - folderSqueezeDip;
     if (contentWidth < 0.0f) contentWidth = 0.0f;
 
     target_->BeginDraw();
     target_->Clear(palette_->background);
 
-    // 左内边距:水平方向整体平移 leftPaddingDip,每个 DrawXxx 已经在用
-    // g.indent 当 x 坐标画东西,不用逐个改。垂直方向的内边距由调用方传入的
-    // scrollY(已经减去过内边距)实现,这里不用再叠一次。仅对"文档内容"
-    // 生效——叠加层(查找条/提示条)画之前会恢复成 Identity,不跟着这个平移走。
-    target_->SetTransform(D2D1::Matrix3x2F::Translation(leftPaddingDip, 0.0f));
+    // 左内边距:水平方向整体平移 leftPaddingDip + 文件夹侧栏挤压宽度,每个
+    // DrawXxx 已经在用 g.indent 当 x 坐标画东西,不用逐个改。垂直方向的内边距
+    // 由调用方传入的 scrollY(已经减去过内边距)实现,这里不用再叠一次。仅对
+    // "文档内容"生效——叠加层(查找条/提示条)画之前会恢复成 Identity,不跟着
+    // 这个平移走。
+    target_->SetTransform(D2D1::Matrix3x2F::Translation(leftPaddingDip + folderSqueezeDip, 0.0f));
 
     // T76:视口裁剪。此前这个循环对**全部**块无条件调 DrawBlock —— 屏幕外的
     // 代码块背景/引用竖线/分割线/表格网格线照样会提交给 D2D(只有正文文字因为
@@ -2252,7 +2833,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         // "Welcome to markair" 标题 + "打开文件"按钮。按钮底色/描边复用代码块
         // 复制按钮同一套画笔槽位(codeBgBrush/copyHoverBgBrush/codeBorderBrush),
         // 不新增 Palette 槽位。
-        DrawWelcomeScreen(targetSize.width, targetSize.height, welcomeButtonHover, textBrush,
+        DrawWelcomeScreen(targetSize.width, targetSize.height, welcomeButtonHover,
+                          welcomeFolderButtonHover, textBrush,
                           codeBgBrush, copyHoverBgBrush, codeBorderBrush);
     } else {
         u32 blockCount = layout.BlockCount();
@@ -2294,6 +2876,19 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
             mainScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush;
         DrawScrollbar(targetSize.width, scrollbarHeight, layout.TotalHeight(),
                       scrollY + leftPaddingDip, trackBrush, thumbBrush);
+    }
+
+    // 正文顶部分割线(y=0,紧贴系统标题栏下沿),复用底部栏同一份分割线颜色,
+    // 不新增调色板字段。画在正文/滚动条之后、蒙层与查找条/侧栏之前——
+    // 侧栏蒙层/查找条打开时盖住这条线是合理的(蒙层本该盖住正文所有内容)。
+    {
+        ID2D1SolidColorBrush* topDividerBrush = nullptr;
+        target_->CreateSolidColorBrush(palette_->bottomBarDivider, &topDividerBrush);
+        if (topDividerBrush) {
+            target_->DrawLine(D2D1::Point2F(0.0f, 0.0f), D2D1::Point2F(targetSize.width, 0.0f),
+                              topDividerBrush, 1.0f);
+            topDividerBrush->Release();
+        }
     }
 
     // 底部操作栏(常驻,不依赖 overlay_ 是否为空——它不是可选叠加层)。画在
@@ -2347,6 +2942,16 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                          outlineHighlightBgBrush, historyRowButtonBgBrush,
                          scrollbarTrackIdleBrush,
                          historyScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
+
+        // 文件夹文件列表侧栏 (左抽屉,挤压模式,不画悬浮蒙层——正文宽度已经
+        // 在外壳层按 FolderSqueezeWidthDip 收窄让出这块空间,见 DrawFolderPanel 注释)。
+        bool folderScrollbarActive = overlay_->folderScrollbarActive;
+        DrawFolderPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
+                        outlineHighlightBgBrush, copyHoverBgBrush,
+                        historyRowButtonBgBrush,
+                        scrollbarTrackIdleBrush,
+                        folderScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush,
+                        overlayBarBgBrush, overlayBarTextBrush);
     }
 
     if (textBrush) textBrush->Release();

@@ -123,11 +123,11 @@ HitResult HitTestDocument(const BlockLayoutEngine& layout, float docX, float doc
     BOOL isTrailingHit = FALSE;
     BOOL isInside = FALSE;
     DWRITE_HIT_TEST_METRICS metrics{};
-    // T44:非任务列表项的列表符号(g.listMarkerPad)与代码高亮区内边距
-    // (g.textPad)一样,只影响文字的实际绘制起点,不改变 g.indent 本身,
-    // 这里换算命中坐标要跟渲染层 TextDrawLeft 用同一份口径,否则符号列会
-    // 被误判成命中文字。
-    HRESULT hr = g.textLayout->HitTestPoint(docX - g.indent - g.listMarkerPad, docY - g.top,
+    // T44/真实 bug 修复:命中坐标必须与渲染层 TextDrawLeft/TextDrawTop 用
+    // 同一份公式(现共享定义在 layout.h),否则围栏代码块(textPad 非零)会
+    // 整体错位一份内边距——错位量接近一行高,足以让点在第一行的鼠标被当成
+    // 点在第二行(真实 bug,见 layout.h::TextDrawTop 头注释)。
+    HRESULT hr = g.textLayout->HitTestPoint(docX - TextDrawLeft(g), docY - TextDrawTop(g),
                                              &isTrailingHit, &isInside, &metrics);
     if (FAILED(hr) || !isInside) {
         // isInside 为假 = 点落在行尾空白/行外的"最近字符"上,不算命中文本。
@@ -199,7 +199,9 @@ DocTextHit HitTestTextPosition(const BlockLayoutEngine& layout, float docX, floa
     BOOL isTrailingHit = FALSE;
     BOOL isInside = FALSE;
     DWRITE_HIT_TEST_METRICS metrics{};
-    HRESULT hr = g.textLayout->HitTestPoint(docX - g.indent - g.listMarkerPad, docY - g.top,
+    // 同上:必须用 TextDrawLeft/TextDrawTop,不能只减 g.indent/g.top(真实 bug,
+    // 见 HitTestDocument 里的同一处修复注释)。
+    HRESULT hr = g.textLayout->HitTestPoint(docX - TextDrawLeft(g), docY - TextDrawTop(g),
                                              &isTrailingHit, &isInside, &metrics);
     if (FAILED(hr)) return DocTextHit{false, kInvalidIndex, 0};
 
