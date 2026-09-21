@@ -22,6 +22,7 @@
 #include "../text/font.h"
 #include "bottom_bar.h"
 #include "clipboard.h"
+#include "copy_data.h"
 #include "find.h"
 #include "history.h"
 #include "hit_test.h"
@@ -472,6 +473,14 @@ bool RegisterMainWindowClass(HINSTANCE instance, bool isDarkTheme);
  *   return exitCode;
  */
 void ReleaseMainWindowClassResources();
+
+/**
+ * 单实例 IPC 用:在本机按窗口类名枚举出任意一个本程序的主窗口。
+ * 找不到(尚无主实例在跑,或已跑的实例还没建好窗口)时返回 nullptr。
+ * @return 找到的主窗口句柄,或 nullptr。
+ * @example HWND main = markair::FindAnyMainWindow();  // 拿去发 WM_COPYDATA
+ */
+HWND FindAnyMainWindow();
 
 /**
  * 创建并显示主窗口,把窗口过程需要的运行期状态绑定到该窗口上。

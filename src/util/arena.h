@@ -56,6 +56,24 @@ public:
      */
     void Reset();
 
+    /**
+     * 复位游标并把多余的已提交物理页归还给操作系统(MEM_DECOMMIT)。
+     * 只能在 used_ == 0 的语义下调用(即"这份数据已经整体不再需要"的时机，
+     * 例如关闭文档/切换大文档后)，严禁在数据仍被引用时调用——
+     * decommit 后的页处于 PAGE_NOACCESS，之后再读写会直接崩溃，而不是软缺页。
+     * @param retainBytes 保留不 decommit 的字节数，内部按 4KB 页边界向上取整，
+     *        默认 64KB，避免过大的保留阈值抵消 Trim 收益。
+     * @example arena.ResetAndTrim(); // 关闭文档时调用,退还多余物理页
+     */
+    void ResetAndTrim(size_t retainBytes = 64 * 1024) noexcept;
+
+    /**
+     * 查询当前已提交(MEM_COMMIT)的物理页字节数,主要供诊断/测试使用。
+     * @return 已提交字节数,未 Init 时为 0。
+     * @example size_t committed = arena.CommittedBytes();
+     */
+    size_t CommittedBytes() const noexcept { return committedSize_; }
+
 private:
     // 已提交页数不足时按页粒度追加提交，返回是否成功。
     bool CommitUpTo(size_t neededOffset);

@@ -165,3 +165,13 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 
 1. **彩色emoji方框bug**:`bench/corpus/electron-electron-readme.md`等文档里的emoji显示成方框。根因两层——①`src/render/renderer.cpp`全部9处`DrawTextLayout`调用缺`D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT`标志(已修);②`src/text/font.cpp`的`BuildBodyFallback`字体回退链(裁决#10锁定范围)里没有emoji字体,已在末尾追加`Segoe UI Emoji`(经用户确认,只追加不改动前4个字体顺序)。实测:无emoji文档内存增量≈0,含emoji文档增量≈+2.5MB(一次性字体加载成本)。**已知限制**:国旗类emoji(🇨🇳等)在Win10上仍显示为字母对(`CN`/`BR`等),这是微软Win10系统级不提供彩色国旗字形的限制,Win11才有,与markair代码无关。429测试全绿。
 2. **文本选择+Ctrl+C复制**(新功能,原本完全没有,只有T45代码块复制按钮):新增`src/shell/selection.h/.cpp`(`DocTextPos`+`SelectionState`状态机)、`hit_test.cpp`的`HitTestTextPosition`、`Palette`新增`selectionHighlight`槏位、`renderer.cpp`的`DrawSelectionHighlights`(只画可见±1屏范围,不额外实例化layout)。支持跨块选择(段落/标题/代码块/表格都能连续选中),不做右键菜单,只做`Ctrl+C`。442测试全绿(新增13个),性能无退化。
+
+## 后续内存占用深度优化空间与技术分析(2026-09-21)
+
+经本机多窗口实测与底层机制剖析，梳理了当前基线与后续可行的 5 个优化维度（完整方案与权衡见 [`docs/memory-optimization-analysis.md`](file:///E:/workspaces/mdvn/docs/memory-optimization-analysis.md)）：
+- **P0: Arena 弹性 Decommit (`Trim`)**：解决当前 `Arena::Reset()` 永不退还物理页导致的高水位锁定痛点。
+- **P0: 单实例 IPC 汇聚**：将资源管理器双击多开（独立进程 +9.5MB/窗）收敛为进程内创建窗口（+2.5MB/窗），多开总内存节省超 60%。
+- **P1: 跨窗口共享 Scratch 临时 Arena**：剪贴板、文本划选、搜索缓冲区按单线程 UI 特性单例共享，消除 $O(N)$ 提交。
+- **P1: 闲置与后台主动 Working Set Trim**：利用 Win32 `SetProcessWorkingSetSize` 在最小化/闲置时将后台工作集压缩至 < 1.5MB。
+- **P2: 超大文档分块几何虚拟化**：万行超大文档按需分段生成几何结构。
+

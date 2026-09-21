@@ -3,6 +3,7 @@
 add_executable(markair_tests
     main.cpp
     test_str.cpp
+    test_arena.cpp
     test_encoding.cpp
     test_model.cpp
     test_model_gfm.cpp
@@ -50,6 +51,7 @@ add_executable(markair_tests
     test_open_dialog.cpp
     test_welcome_screen.cpp
     test_recent_files.cpp
+    test_copy_data.cpp
     ../src/app/bench.cpp
     ../src/util/arena.cpp
     ../src/util/cmdline.cpp

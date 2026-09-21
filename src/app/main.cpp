@@ -65,6 +65,14 @@ markair::RecentFiles g_recentFiles{};
 constexpr wchar_t kMutexNamePrefix[] = L"markair_filemutex_";
 constexpr wchar_t kPathHashPropName[] = L"markair_path_hash";
 
+// 单实例汇聚(P0):全进程共享一个互斥体名,与上面按路径区分的
+// kMutexNamePrefix 是两回事——这个只用来判断"进程级"是否已有主实例在跑。
+constexpr wchar_t kSingleInstanceMutexName[] = L"markair_single_instance_mutex";
+
+// 文档 Arena 的虚拟地址预留大小——只占虚拟地址空间,不占物理内存,
+// 保证万行级超大文档不会在 Arena::Alloc 处静默耗尽截断。
+constexpr size_t kDocArenaReserveBytes = 64 * 1024 * 1024;
+
 // T44 修复:T42 引入的"--bench 即强制全量解码"曾经不区分具体语料,导致
 // BENCH-A(测的是首屏虚拟化)也被误强制物化成全文档,拉高了 private_bytes
 // 门禁读数(见 06-m1-tasks.md 阶段 J 的排查记录)。这里改成只对文件名含
@@ -286,10 +294,10 @@ bool OpenDocumentInPlace(void* userData, const wchar_t* fullPath) {
     // ① 先把旧文档的全部状态放掉:解码位图 -> 图片缓存 Arena -> 文件映射 -> 文档 Arena。
     //    顺序不能反 —— 位图必须在缓存条目还在的时候释放,否则就没人认领了。
     host->imageCache->ReleaseAllBitmaps();
-    host->imageArena->Reset();
+    host->imageArena->ResetAndTrim(64 * 1024);
     host->imageCache->Init(host->imageArena);
     host->fileMap->Close();
-    host->docArena->Reset();
+    host->docArena->ResetAndTrim(64 * 1024);
 
     // 换行宽度收窄掉左右内边距(kContentPaddingDip),口径与 window.cpp 的
     // ViewportWidthOf 一致,否则窗口内换文档后正文换行宽度会和其余场景对不上。
@@ -610,7 +618,7 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
         fonts.SetScale(bundle->settings.zoom);
     }
 
-    bundle->docArena.Init(4 * 1024 * 1024);
+    bundle->docArena.Init(kDocArenaReserveBytes);
     bool fileOpened = markair::FileMapError::None == bundle->fileMap.Open(normalizedPath);
     bundle->doc = fileOpened ? LoadMarkdownFile(&bundle->fileMap, &bundle->docArena)
                              : markair::ParseMarkdown(markair::StrSlice{"", 0}, &bundle->docArena);
@@ -826,6 +834,39 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         fileMutex = AcquireFileMutexAndMaybeFocusExisting(pathHash);
     }
 
+    // 单实例 IPC 汇聚(P0):带文件参数启动、且不是 bench 场景时,先探测
+    // 是否已有主实例在跑——有的话把路径通过 WM_COPYDATA 转给它,自身极速
+    // 退出,避免"用文件打开方式"从 Explorer.exe 反复拉起新的提权 GUI 进程
+    // 互相打架。找不到窗口/发送超时一律优雅降级为自己继续启动当主实例,
+    // 防止启动竞态(旧实例还没建好窗口)把新请求误杀。
+    HANDLE singleInstanceMutex = nullptr;
+    if (!benchArgs.benchEnabled && hasTarget) {
+        singleInstanceMutex = CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
+        bool relayed = false;
+        if (singleInstanceMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+            HWND hwndFound = markair::FindAnyMainWindow();
+            if (hwndFound != nullptr) {
+                // 提权主实例默认拒绝低权限进程把自己切到前台,这里显式放行,
+                // 否则新窗口打开后可能停留在后台。
+                AllowSetForegroundWindow(ASFW_ANY);
+                COPYDATASTRUCT cds{};
+                cds.dwData = markair::kCopyDataMagic;
+                cds.cbData = static_cast<DWORD>((wcslen(normalizedPath) + 1) * sizeof(wchar_t));
+                cds.lpData = normalizedPath;
+                DWORD_PTR sendResult = 0;
+                LRESULT sent = SendMessageTimeoutW(hwndFound, WM_COPYDATA, 0,
+                                                    reinterpret_cast<LPARAM>(&cds),
+                                                    SMTO_ABORTIFHUNG, 2000, &sendResult);
+                relayed = (sent != 0 && sendResult != 0);
+            }
+        }
+        if (relayed) {
+            CloseHandle(singleInstanceMutex);
+            if (fileMutex) CloseHandle(fileMutex);
+            return 0;
+        }
+    }
+
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_d2dFactory);
 
     // T39:启动期一次性读 %LOCALAPPDATA%\markair\state.ini(单次 < 1KB);
@@ -881,7 +922,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 结尾,保证 Document::source 引用的内存(无论来自映射视图还是 arena
     // 解码缓冲区)在整个消息循环期间都有效。
     markair::Arena docArena;
-    docArena.Init(4 * 1024 * 1024);
+    docArena.Init(kDocArenaReserveBytes);
 
     markair::FileMap fileMap;
     bool fileOpened = hasTarget &&
@@ -1098,11 +1139,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (!markair::RegisterMainWindowClass(
             hInstance, markair::ResolveEffectiveTheme(settings.theme, systemIsDark))) {
         if (fileMutex) CloseHandle(fileMutex);
+        if (singleInstanceMutex) CloseHandle(singleInstanceMutex);
         return 1;
     }
     HWND hwnd = markair::CreateMainWindow(hInstance, g_displayText, &windowState);
     if (!hwnd) {
         if (fileMutex) CloseHandle(fileMutex);
+        if (singleInstanceMutex) CloseHandle(singleInstanceMutex);
         return 1;
     }
     if (needsRecentFilesSave) {
@@ -1186,6 +1229,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     if (g_d2dFactory) g_d2dFactory->Release();
     if (fileMutex) CloseHandle(fileMutex);
+    if (singleInstanceMutex) CloseHandle(singleInstanceMutex);
     // argv/cmdlineArena 随函数返回时的栈析构自动回收,不需要手动释放
     // (对应过去 CommandLineToArgvW 结果专用的 LocalFree)。
 

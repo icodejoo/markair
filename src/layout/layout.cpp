@@ -217,6 +217,10 @@ bool BlockLayoutEngine::Relayout(const Document& doc, float viewportWidth, float
     totalHeight_ = 0.0f;
 
     u32 blockCount = doc.blocks.Size();
+    // 提前精确预留,避免 Push 翻倍扩容在 Arena 中留下大量废弃旧块(见 P0 内存优化)。
+    if (!geometries_.Reserve(blockCount)) {
+        return false;  // Arena 空间耗尽,安全放弃,不崩溃
+    }
     for (u32 i = 0; i < blockCount; ++i) {
         if (!geometries_.Push(BlockGeometry{})) {
             return false;  // Arena 空间耗尽,安全放弃,不崩溃

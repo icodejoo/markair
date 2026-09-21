@@ -86,4 +86,17 @@ void Arena::Reset() {
     used_ = 0; // 不 decommit，后续 Alloc 直接复用已提交的物理页
 }
 
+void Arena::ResetAndTrim(size_t retainBytes) noexcept {
+    if (!base_) return;
+
+    // 4KB 页面边界向上取整，避免 decommit 覆盖到未整页对齐的地址导致 API 失败。
+    const size_t alignedRetain = (retainBytes + 4095) & ~static_cast<size_t>(4095);
+    if (committedSize_ > alignedRetain) {
+        const size_t decommitSize = committedSize_ - alignedRetain;
+        VirtualFree(base_ + alignedRetain, decommitSize, MEM_DECOMMIT);
+        committedSize_ = alignedRetain;
+    }
+    used_ = 0;
+}
+
 } // namespace markair

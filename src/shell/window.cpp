@@ -525,6 +525,14 @@ u32 CollectExistingWindowOrigins(RectI* out, u32 cap) {
     return ctx.count;
 }
 
+BOOL CALLBACK FindMainWindowProc(HWND hwnd, LPARAM lparam) {
+    wchar_t className[64]{};
+    if (GetClassNameW(hwnd, className, 64) == 0) return TRUE;
+    if (wcscmp(className, kWindowClassName) != 0) return TRUE;
+    *reinterpret_cast<HWND*>(lparam) = hwnd;
+    return FALSE;  // 找到一个就够了,停止枚举
+}
+
 // T56:用 GetWindowPlacement(不是 GetWindowRect——最大化态下 GetWindowRect
 // 拿到的是全屏矩形)把窗口当前的"还原态矩形 + 是否最大化"同步进 state,
 // 供移动/缩放/退出时的持久化读取。
@@ -1690,6 +1698,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return 0;
     }
 
+    case WM_COPYDATA: {
+        // 单实例 IPC 汇聚:次实例(通常是低权限 Explorer.exe 拉起的那份)
+        // 探测到主实例已在运行后,把待打开路径通过 WM_COPYDATA 投递过来,
+        // 自己立刻退出——这里负责校验并在本(提权)主实例里开新窗口。
+        const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+        const wchar_t* path = nullptr;
+        if (!TryParseCopyDataPath(cds, &path)) return FALSE;
+        if (!state || !state->openNewWindow) return FALSE;
+        return state->openNewWindow(state->callbackUserData, path) ? TRUE : FALSE;
+    }
+
     case WM_LBUTTONDOWN: {
         // 查找条打开时,"上一个"/"下一个"箭头按钮优先命中——它俩浮在最上层,
         // 且只在查找条可见时才存在(与其余命中测试用同一套"指针/状态为空
@@ -2695,6 +2714,12 @@ void RequestRecentFilesSave(HWND hwnd, WindowState* state) {
     SetTimer(hwnd, kRecentFilesSaveTimerId, kRecentFilesSaveDebounceMs, nullptr);
 }
 
+HWND FindAnyMainWindow() {
+    HWND found = nullptr;
+    EnumWindows(FindMainWindowProc, reinterpret_cast<LPARAM>(&found));
+    return found;
+}
+
 void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item) {
     // MB_DEFBUTTON2:把默认焦点放在"否"上——这是一个删除确认框,误按回车/
     // 空格不应该触发删除这个有损操作,只有显式选"是"才删除。
@@ -2875,6 +2900,11 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
         createX, createY, createW, createH,
         nullptr, nullptr, instance, state);
     if (!hwnd) return nullptr;
+
+    // UIPI 穿透:主实例常以管理员权限运行,默认会拦截低完整性级别进程
+    // (资源管理器 Explorer.exe 等)发来的 WM_COPYDATA——放行后低权限
+    // 进程"用文件打开方式"选中本程序时才能把路径投递给已运行的主实例。
+    ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
 
     // 只给查找条的 EDIT 子窗口留 IME、主框架窗口本身按窗口摘掉 IME 上下文
     // (IACE_IGNORENOCONTEXT):进程级 ImmDisableIME 已在 T37 被推翻(查找条要

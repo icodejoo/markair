@@ -63,6 +63,27 @@ public:
         return true;
     }
 
+    /**
+     * 精确预留容量,避免依赖 Push 的翻倍扩容策略在 Arena 中留下大量废弃旧块。
+     * 调用方已知最终元素个数时(如排版引擎已知 blockCount),应优先调用本方法。
+     * @param newCapacity 目标容量;若不大于当前容量则直接返回 true,不做任何分配。
+     * @return 分配失败(Arena 空间耗尽)返回 false,原有数据保持不变;成功返回 true。
+     * @example
+     *   markair::Vec<int> v(&arena);
+     *   if (!v.Reserve(1000)) { // 处理失败 }
+     */
+    bool Reserve(u32 newCapacity) noexcept {
+        if (newCapacity <= capacity_) return true;
+        void* mem = arena_->Alloc(sizeof(T) * newCapacity, alignof(T));
+        if (!mem) return false;
+
+        T* newData = static_cast<T*>(mem);
+        for (u32 i = 0; i < size_; ++i) newData[i] = data_[i];
+        data_ = newData;
+        capacity_ = newCapacity;
+        return true;
+    }
+
     // 下标访问,调用方保证 index < Size()。
     T& operator[](u32 index) const { return data_[index]; }
 
