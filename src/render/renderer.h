@@ -150,6 +150,16 @@ struct ShellOverlay {
     // 提示气泡是两码事:一个是整行的完整路径,一个是单个按钮的功能说明)。
     bool folderItemFolderButtonHover;
     bool folderItemNewWindowButtonHover;
+
+    // 动态 z 序:外壳层在每个图层"变为活动"的那一刻从全局单调递增计数器取号,
+    // 渲染层只按这几个值升序决定绘制先后。D2D 是即时模式,谁盖住谁完全取决于
+    // 画的先后,所以"最近激活的浮在最上面"这件事只能靠这套取号传下来——不能
+    // 再像以前那样把顺序写死在 RenderFrame 的调用序列里(写死的后果:侧栏挤压
+    // 背景盖掉底部栏提示气泡)。0 表示从未激活过,计数器从 1 起号所以不会撞。
+    u32 outlineZOrder;         // 大纲侧栏(连同它的蒙层)整体的 z 值
+    u32 historyZOrder;         // 历史侧栏(连同它的蒙层)整体的 z 值
+    u32 folderZOrder;          // 文件夹侧栏的 z 值(挤压模式,无蒙层)
+    u32 bottomBarTooltipZOrder;  // 底部栏悬浮提示气泡的 z 值
 };
 
 /**
@@ -738,18 +748,29 @@ private:
     // 各自复制一份,render 不反向 include shell 头文件,与大纲侧栏同一约束)。
     // @param documentPath 当前文档完整路径,为 nullptr/空串表示未打开文件。
     // @param documentSizeBytes 当前文档字节数,documentPath 为空时不参与格式化。
-    // @param hoverButtonIndex 鼠标当前悬浮的按钮下标(0~4);>= 按钮总数
-    //        (含 shell 侧 BottomBarButton::None 的数值)表示未悬浮任何按钮,
-    //        不画提示气泡——render 层不认识 BottomBarButton 这个 shell 概念,
-    //        只接收一个下标数字,保持单向依赖。
     // @param pathCopied 复制路径按钮当前是否处于点击后的短暂"已复制"成功态
     //        (勾选图标),documentPath 为空时忽略(该按钮本就不存在)。
+    // 悬浮提示气泡不在这里画,见 DrawBottomBarTooltip(必须晚于文件夹侧栏画,
+    // 单独拆出去调用)。
     void DrawBottomBar(float targetWidth, float targetHeight,
                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                         ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                         const wchar_t* documentPath = nullptr, u64 documentSizeBytes = 0,
-                        u32 hoverButtonIndex = kBottomBarButtonCountRender,
                         bool pathCopied = false);
+
+    // 底部栏悬浮提示气泡,从 DrawBottomBar 里拆出来单独画:必须在文件夹侧栏
+    // (挤压模式,背景铺满 0~targetHeight-栏高 的整个区域)画完之后再画,否则
+    // 侧栏背景会盖住气泡(气泡弹出在栏顶边上方,正好落在侧栏背景区域内)——
+    // 真实 bug:侧栏打开时底部栏按钮 title 提示完全不显示,已修正。D2D 是
+    // 即时模式绘制,没有持久图层概念,谁盖住谁只看绘制先后——现在这个先后
+    // 由 ShellOverlay 里的 z 值在 RenderFrame 里排序决定(气泡刚悬浮上去时
+    // 会取到最大号,于是排在侧栏之后画),不再是写死的调用顺序。
+    // @param hoverButtonIndex 同 DrawBottomBar,>= 按钮总数表示未悬浮。
+    // @param hasDocument 是否已打开文档,决定 CopyPath 按钮是否存在(命中
+    //        测试口径与 shell/bottom_bar.h::HitTestBottomBar 一致)。
+    void DrawBottomBarTooltip(float targetWidth, float targetHeight,
+                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                               u32 hoverButtonIndex, bool hasDocument);
 
     // 自绘滚动条(方案A):轨道(常驻,标示可滚动范围)+ 滑块,圆角矩形,
     // 正文与大纲侧栏共用本函数,区别只是调用方传入的

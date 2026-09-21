@@ -251,6 +251,18 @@ struct WindowState {
     bool mainScrollbarHover;
     bool outlineScrollbarHover;
 
+    // 动态 z 序(2026-09-21):三个侧栏现在互相独立、可以同时打开并在屏幕上
+    // 重叠,再加上底部栏提示气泡,一共 4 个会互相遮挡的图层。每个图层在"变为
+    // 活动"的那一刻(侧栏从关闭/收起转为展开、气泡从无悬浮转为悬浮某个按钮)
+    // 用 ++nextZOrder 取一个号,渲染与命中测试都按这个号判先后:绘制按升序
+    // (后取号的最后画,浮在最上面),命中测试按降序(后取号的先吃点击)。
+    // 计数器从 1 起号,未激活过的图层保持 0,不会与真实号码撞。
+    u32 nextZOrder;
+    u32 outlineZOrder;
+    u32 historyZOrder;
+    u32 folderZOrder;
+    u32 bottomBarTooltipZOrder;
+
     // T63b:大纲侧栏宽度支持拖拽调整(2026-09-18)。DIP,初始值由
     // CreateMainWindow 设为 kOutlinePanelWidthDip 的默认值;拖拽范围钳制在
     // [kOutlinePanelMinWidthDip, kOutlinePanelMaxWidthDip](见 outline_panel.h)。

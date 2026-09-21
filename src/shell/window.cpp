@@ -443,15 +443,38 @@ void FilterFolderEntries(WindowState* state) {
     state->folderScrollY = 0.0f;
 }
 
+// 是否存在"z 比给定值更高、且自带蒙层"的侧栏。蒙层铺满整个客户区,所以这
+// 一条成立就意味着 z 更低的那层整块被盖住:不可见,也不该再接任何输入。
+bool MaskedSidebarAboveZ(const WindowState* state, u32 z) {
+    if (!state) return false;
+    if (state->outline && state->outlineAnimState != OutlineAnimState::Closed &&
+        state->outlineZOrder > z) {
+        return true;
+    }
+    return state->historyAnimState != SidebarAnimState::Closed && state->historyZOrder > z;
+}
+
+// 文件夹侧栏当前是否被上层蒙层盖住。单独起名是因为它还管一件 D2D 管不到的
+// 事:侧栏里的过滤输入框是真正的 Win32 子窗口,永远画在所有 D2D 内容之上,
+// z 序排不到它——被盖住时必须靠 ShowWindow 把它藏掉(见 RepositionFolderFilterEdit)。
+bool FolderPanelCoveredByMask(const WindowState* state) {
+    return state && MaskedSidebarAboveZ(state, state->folderZOrder);
+}
+
 /**
  * 在侧栏展开或尺寸变化时重新计算并放置文件夹过滤输入框控件位置。
  */
 void RepositionFolderFilterEdit(HWND hwnd, WindowState* state) {
     if (!state || !state->folderFilterEditHwnd) return;
-    if (state->folderAnimState != SidebarAnimState::Open) {
+    // 被上层蒙层盖住时必须主动藏掉:原生子窗口不受 D2D 绘制顺序管辖,不藏的话
+    // 它会浮在蒙层之上继续显示、继续接键盘输入,与"蒙层之下一律不可见不可交互"
+    // 矛盾。与查找条 EDIT 的显隐是同一套做法。
+    if (state->folderAnimState != SidebarAnimState::Open || FolderPanelCoveredByMask(state)) {
         ShowWindow(state->folderFilterEditHwnd, SW_HIDE);
+        if (GetFocus() == state->folderFilterEditHwnd) SetFocus(hwnd);
         return;
     }
+    ShowWindow(state->folderFilterEditHwnd, SW_SHOW);
     float scale = DipScaleOf(hwnd);
     // 原生控件用专门的"实际高度居中矩形",不再用整个 36dip 第二行撑满
     // 控件窗口——那样会导致单行 EDIT 光标不垂直居中(实测截图确认)。
@@ -756,6 +779,10 @@ float OutlinePanelViewportHeightOf(HWND hwnd) { return ClientHeightDip(hwnd); }
 // 前向声明:`ToggleOutlinePanel` 打开侧栏时要立即调一次(见下方定义与调用点注释)。
 void RecomputeOutlineHighlight(HWND hwnd, WindowState* state);
 
+// 取下一个 z 号:图层"变为活动"时调一次,拿到的号越大越靠上(见 window.h
+// 的 nextZOrder 注释)。从 1 起号,所以默认 0 的图层永远排在已激活者之下。
+u32 BumpZOrder(WindowState* state) { return ++state->nextZOrder; }
+
 // T63:`Ctrl+\` 的核心动作——抽屉式滑动与蒙层淡入淡出动画:
 //   - 打开:在 outlineArena 上(惰性 Init,幂等)就地构造 OutlinePanel 提取大纲,
 //     启动 Opening 动画定时器;若在收起动画中途触发,则从当前进度平滑反向展开。
@@ -828,25 +855,14 @@ void ToggleOutlinePanel(HWND hwnd, WindowState* state) {
         state->outlineAnimStartProgress = state->outlineAnimProgress;
     }
 
-    // If history drawer is open/opening, smoothly close it
-    if (state->historyAnimState == SidebarAnimState::Open ||
-        state->historyAnimState == SidebarAnimState::Opening) {
-        state->historyAnimState = SidebarAnimState::Closing;
-        state->historyAnimStartTick = GetTickCount64();
-        state->historyAnimStartProgress = state->historyAnimProgress;
-        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
-
-    // If folder drawer is open/opening, smoothly close it
-    if (state->folderAnimState == SidebarAnimState::Open ||
-        state->folderAnimState == SidebarAnimState::Opening) {
-        state->folderAnimState = SidebarAnimState::Closing;
-        state->folderAnimStartTick = GetTickCount64();
-        state->folderAnimStartProgress = state->folderAnimProgress;
-        SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
+    // 三个侧栏互相独立,打开一个不再强行关掉另外两个(以前会,是 bug);
+    // 重叠时谁在上、谁吃点击一律由这里取的 z 号决定。
+    state->outlineZOrder = BumpZOrder(state);
 
     state->outlineAnimState = OutlineAnimState::Opening;
+    // 本层 z 变高会盖住文件夹侧栏,立刻同步一次它那个原生过滤框的显隐,
+    // 不等下一个动画节拍(中间这几毫秒里它还能接键盘输入)。
+    RepositionFolderFilterEdit(hwnd, state);
     state->outlineAnimStartTick = GetTickCount64();
     SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -890,26 +906,13 @@ void ToggleHistoryPanel(HWND hwnd, WindowState* state) {
         state->historyAnimStartProgress = state->historyAnimProgress;
     }
 
-    // If outline drawer is open/opening, smoothly close it
-    if (state->outlineAnimState == OutlineAnimState::Open ||
-        state->outlineAnimState == OutlineAnimState::Opening) {
-        state->outlineAnimState = OutlineAnimState::Closing;
-        state->outlineAnimStartTick = GetTickCount64();
-        state->outlineAnimStartProgress = state->outlineAnimProgress;
-        KillTimer(hwnd, kOutlineHighlightTimerId);
-        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
-
-    // If folder drawer is open/opening, smoothly close it
-    if (state->folderAnimState == SidebarAnimState::Open ||
-        state->folderAnimState == SidebarAnimState::Opening) {
-        state->folderAnimState = SidebarAnimState::Closing;
-        state->folderAnimStartTick = GetTickCount64();
-        state->folderAnimStartProgress = state->folderAnimProgress;
-        SetTimer(hwnd, kFolderAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
+    // 同 ToggleOutlinePanel:不再强关其它侧栏,只取号。
+    state->historyZOrder = BumpZOrder(state);
 
     state->historyAnimState = SidebarAnimState::Opening;
+    // 本层 z 变高会盖住文件夹侧栏,立刻同步一次它那个原生过滤框的显隐,
+    // 不等下一个动画节拍(中间这几毫秒里它还能接键盘输入)。
+    RepositionFolderFilterEdit(hwnd, state);
     state->historyAnimStartTick = GetTickCount64();
     SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -1700,6 +1703,12 @@ void PaintOnce(HWND hwnd, WindowState* state) {
             overlay.folderItemNewWindowButtonHover = false;
         }
 
+        // 动态 z 序原样转交渲染层,由它排序决定这几个图层的绘制先后。
+        overlay.outlineZOrder = state->outlineZOrder;
+        overlay.historyZOrder = state->historyZOrder;
+        overlay.folderZOrder = state->folderZOrder;
+        overlay.bottomBarTooltipZOrder = state->bottomBarTooltipZOrder;
+
         overlayPtr = &overlay;
     }
     // 内容整体向下推 kContentPaddingDip 实现"上边距":RenderFrame 内部各 DrawXxx
@@ -1888,6 +1897,22 @@ void OnDpiChanged(HWND hwnd, WindowState* state, UINT newDpi, const RECT* sugges
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// 大纲(悬浮)与文件夹(挤压)都贴在窗口左侧,同时展开时两者的"拖右边缘
+// 调宽度"抓手会落在几乎同一条竖线上——由 z 决定谁接管这次拖拽。大纲没开时
+// 恒为 false,把抓手让给文件夹。
+bool OutlineOutranksFolder(const WindowState* state) {
+    if (!state || !state->outline || state->outlineAnimState != OutlineAnimState::Open) return false;
+    return state->folderAnimState != SidebarAnimState::Open ||
+           state->outlineZOrder > state->folderZOrder;
+}
+
+// 大纲/历史是带蒙层的悬浮抽屉:只要它们没完全收起,蒙层就盖住了正文,
+// 正文的滚动条/命中测试都不该再响应。文件夹是挤压面板,不算在内。
+bool MaskedSidebarActive(const WindowState* state) {
+    return state && ((state->outline && state->outlineAnimState != OutlineAnimState::Closed) ||
+                      state->historyAnimState != SidebarAnimState::Closed);
+}
+
 // 大纲/历史侧栏展开或正在动画时,渲染层的半透明蒙层会整块盖住底部栏(裁决:
 // 蒙层应完整遮住正文可交互区域,底部栏也不例外,见 renderer.cpp 对应注释)。
 // WM_LBUTTONDOWN 与 WM_MOUSEMOVE 的底部栏命中测试都要用同一个判断,抽成
@@ -1909,9 +1934,40 @@ void OnDpiChanged(HWND hwnd, WindowState* state, UINT newDpi, const RECT* sugges
 // 文件夹侧栏是挤压模式的常驻面板(DrawFolderPanel 已经让出底部栏那一条
 // 高度),不是盖住一切的悬浮抽屉,所以不计入这里——底部栏(唯一能收起
 // 它的入口)必须一直可交互,否则侧栏打开后就再也关不掉了。
-bool SidebarMaskCoversBottomBar(const WindowState* state) {
-    return state && ((state->outline && state->outlineAnimState != OutlineAnimState::Closed) ||
-                      state->historyAnimState != SidebarAnimState::Closed);
+bool SidebarMaskCoversBottomBar(const WindowState* state) { return MaskedSidebarActive(state); }
+
+// 命中裁决用的侧栏图层标识:三个侧栏现在可以同时打开,大纲(悬浮,左)与
+// 文件夹(挤压,左)甚至会占同一片屏幕,必须有个"这一点归谁"的统一答案。
+enum class SidebarLayer : u32 { None, Outline, History, Folder };
+
+// 按 z 降序(最近打开的优先)裁决某个点落在哪个已展开侧栏的面板矩形里,
+// 都不落则返回 None。只回答"归谁",侧栏内部的行/按钮命中数学各自照旧。
+SidebarLayer SidebarLayerAtPoint(HWND hwnd, const WindowState* state, float dipX, float dipY) {
+    if (!state) return SidebarLayer::None;
+    SidebarLayer best = SidebarLayer::None;
+    u32 bestZ = 0;
+    if (state->outline && state->outlineAnimState == OutlineAnimState::Open &&
+        dipX <= state->outlinePanelWidthDip && dipY >= 0.0f && dipY <= ClientHeightDip(hwnd)) {
+        best = SidebarLayer::Outline;
+        bestZ = state->outlineZOrder;
+    }
+    if (state->historyAnimState == SidebarAnimState::Open &&
+        dipX >= ClientWidthDip(hwnd) - state->historyPanelWidthDip &&
+        (best == SidebarLayer::None || state->historyZOrder > bestZ)) {
+        best = SidebarLayer::History;
+        bestZ = state->historyZOrder;
+    }
+    if (state->folderAnimState == SidebarAnimState::Open &&
+        dipX <= state->folderPanelWidthDip && dipY >= 0.0f && dipY <= FolderPanelHeightDip(hwnd) &&
+        (best == SidebarLayer::None || state->folderZOrder > bestZ)) {
+        best = SidebarLayer::Folder;
+        bestZ = state->folderZOrder;
+    }
+    // 命中的这层之上还压着别人的蒙层:这一点其实落在蒙层上(典型场景是窄的
+    // 大纲侧栏压着宽的文件夹侧栏,露在大纲右侧的那条文件夹窄边其实在大纲蒙层
+    // 之下),不能算命中它,交给调用方按"点/滚在蒙层上"处理。
+    if (best != SidebarLayer::None && MaskedSidebarAboveZ(state, bestZ)) return SidebarLayer::None;
+    return best;
 }
 
 // 主窗口过程:绘制、尺寸/DPI 变化、滚轮与键盘滚动、Ctrl+W / Esc 关闭。
@@ -2032,8 +2088,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // T63b:大纲侧栏右边缘拖拽调宽度的抓手——仅在侧栏完全展开时允许。
-        if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open) {
+        // T63b:大纲侧栏右边缘拖拽调宽度的抓手——仅在侧栏完全展开、且它压在
+        // 文件夹侧栏之上时允许(两者抓手位置几乎重合,见 OutlineOutranksFolder)。
+        if (state && OutlineOutranksFolder(state)) {
             float scale = DipScaleOf(hwnd);
             if (IsPointInOutlinePanelResizeHandle(GET_X_LPARAM(lparam), scale,
                                                   state->outlinePanelWidthDip)) {
@@ -2063,8 +2120,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // 文件夹侧栏右边缘拖拽调宽度的抓手——仅在文件夹侧栏完全展开时允许。
-        if (state && state->folderAnimState == SidebarAnimState::Open) {
+        // 文件夹侧栏右边缘拖拽调宽度的抓手——仅在文件夹侧栏完全展开、且大纲
+        // 侧栏没压在它上面时允许(同一条竖线上的抓手归 z 大者)。
+        if (state && state->folderAnimState == SidebarAnimState::Open &&
+            !OutlineOutranksFolder(state)) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
@@ -2088,9 +2147,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
 
-            if (state->outline && state->outlineAnimState == OutlineAnimState::Open &&
-                IsPointInOutlinePanelRect(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), scale,
-                                          state->outlinePanelWidthDip, ClientHeightDip(hwnd))) {
+            // 同 WM_MOUSEMOVE:重叠时由 z 序裁决这次按下归哪个侧栏。
+            SidebarLayer hitLayer = SidebarLayerAtPoint(hwnd, state, dipX, dipY);
+            if (hitLayer == SidebarLayer::Outline) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
                 float contentHeight = OutlinePanelContentHeightDip(state->outline->ItemCount());
                 ScrollbarMetrics m = CalcScrollbarMetrics(state->outlinePanelWidthDip, viewportHeight,
@@ -2113,8 +2172,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
-            } else if (state->historyAnimState == SidebarAnimState::Open &&
-                       dipX >= ClientWidthDip(hwnd) - state->historyPanelWidthDip) {
+            } else if (hitLayer == SidebarLayer::History) {
                 float viewportHeight = ClientHeightDip(hwnd);
                 u32 count = state->recentFiles ? state->recentFiles->count : 0u;
                 float contentHeight =
@@ -2140,8 +2198,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
-            } else if (state->folderAnimState == SidebarAnimState::Open &&
-                       dipX <= state->folderPanelWidthDip) {
+            } else if (hitLayer == SidebarLayer::Folder) {
                 float viewportHeight = FolderPanelHeightDip(hwnd);
                 u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
                 float contentHeight =
@@ -2165,12 +2222,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
-            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
-                       state->historyAnimState == SidebarAnimState::Closed && state->layout) {
-                // 文件夹侧栏是挤压模式:上面的 else-if 分支已经用 dipX <=
-                // folderPanelWidthDip 把"点在抽屉里"的情况接住了,能走到
-                // 这里就说明鼠标在挤压后仍可见的正文区域,不需要再拿
-                // folderAnimState 当门槛。
+            } else if (!MaskedSidebarActive(state) && state->layout) {
+                // 不在任何侧栏面板里:文件夹侧栏(挤压模式,无蒙层)开着也照样
+                // 走正文分支,大纲/历史的蒙层则会拦下(见 MaskedSidebarActive)。
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
@@ -2195,25 +2249,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
 
-        // T64:大纲侧栏区域与正文互不干扰 —— 侧栏打开或正在动画时,
-        // 短路掉正文的命中测试,不让下面的链接/图片/复制按钮命中再跑一遍。
-        if (state && (state->outline || state->outlineAnimState != OutlineAnimState::Closed)) {
+        // 侧栏点击归属:三个侧栏可以同时打开并重叠,先由 z 序裁出"这一点归谁",
+        // 再分派给它自己的内部命中逻辑;都不归(点在面板之外)时才走后面的
+        // 蒙层/正文分支。以前是写死的大纲→历史→文件夹优先级,重叠时会让先
+        // 打开的那个抢走点击。
+        SidebarLayer clickLayer = SidebarLayer::None;
+        if (state) {
             float scale = DipScaleOf(hwnd);
-            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
-            float visibleWidth = state->outlinePanelWidthDip * state->outlineAnimProgress;
-            if (dipX < visibleWidth) {
-                if (state->outlineAnimState == OutlineAnimState::Open) {
-                    OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
-                }
-            } else {
-                // 点击蒙层区域(侧栏之外的正文区域):关闭侧栏,同 Ctrl+\。
-                ToggleOutlinePanel(hwnd, state);
-            }
+            clickLayer = SidebarLayerAtPoint(
+                hwnd, state, static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f),
+                static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f));
+        }
+
+        // T64:大纲侧栏区域与正文互不干扰 —— 点落在侧栏里就只喂给侧栏,
+        // 不让下面的链接/图片/复制按钮命中再跑一遍。
+        if (clickLayer == SidebarLayer::Outline) {
+            OnOutlineItemClicked(hwnd, state, GET_Y_LPARAM(lparam));
             return 0;
         }
 
-        // 历史记录侧栏区域与正文互不干扰 —— 历史侧栏打开或正在动画时短路正文命中
-        if (state && state->historyAnimState != SidebarAnimState::Closed) {
+        // 历史记录侧栏区域与正文互不干扰
+        if (clickLayer == SidebarLayer::History) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
@@ -2251,8 +2307,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                         }
                     }
                 }
-            } else if (hit == SidebarHitArea::Mask) {
-                ToggleHistoryPanel(hwnd, state);
             }
             return 0;
         }
@@ -2260,7 +2314,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // 文件夹侧栏是挤压模式,正文没被蒙层盖住——只短路"点在抽屉本身范围内"
         // 的情况;点在抽屉之外(被挤压后仍可见的正文区域)要继续往下走正文
         // 命中测试,不再当成"点了蒙层"去关闭侧栏(挤压模式没有蒙层语义)。
-        if (state && state->folderAnimState != SidebarAnimState::Closed) {
+        if (clickLayer == SidebarLayer::Folder) {
             float scale = DipScaleOf(hwnd);
             float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
             float dipY = static_cast<float>(GET_Y_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
@@ -2335,6 +2389,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             // hit 落在 InsideDrawer 之外(挤压模式下就是正文区域):不 return,
             // 继续往下走正文的滚动条/命中测试分支。
+        }
+
+        // 点不在任何侧栏面板里:大纲/历史有蒙层,点蒙层就是"关掉它"(同
+        // Ctrl+\ / 历史快捷键);两个都开着时关最上面那个(z 大者),留下
+        // 面的那个继续开着,与视觉上"点到的是上面那层蒙层"一致。
+        if (state && MaskedSidebarActive(state)) {
+            bool outlineMasked = state->outline && state->outlineAnimState != OutlineAnimState::Closed;
+            bool historyMasked = state->historyAnimState != SidebarAnimState::Closed;
+            if (outlineMasked && (!historyMasked || state->outlineZOrder > state->historyZOrder)) {
+                ToggleOutlinePanel(hwnd, state);
+            } else {
+                ToggleHistoryPanel(hwnd, state);
+            }
+            return 0;
+        }
+        // 文件夹侧栏正在滑入/滑出时,落在它可见宽度内的点击不该穿透到正文
+        // (它没有蒙层,上面那段拦不住)。
+        if (state && state->folderAnimState != SidebarAnimState::Closed) {
+            float scale = DipScaleOf(hwnd);
+            float dipX = static_cast<float>(GET_X_LPARAM(lparam)) / (scale > 0.0f ? scale : 1.0f);
+            if (dipX < state->folderPanelWidthDip * state->folderAnimProgress) return 0;
         }
 
         // T35/T36/T36b:统一走命中测试 —— 链接走链接行为,图片走"打开原图"
@@ -2415,6 +2490,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 state->scrollY = ClampScrollOffset(state->scrollY, state->layout->TotalHeight(),
                                                    UsableViewportHeightOf(hwnd));
             }
+            // 过滤输入框是原生 EDIT 子窗口,不会跟着 D2D 重绘自动铺满新宽度——
+            // 之前只在 WM_SIZE/展开动画结束时重定位,拖拽侧栏自身宽度这条路径
+            // 漏掉了,导致拖宽/拖窄后输入框仍停在旧宽度(溢出或留白)。
+            RepositionFolderFilterEdit(hwnd, state);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -2506,11 +2585,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             bool newItemFolderBtnHover = false;
             bool newItemNewWindowBtnHover = false;
 
-            if (state->outline && state->outlineAnimState == OutlineAnimState::Open) {
+            // 多个侧栏可能同时打开并重叠,悬浮归属按 z 降序裁决(最近打开的
+            // 那个吃这次悬浮),不再是写死的"大纲优先于历史优先于文件夹"。
+            SidebarLayer hoverLayer = SidebarLayerAtPoint(hwnd, state, dipX, dipY);
+            if (hoverLayer == SidebarLayer::Outline) {
                 float viewportHeight = OutlinePanelViewportHeightOf(hwnd);
                 newOutlineHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                    IsPointInScrollbarColumn(state->outlinePanelWidthDip, dipX);
-            } else if (state->historyAnimState == SidebarAnimState::Open) {
+            } else if (hoverLayer == SidebarLayer::History) {
                 float drawerLeft = ClientWidthDip(hwnd) - state->historyPanelWidthDip;
                 float viewportHeight = ClientHeightDip(hwnd);
                 if (dipX >= drawerLeft) {
@@ -2524,7 +2606,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                         state->historyScrollY, dipX, dipY);
                     newHistoryItemHover = (hitItem >= 0) ? static_cast<u32>(hitItem) : kInvalidIndex;
                 }
-            } else if (state->folderAnimState == SidebarAnimState::Open) {
+            } else if (hoverLayer == SidebarLayer::Folder) {
                 float drawerWidth = state->folderPanelWidthDip;
                 float viewportHeight = FolderPanelHeightDip(hwnd);
                 if (dipX <= drawerWidth) {
@@ -2550,12 +2632,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                             newWinBtn.left, newWinBtn.top, newWinBtn.right, newWinBtn.bottom, dipX, dipY);
                     }
                 }
-            } else if ((!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
-                       state->historyAnimState == SidebarAnimState::Closed && state->layout) {
-                // 文件夹侧栏是挤压模式:上面的 else-if 分支已经用 dipX <=
-                // folderPanelWidthDip 把"点在抽屉里"的情况接住了,能走到
-                // 这里就说明鼠标在挤压后仍可见的正文区域,不需要再拿
-                // folderAnimState 当门槛。
+            } else if (!MaskedSidebarActive(state) && state->layout) {
+                // 能走到这里说明鼠标不在任何已展开侧栏的面板里。文件夹侧栏是
+                // 挤压模式(没有蒙层),它开着也不妨碍正文响应;大纲/历史的
+                // 蒙层则会整块盖住正文,所以还要 MaskedSidebarActive 这一关。
                 float viewportHeight = ViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
@@ -2593,6 +2673,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 newBottomBarHover = HitTestBottomBar(ClientWidthDip(hwnd), dipX, hasDocument);
             }
             if (newBottomBarHover != state->bottomBarHoverButton) {
+                // 从"没悬浮"变成"悬浮某个按钮"才算图层激活,要取新号顶到最上面
+                // (否则侧栏是后开的,气泡会被侧栏背景盖掉);按钮之间横向滑动
+                // 不重复取号,免得每一次 WM_MOUSEMOVE 都让计数器狂涨。
+                if (state->bottomBarHoverButton == BottomBarButton::None) {
+                    state->bottomBarTooltipZOrder = BumpZOrder(state);
+                }
                 state->bottomBarHoverButton = newBottomBarHover;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -2788,6 +2874,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     KillTimer(hwnd, kOutlineAnimTimerId);
                 }
             }
+            // 大纲开合会改变文件夹侧栏是否被蒙层盖住,顺手同步一次过滤框的显隐
+            // (原生子窗口不归 z 序管,只能这样藏)。
+            RepositionFolderFilterEdit(hwnd, state);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -2819,6 +2908,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     KillTimer(hwnd, kHistoryAnimTimerId);
                 }
             }
+            // 同上:历史侧栏开合同样会改变文件夹过滤框的被盖状态。
+            RepositionFolderFilterEdit(hwnd, state);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -2840,10 +2931,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     state->folderAnimProgress = 1.0f;
                     state->folderAnimState = SidebarAnimState::Open;
                     KillTimer(hwnd, kFolderAnimTimerId);
+                    // 显隐一律交给 RepositionFolderFilterEdit 判断(它还要看
+                    // 有没有被上层蒙层盖住),这里不再无条件 SW_SHOW。
                     RepositionFolderFilterEdit(hwnd, state);
-                    if (state->folderFilterEditHwnd) {
-                        ShowWindow(state->folderFilterEditHwnd, SW_SHOW);
-                    }
                 }
             } else if (state->folderAnimState == SidebarAnimState::Closing) {
                 state->folderAnimProgress =
@@ -2912,8 +3002,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));  // IDC_SIZEWE
             return TRUE;
         }
+        // 光标形状同样要认 z 序:被更高层蒙层盖住的侧栏不该再给出"可点"暗示。
         if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open &&
-            LOWORD(lparam) == HTCLIENT) {
+            !MaskedSidebarAboveZ(state, state->outlineZOrder) && LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt) &&
                 IsPointInOutlinePanelResizeHandle(pt.x, DipScaleOf(hwnd),
@@ -2923,7 +3014,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
         if (state && state->historyAnimState == SidebarAnimState::Open &&
-            LOWORD(lparam) == HTCLIENT) {
+            !MaskedSidebarAboveZ(state, state->historyZOrder) && LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
                 float scale = DipScaleOf(hwnd);
@@ -2948,7 +3039,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 }
             }
         }
+        // 文件夹侧栏:被蒙层盖住、或被同贴左侧的大纲侧栏压住时都不给光标反馈。
         if (state && state->folderAnimState == SidebarAnimState::Open &&
+            !FolderPanelCoveredByMask(state) && !OutlineOutranksFolder(state) &&
             LOWORD(lparam) == HTCLIENT) {
             POINT pt{};
             if (GetCursorPos(&pt) && ScreenToClient(hwnd, &pt)) {
@@ -3088,88 +3181,70 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             ApplyZoomChange(hwnd, state);
             return 0;
         }
-        // 大纲侧栏打开且鼠标落在其区域内时,滚轮滚动侧栏自身,不滚正文——
+        // 滚轮归属与点击/悬浮走同一套 z 序裁决:多个侧栏可能同时打开并重叠,
+        // 滚的是"光标处最上面那一层";落在蒙层上则整条消息吞掉,不能穿透去滚
+        // 底下看不见的东西(真实 bug:大纲压着更宽的文件夹侧栏时,滚露在大纲
+        // 右边那条窄边仍然滚动了蒙层之下的文件夹列表)。
         // WM_MOUSEWHEEL 携带的是屏幕坐标,先 ScreenToClient 换算成客户区坐标。
-        if (state && state->outline && state->outlineAnimState == OutlineAnimState::Open) {
-            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            if (ScreenToClient(hwnd, &pt) &&
-                IsPointInOutlinePanelRect(pt.x, pt.y, DipScaleOf(hwnd), state->outlinePanelWidthDip,
-                                          ClientHeightDip(hwnd))) {
-                OutlinePanel* panel = state->outline;
-                float panelHeight = OutlinePanelViewportHeightOf(hwnd);
-                float contentHeight = OutlinePanelContentHeightDip(panel->ItemCount());
-                float newY = ScrollByWheel(panel->ScrollY(), GET_WHEEL_DELTA_WPARAM(wparam),
-                                           contentHeight, panelHeight);
-                panel->SetScrollY(newY, panelHeight);
-
-                // 局部重绘:只失效侧栏那一块矩形,与 RecomputeOutlineHighlight
-                // 同一套矩形口径,不整窗失效。
-                float scale = DipScaleOf(hwnd);
-                RECT rc{0, 0, static_cast<int>(state->outlinePanelWidthDip * scale + 0.5f),
-                        static_cast<int>((panelHeight + 2.0f * kContentPaddingDip) *
-                                         scale + 0.5f)};
-                InvalidateRect(hwnd, &rc, FALSE);
-                return 0;
-            }
-        }
-
-        // 历史记录侧栏打开且鼠标落在其区域内时,滚轮滚动历史侧栏自身
-        if (state && state->historyAnimState == SidebarAnimState::Open) {
+        SidebarLayer wheelLayer = SidebarLayer::None;
+        if (state) {
             POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
             if (ScreenToClient(hwnd, &pt)) {
                 float scale = DipScaleOf(hwnd);
-                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
-                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
-                SidebarHitArea hit = SidebarHitTest(
-                    SidebarDirection::Right, ClientWidthDip(hwnd), ClientHeightDip(hwnd),
-                    state->historyPanelWidthDip, state->historyAnimProgress, dipX, dipY);
-                if (hit == SidebarHitArea::InsideDrawer) {
-                    float panelHeight = ClientHeightDip(hwnd);
-                    u32 count = state->recentFiles ? state->recentFiles->count : 0u;
-                    float contentHeight =
-                        kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
-                    float newY = ScrollByWheel(state->historyScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
-                                               contentHeight, panelHeight);
-                    state->historyScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                    return 0;
-                }
+                wheelLayer = SidebarLayerAtPoint(hwnd, state,
+                                                 static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f),
+                                                 static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f));
             }
         }
 
-        // 文件夹侧栏打开且鼠标落在其区域内时,滚轮滚动文件夹侧栏自身
-        if (state && state->folderAnimState == SidebarAnimState::Open) {
-            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            if (ScreenToClient(hwnd, &pt)) {
-                float scale = DipScaleOf(hwnd);
-                float dipX = static_cast<float>(pt.x) / (scale > 0.0f ? scale : 1.0f);
-                float dipY = static_cast<float>(pt.y) / (scale > 0.0f ? scale : 1.0f);
-                SidebarHitArea hit = SidebarHitTest(
-                    SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
-                    state->folderPanelWidthDip, state->folderAnimProgress, dipX, dipY);
-                if (hit == SidebarHitArea::InsideDrawer) {
-                    float panelHeight = FolderPanelHeightDip(hwnd);
-                    u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size() : state->folderEntries.Size();
-                    float contentHeight =
-                        kFolderSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
-                    float newY = ScrollByWheel(state->folderScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
-                                               contentHeight, panelHeight);
-                    state->folderScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                    return 0;
-                }
-            }
+        if (wheelLayer == SidebarLayer::Outline) {
+            OutlinePanel* panel = state->outline;
+            float panelHeight = OutlinePanelViewportHeightOf(hwnd);
+            float contentHeight = OutlinePanelContentHeightDip(panel->ItemCount());
+            float newY = ScrollByWheel(panel->ScrollY(), GET_WHEEL_DELTA_WPARAM(wparam),
+                                       contentHeight, panelHeight);
+            panel->SetScrollY(newY, panelHeight);
+
+            // 局部重绘:只失效侧栏那一块矩形,与 RecomputeOutlineHighlight
+            // 同一套矩形口径,不整窗失效。
+            float scale = DipScaleOf(hwnd);
+            RECT rc{0, 0, static_cast<int>(state->outlinePanelWidthDip * scale + 0.5f),
+                    static_cast<int>((panelHeight + 2.0f * kContentPaddingDip) * scale + 0.5f)};
+            InvalidateRect(hwnd, &rc, FALSE);
+            return 0;
         }
 
-        // 大纲/历史侧栏是悬浮蒙层模式:侧栏打开时正文被半透明蒙层盖住,不接受
-        // 滚轮——上面的分支已经处理了"滚在侧栏自身范围内"的情况,走到这里
-        // 说明鼠标落在蒙层区域,直接忽略,不能穿透蒙层滚动看不见的正文。
-        // 文件夹侧栏是挤压模式,正文没有被蒙层盖住而是被挤到一侧、始终可见,
-        // 所以这里不拿 folderAnimState 做门槛——鼠标落在文件夹侧栏范围内的
-        // 滚轮已经在上面的分支里处理并 return 了,能走到这里就说明鼠标在
-        // 被挤压后仍然可见的正文区域上,应该正常滚动正文。
-        if (state && state->layout && (!state->outline || state->outlineAnimState == OutlineAnimState::Closed) &&
-            state->historyAnimState == SidebarAnimState::Closed) {
+        // 历史记录侧栏在最上层且鼠标落在其面板内:滚轮滚动历史侧栏自身
+        if (wheelLayer == SidebarLayer::History) {
+            float panelHeight = ClientHeightDip(hwnd);
+            u32 count = state->recentFiles ? state->recentFiles->count : 0u;
+            float contentHeight =
+                kSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+            float newY = ScrollByWheel(state->historyScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
+                                       contentHeight, panelHeight);
+            state->historyScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        // 文件夹侧栏在最上层且鼠标落在其面板内:滚轮滚动文件夹侧栏自身
+        if (wheelLayer == SidebarLayer::Folder) {
+            float panelHeight = FolderPanelHeightDip(hwnd);
+            u32 count = (state->folderFilterQueryLen > 0) ? state->folderFilteredIndices.Size()
+                                                          : state->folderEntries.Size();
+            float contentHeight =
+                kFolderSidebarHeaderHeightDip + kSidebarRowHeightDip * static_cast<float>(count);
+            float newY = ScrollByWheel(state->folderScrollY, GET_WHEEL_DELTA_WPARAM(wparam),
+                                       contentHeight, panelHeight);
+            state->folderScrollY = ClampScrollOffset(newY, contentHeight, panelHeight);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        // 走到这里说明光标不在任何"最上层侧栏"的面板里。大纲/历史的蒙层盖住
+        // 正文时整条消息吞掉,不能穿透蒙层滚看不见的正文;文件夹侧栏是挤压
+        // 模式(无蒙层),正文始终可见,它开着照样正常滚正文。
+        if (state && state->layout && !MaskedSidebarActive(state)) {
             float newY = ScrollByWheel(state->scrollY, GET_WHEEL_DELTA_WPARAM(wparam),
                                        state->layout->TotalHeight(), UsableViewportHeightOf(hwnd));
             SetScrollY(hwnd, state, newY);
@@ -3442,21 +3517,9 @@ void OpenAndScanFolder(HWND hwnd, WindowState* state, const wchar_t* folderPath,
         return;
     }
 
-    if (state->historyAnimState == SidebarAnimState::Open ||
-        state->historyAnimState == SidebarAnimState::Opening) {
-        state->historyAnimState = SidebarAnimState::Closing;
-        state->historyAnimStartTick = GetTickCount64();
-        state->historyAnimStartProgress = state->historyAnimProgress;
-        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
-    if (state->outlineAnimState == OutlineAnimState::Open ||
-        state->outlineAnimState == OutlineAnimState::Opening) {
-        state->outlineAnimState = OutlineAnimState::Closing;
-        state->outlineAnimStartTick = GetTickCount64();
-        state->outlineAnimStartProgress = state->outlineAnimProgress;
-        KillTimer(hwnd, kOutlineHighlightTimerId);
-        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
+    // 三个侧栏互相独立,展开文件夹侧栏不再强关大纲/历史(以前会,是 bug);
+    // 这里取的号也是"启动时就展开文件夹侧栏"那条路径的初始 z 号来源。
+    state->folderZOrder = BumpZOrder(state);
 
     state->folderAnimState = SidebarAnimState::Opening;
     state->folderAnimStartTick = GetTickCount64();
@@ -3520,21 +3583,9 @@ void ToggleFolderPanel(HWND hwnd, WindowState* state) {
         state->folderAnimStartProgress = state->folderAnimProgress;
     }
 
-    if (state->historyAnimState == SidebarAnimState::Open ||
-        state->historyAnimState == SidebarAnimState::Opening) {
-        state->historyAnimState = SidebarAnimState::Closing;
-        state->historyAnimStartTick = GetTickCount64();
-        state->historyAnimStartProgress = state->historyAnimProgress;
-        SetTimer(hwnd, kHistoryAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
-    if (state->outlineAnimState == OutlineAnimState::Open ||
-        state->outlineAnimState == OutlineAnimState::Opening) {
-        state->outlineAnimState = OutlineAnimState::Closing;
-        state->outlineAnimStartTick = GetTickCount64();
-        state->outlineAnimStartProgress = state->outlineAnimProgress;
-        KillTimer(hwnd, kOutlineHighlightTimerId);
-        SetTimer(hwnd, kOutlineAnimTimerId, kOutlineAnimIntervalMs, nullptr);
-    }
+    // 三个侧栏互相独立,展开文件夹侧栏不再强关大纲/历史(以前会,是 bug);
+    // 这里取的号也是"启动时就展开文件夹侧栏"那条路径的初始 z 号来源。
+    state->folderZOrder = BumpZOrder(state);
 
     state->folderAnimState = SidebarAnimState::Opening;
     state->folderAnimStartTick = GetTickCount64();
@@ -3680,6 +3731,13 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     state->scrollbarDragTarget = ScrollbarDragTarget::None;
     state->mainScrollbarHover = false;
     state->outlineScrollbarHover = false;
+    // z 序计数器从 1 起号:四个图层初值 0 表示"从未激活过",任何一次激活
+    // 都会拿到比 0 大的号,不会出现"0 号却压在别人上面"的歧义。
+    state->nextZOrder = 0;
+    state->outlineZOrder = 0;
+    state->historyZOrder = 0;
+    state->folderZOrder = 0;
+    state->bottomBarTooltipZOrder = 0;
     // T63b:侧栏默认宽度,未拖拽过时就是这个值;默认没有在拖拽调宽。
     state->outlinePanelWidthDip = kOutlinePanelWidthDip;
     state->outlinePanelResizing = false;

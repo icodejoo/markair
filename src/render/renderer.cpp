@@ -1396,6 +1396,14 @@ void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
 
     u32 displayCount = overlay_->folderFilteredIndices ? overlay_->folderFilteredCount : overlay_->folderEntryCount;
 
+    // 面板内所有图标按钮(头部按钮 + 行内按钮)共用的悬浮标题气泡状态:谁悬浮
+    // 记谁的矩形/文案,任意时刻至多一个按钮悬浮(悬浮态互斥,见 window.cpp),
+    // 真正的绘制统一放到本函数最后(裁剪区域之外、行列表画完之后)一次性画,
+    // 保证气泡永远在本面板最上层,不会被后画的过滤框/行列表盖住。
+    bool hoverButtonValid = false;
+    SidebarRectDip hoverButtonRect{};
+    const wchar_t* hoverButtonLabel = nullptr;
+
     // 顶部工具栏（分两行，总高度 kFolderSidebarHeaderHeightDip = 72.0f）
     // 第一行：文件夹标题 + 右侧"打开所在根目录"文件夹按钮 (0 ~ 36.0f)
     {
@@ -1448,6 +1456,18 @@ void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
                 highlightBgBrush);
         }
         if (headerBtn.paintIcon) headerBtn.paintIcon(this, headerBtnRect, textBrush);
+
+        // 头部按钮的悬浮标题气泡不在这里直接画:面板后面还要画过滤框/行列表,
+        // 画早了会被后画的内容盖住(实测 bug)。这里只记录悬浮态与矩形,
+        // 交给下面统一的"悬浮气泡最后画一次"逻辑(与行内按钮共用同一套
+        // hoverButtonValid/hoverButtonRect/hoverButtonLabel,谁悬浮记谁的,
+        // 任意时刻至多一个按钮悬浮),保证气泡永远画在本面板最上层。
+        if (overlay_->folderHeaderButtonHover) {
+            hoverButtonValid = true;
+            hoverButtonRect = SidebarRectDip{headerBtnRect.left, headerBtnRect.top, headerBtnRect.right,
+                                             headerBtnRect.bottom};
+            hoverButtonLabel = L"打开根目录文件夹";
+        }
     }
 
     // 第二行：过滤输入框外框背景 (36.0f ~ 72.0f)
@@ -1516,12 +1536,9 @@ void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
     const wchar_t* hoverFullPath = nullptr;
     u32 hoverFullPathLen = 0;
 
-    // 同理,行内"打开所在文件夹"/"新窗口打开"按钮的悬浮标题小气泡也要画在
-    // 裁剪区域之外,先记下按钮矩形与对应文案。
-    bool hoverButtonValid = false;
-    SidebarRectDip hoverButtonRect{};
-    const wchar_t* hoverButtonLabel = nullptr;
-
+    // 行内"打开所在文件夹"/"新窗口打开"按钮的悬浮标题小气泡同样要画在裁剪
+    // 区域之外——hoverButtonValid/Rect/Label 是函数开头就声明的共享状态
+    // (头部按钮悬浮时可能已经设过一次),这里按需覆盖成当前 hover 行的按钮。
     float baseTop = kFolderSidebarHeaderHeightDip - overlay_->folderScrollY;
     for (u32 i = 0; i < displayCount; ++i) {
         float rowTop = baseTop + static_cast<float>(i) * kSidebarRowHeightDip;
@@ -1905,6 +1922,19 @@ void Renderer::PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, vo
     }
 }
 
+// 底部栏第 index 个按钮的左边界(DIP)——DrawBottomBar 的图标排布循环与
+// DrawBottomBarTooltip 的气泡定位共用同一份三段式布局公式(左侧定宽网格 /
+// CopyPath / History 贴右),避免两处独立维护、按钮布局一改就悄悄错位。
+float BottomBarButtonLeftDip(u32 index, float targetWidth) {
+    if (index < kBottomBarLeftButtonCount) {
+        return kBottomBarButtonWidthDip * static_cast<float>(index);
+    }
+    if (index == kBottomBarCopyPathIndex) {
+        return targetWidth - kBottomBarButtonWidthDip * 2.0f;
+    }
+    return targetWidth - kBottomBarButtonWidthDip;  // History,始终贴最右
+}
+
 // 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
 // 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧最右边是历史按钮,
 // 中间是状态文字(当前文档路径 + 大小)。
@@ -1912,7 +1942,7 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                               ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                               const wchar_t* documentPath, u64 documentSizeBytes,
-                              u32 hoverButtonIndex, bool pathCopied) {
+                              bool pathCopied) {
     if (!target_ || !bgBrush) return;
     bool hasDocument = documentPath && documentPath[0] != L'\0';
 
@@ -1930,31 +1960,14 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
     float btnW = kBottomBarButtonWidthDip;
     float iconCenterY = barTop + kBottomBarHeightDip * 0.5f;  // 图标整体垂直居中于栏高度内
 
-    // 每个按钮的水平中心,下面画悬浮提示气泡时直接查表,不重新推导一遍
-    // 同样的三段式布局公式(避免两份独立维护、按钮布局一改就悄悄错位)。
-    //
-    // Each button's horizontal center, looked up directly when drawing the
-    // hover tooltip below instead of re-deriving the same three-way layout
-    // formula a second time (avoiding two independently-maintained copies
-    // that silently drift apart whenever the button layout changes).
-    float centerXs[kBottomBarButtonCount] = {};
-
     for (u32 i = 0; i < kBottomBarButtonCount; ++i) {
         // CopyPath 仅当前有打开文档时存在——未打开文档时整个跳过(不占位、
         // 不画、不留分隔线),该区域让给中间的状态文字区。
         if (i == kBottomBarCopyPathIndex && !hasDocument) continue;
         bool isHistory = (i == kBottomBarHistoryIndex);
 
-        float left;
-        if (i < kBottomBarLeftButtonCount) {
-            left = btnW * static_cast<float>(i);
-        } else if (i == kBottomBarCopyPathIndex) {
-            left = targetWidth - btnW * 2.0f;
-        } else {  // History,始终贴最右
-            left = targetWidth - btnW;
-        }
+        float left = BottomBarButtonLeftDip(i, targetWidth);
         float centerX = left + btnW * 0.5f;
-        centerXs[i] = centerX;
 
         // 分隔线画在:左侧图标按钮之间、状态文字区与右侧固定按钮群之间的
         // 第一条分界、以及(CopyPath 存在时)CopyPath 与 History 之间。
@@ -1981,39 +1994,6 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
         }
     }
 
-    // 悬浮提示气泡
-    if (fonts_ && textBrush && bgBrush && hoverButtonIndex < kBottomBarButtonCount) {
-        const wchar_t* label = kBottomBarTooltipLabels[hoverButtonIndex];
-        u32 labelLen = WideLength(label);
-        IDWriteTextLayout* tipLayout = fonts_->CreateTextLayout(
-            label, labelLen, FontRole::Body, 200.0f, kBottomBarTooltipHeightDip);
-        if (tipLayout) {
-            tipLayout->SetFontSize(kBottomBarTooltipFontSizeDip, DWRITE_TEXT_RANGE{0, labelLen});
-            DWRITE_TEXT_METRICS metrics{};
-            tipLayout->GetMetrics(&metrics);
-            float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
-            float buttonCenterX = centerXs[hoverButtonIndex];
-            float bubbleLeft = ClampTooltipLeftDip(buttonCenterX - bubbleWidth * 0.5f, bubbleWidth,
-                                                    targetWidth, 4.0f);
-            // 底部栏气泡永远画在栏顶边上方,不会像侧栏按钮气泡那样退化到锚点
-            // 下方(minTopDip 传一个极小值,TooltipBubbleVerticalDip 的下方
-            // 退化分支永远不会触发,行为与原实现一致)。
-            TooltipVerticalDip bubbleV = TooltipBubbleVerticalDip(
-                barTop, barTop, kBottomBarTooltipHeightDip, kBottomBarTooltipGapDip, -1e9f);
-            float bubbleTop = bubbleV.top;
-            float bubbleBottom = bubbleV.bottom;
-            D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
-                D2D1::RectF(bubbleLeft, bubbleTop, bubbleLeft + bubbleWidth, bubbleBottom),
-                4.0f, 4.0f);
-            target_->FillRoundedRectangle(bubble, bgBrush);
-            target_->DrawTextLayout(
-                D2D1::Point2F(bubbleLeft + kBottomBarTooltipPaddingDip,
-                              bubbleTop + (kBottomBarTooltipHeightDip - metrics.height) * 0.5f),
-                tipLayout, textBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
-            tipLayout->Release();
-        }
-    }
-
     // 右侧状态区:显示当前文档路径 + 大小
     if (fonts_ && textBrush && documentPath && documentPath[0] != L'\0') {
         wchar_t statusText[MAX_PATH + 40];
@@ -2036,6 +2016,42 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
             }
         }
     }
+}
+
+void Renderer::DrawBottomBarTooltip(float targetWidth, float targetHeight,
+                                     ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                                     u32 hoverButtonIndex, bool hasDocument) {
+    if (!target_ || !fonts_ || !bgBrush || !textBrush) return;
+    if (hoverButtonIndex >= kBottomBarButtonCount) return;
+    if (hoverButtonIndex == kBottomBarCopyPathIndex && !hasDocument) return;
+
+    float barTop = targetHeight - kBottomBarHeightDip;
+    float buttonCenterX = BottomBarButtonLeftDip(hoverButtonIndex, targetWidth) +
+                          kBottomBarButtonWidthDip * 0.5f;
+
+    const wchar_t* label = kBottomBarTooltipLabels[hoverButtonIndex];
+    u32 labelLen = WideLength(label);
+    IDWriteTextLayout* tipLayout =
+        fonts_->CreateTextLayout(label, labelLen, FontRole::Body, 200.0f, kBottomBarTooltipHeightDip);
+    if (!tipLayout) return;
+    tipLayout->SetFontSize(kBottomBarTooltipFontSizeDip, DWRITE_TEXT_RANGE{0, labelLen});
+    DWRITE_TEXT_METRICS metrics{};
+    tipLayout->GetMetrics(&metrics);
+    float bubbleWidth = metrics.width + kBottomBarTooltipPaddingDip * 2.0f;
+    float bubbleLeft = ClampTooltipLeftDip(buttonCenterX - bubbleWidth * 0.5f, bubbleWidth, targetWidth, 4.0f);
+    // 底部栏气泡永远画在栏顶边上方,不会像侧栏按钮气泡那样退化到锚点下方
+    // (minTopDip 传一个极小值,TooltipBubbleVerticalDip 的下方退化分支永远
+    // 不会触发,行为与原实现一致)。
+    TooltipVerticalDip bubbleV = TooltipBubbleVerticalDip(
+        barTop, barTop, kBottomBarTooltipHeightDip, kBottomBarTooltipGapDip, -1e9f);
+    D2D1_ROUNDED_RECT bubble = D2D1::RoundedRect(
+        D2D1::RectF(bubbleLeft, bubbleV.top, bubbleLeft + bubbleWidth, bubbleV.bottom), 4.0f, 4.0f);
+    target_->FillRoundedRectangle(bubble, bgBrush);
+    target_->DrawTextLayout(
+        D2D1::Point2F(bubbleLeft + kBottomBarTooltipPaddingDip,
+                      bubbleV.top + (kBottomBarTooltipHeightDip - metrics.height) * 0.5f),
+        tipLayout, textBrush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+    tipLayout->Release();
 }
 
 void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
@@ -2923,10 +2939,13 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 底部操作栏(常驻,不依赖 overlay_ 是否为空——它不是可选叠加层)。画在
     // 正文/滚动条之后、蒙层与查找条/侧栏之前,这样大纲/历史侧栏打开时蒙层能盖住
     // 底部栏(裁决:蒙层应完整遮住正文可交互区域,底部栏也不例外)。
+    // bottomBarBgBrush/bottomBarTextBrush 的生命周期要跨过下面的侧栏叠加层
+    // 一直留到函数末尾——悬浮提示气泡(DrawBottomBarTooltip)由下面那段 z 序
+    // 分发决定什么时候画,可能排在所有侧栏之后,这两支笔那时才用得上。
+    ID2D1SolidColorBrush* bottomBarBgBrush = nullptr;
+    ID2D1SolidColorBrush* bottomBarTextBrush = nullptr;
     {
-        ID2D1SolidColorBrush* bottomBarBgBrush = nullptr;
         ID2D1SolidColorBrush* bottomBarIconBrush = nullptr;
-        ID2D1SolidColorBrush* bottomBarTextBrush = nullptr;
         ID2D1SolidColorBrush* bottomBarDividerBrush = nullptr;
         target_->CreateSolidColorBrush(palette_->bottomBarBackground, &bottomBarBgBrush);
         target_->CreateSolidColorBrush(palette_->bottomBarIcon, &bottomBarIconBrush);
@@ -2934,10 +2953,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         target_->CreateSolidColorBrush(palette_->bottomBarDivider, &bottomBarDividerBrush);
         DrawBottomBar(targetSize.width, targetSize.height, bottomBarBgBrush, bottomBarIconBrush,
                       bottomBarTextBrush, bottomBarDividerBrush, documentPath, documentSizeBytes,
-                      bottomBarHoverButtonIndex, bottomBarPathCopied);
-        if (bottomBarBgBrush) bottomBarBgBrush->Release();
+                      bottomBarPathCopied);
         if (bottomBarIconBrush) bottomBarIconBrush->Release();
-        if (bottomBarTextBrush) bottomBarTextBrush->Release();
         if (bottomBarDividerBrush) bottomBarDividerBrush->Release();
     }
 
@@ -2955,33 +2972,94 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                            WideLength(overlay_->statusMessage), overlayBarBgBrush,
                            overlayBarTextBrush, topOffset);
         }
-        // 大纲侧栏打开时先盖一层半透明蒙层(盖住侧栏外的正文区域,聚焦视觉
-        // 到侧栏本身),再画侧栏——侧栏必须最后画,否则会被蒙层盖住。
-        DrawOutlineOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
-        bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
-        DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
-                         outlineHighlightBgBrush, outlineHighlightTextBrush,
-                         scrollbarTrackIdleBrush,
-                         outlineScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
-
-        // 历史记录侧栏 (右抽屉)
-        DrawHistoryOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
-        bool historyScrollbarActive = overlay_->historyScrollbarActive;
-        DrawHistoryPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
-                         outlineHighlightBgBrush, historyRowButtonBgBrush,
-                         scrollbarTrackIdleBrush,
-                         historyScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush);
-
-        // 文件夹文件列表侧栏 (左抽屉,挤压模式,不画悬浮蒙层——正文宽度已经
-        // 在外壳层按 FolderSqueezeWidthDip 收窄让出这块空间,见 DrawFolderPanel 注释)。
-        bool folderScrollbarActive = overlay_->folderScrollbarActive;
-        DrawFolderPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
-                        outlineHighlightBgBrush, copyHoverBgBrush,
-                        historyRowButtonBgBrush,
-                        scrollbarTrackIdleBrush,
-                        folderScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush,
-                        overlayBarBgBrush, overlayBarTextBrush);
     }
+
+    // 可互相遮挡的 4 个图层按动态 z 序绘制。之所以不再写死"大纲→历史→文件夹
+    // →气泡"的调用顺序:三个侧栏现在可以同时打开、在屏幕上真实重叠,谁该压在
+    // 上面取决于"谁最近被激活",这个信息只有外壳层知道(ShellOverlay 里的
+    // 那四个 z 值)。条目数最多 4,直接开栈上定长数组 + 插入排序,渲染路径
+    // 不做任何堆分配。每个侧栏的蒙层与面板是一个整体,同一个 case 里连着画。
+    enum LayerKind : u32 { kLayerOutline, kLayerHistory, kLayerFolder, kLayerBottomBarTooltip };
+    struct ZLayer {
+        u32 z;
+        u32 kind;
+    };
+    ZLayer layers[4];
+    u32 layerCount = 0;
+    // 入选条件与各 DrawXxx 自己的提前返回判据保持一致(动画进度 > 0.0001f),
+    // 免得给一个当帧根本不画的图层白排一次序。
+    if (overlay_ && overlay_->outlineAnimProgress > 0.0001f) {
+        layers[layerCount++] = ZLayer{overlay_->outlineZOrder, kLayerOutline};
+    }
+    if (overlay_ && overlay_->historyAnimProgress > 0.0001f) {
+        layers[layerCount++] = ZLayer{overlay_->historyZOrder, kLayerHistory};
+    }
+    if (overlay_ && overlay_->folderAnimProgress > 0.0001f) {
+        layers[layerCount++] = ZLayer{overlay_->folderZOrder, kLayerFolder};
+    }
+    // 气泡不依赖 overlay_(底部栏本身就是常驻的,没有任何侧栏时也要能弹提示),
+    // z 值缺省为 0,单独悬浮时它是唯一图层,顺序无所谓。
+    bool hasDocument = documentPath && documentPath[0] != L'\0';
+    if (bottomBarHoverButtonIndex < kBottomBarButtonCount) {
+        u32 tooltipZ = overlay_ ? overlay_->bottomBarTooltipZOrder : 0u;
+        layers[layerCount++] = ZLayer{tooltipZ, kLayerBottomBarTooltip};
+    }
+    for (u32 i = 1; i < layerCount; ++i) {
+        ZLayer key = layers[i];
+        u32 j = i;
+        while (j > 0 && layers[j - 1].z > key.z) {
+            layers[j] = layers[j - 1];
+            --j;
+        }
+        layers[j] = key;
+    }
+    for (u32 i = 0; i < layerCount; ++i) {
+        switch (layers[i].kind) {
+            case kLayerOutline: {
+                // 蒙层压暗侧栏之外的正文,再画侧栏本体——这两步之间的先后是
+                // 固定的(蒙层在下),跟着整个图层一起在 z 序里移动。
+                DrawOutlineOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
+                bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
+                DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
+                                 outlineHighlightBgBrush, outlineHighlightTextBrush,
+                                 scrollbarTrackIdleBrush,
+                                 outlineScrollbarActive ? scrollbarThumbActiveBrush
+                                                        : scrollbarThumbIdleBrush);
+                break;
+            }
+            case kLayerHistory: {
+                DrawHistoryOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
+                bool historyScrollbarActive = overlay_->historyScrollbarActive;
+                DrawHistoryPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
+                                 outlineHighlightBgBrush, historyRowButtonBgBrush,
+                                 scrollbarTrackIdleBrush,
+                                 historyScrollbarActive ? scrollbarThumbActiveBrush
+                                                        : scrollbarThumbIdleBrush);
+                break;
+            }
+            case kLayerFolder: {
+                // 挤压模式,不画悬浮蒙层——正文宽度已经在外壳层按
+                // FolderSqueezeWidthDip 收窄让出这块空间,见 DrawFolderPanel 注释。
+                bool folderScrollbarActive = overlay_->folderScrollbarActive;
+                DrawFolderPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
+                                outlineHighlightBgBrush, copyHoverBgBrush,
+                                historyRowButtonBgBrush,
+                                scrollbarTrackIdleBrush,
+                                folderScrollbarActive ? scrollbarThumbActiveBrush
+                                                      : scrollbarThumbIdleBrush,
+                                overlayBarBgBrush, overlayBarTextBrush);
+                break;
+            }
+            case kLayerBottomBarTooltip:
+                DrawBottomBarTooltip(targetSize.width, targetSize.height, bottomBarBgBrush,
+                                     bottomBarTextBrush, bottomBarHoverButtonIndex, hasDocument);
+                break;
+            default:
+                break;
+        }
+    }
+    if (bottomBarBgBrush) bottomBarBgBrush->Release();
+    if (bottomBarTextBrush) bottomBarTextBrush->Release();
 
     if (textBrush) textBrush->Release();
     if (quoteBrush) quoteBrush->Release();
