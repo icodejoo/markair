@@ -695,6 +695,7 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
         nullptr, nullptr, nullptr, false,
         false,
         &bundle->clipboardScratch, 0, 0,
+        0, 0,
         bundle->settings.theme, systemIsDark,
         bundle->settings.winX, bundle->settings.winY, bundle->settings.winW,
         bundle->settings.winH, bundle->settings.winMaximized,
@@ -1091,6 +1092,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         // T45:剪贴板拼接 Arena;后面两个复制按钮状态字段由 CreateMainWindow
         // 统一初始化成 kInvalidIndex,这里占位传 0 即可(会被覆盖,值本身不重要)。
         &clipboardScratch, 0, 0,
+        // 表格行悬浮态同理,占位传 0,CreateMainWindow 会覆盖成 kInvalidIndex。
+        0, 0,
         // T47:主题偏好读自 state.ini(theme 键),系统深浅色在启动期探测一次。
         settings.theme, systemIsDark,
         // T56:窗口矩形/最大化态的"待恢复值"读自 state.ini 的 win_x/y/w/h/

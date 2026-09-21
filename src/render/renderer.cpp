@@ -511,7 +511,10 @@ bool Renderer::EnsureRenderTarget(HWND hwnd) {
 
 void Renderer::DrawTableChrome(const BlockGeometry& g, float scrollY,
                                 ID2D1SolidColorBrush* tableHeaderBrush,
-                                ID2D1SolidColorBrush* tableGridBrush) {
+                                ID2D1SolidColorBrush* tableGridBrush,
+                                ID2D1SolidColorBrush* tableZebraBrush,
+                                ID2D1SolidColorBrush* tableRowHoverBrush,
+                                u32 hoverRow) {
     if (g.tableColWidths.len == 0 || g.tableRowTops.len < 2) return;
 
     float left = g.indent;
@@ -525,6 +528,21 @@ void Renderer::DrawTableChrome(const BlockGeometry& g, float scrollY,
         u32 headEnd = g.tableHeadRowCount < g.tableRowTops.len ? g.tableHeadRowCount : g.tableRowTops.len - 1;
         float headBottom = g.tableRowTops[headEnd] - scrollY;
         target_->FillRectangle(D2D1::RectF(left, top, right, headBottom), tableHeaderBrush);
+    }
+
+    // 表体斑马纹(奇数行)+ 悬浮行高亮:必须画在网格线之前——D2D 后画的盖住
+    // 先画的,网格线的 DrawLine 调用留在下面,自然留在最上层不被盖住。
+    // hoverRow 命中的行在斑马纹之上再叠一次,是刻意的优先级(悬浮态更显眼)。
+    for (u32 r = g.tableHeadRowCount; r + 1 < g.tableRowTops.len; ++r) {
+        u32 bodyRow = r - g.tableHeadRowCount;
+        float rowTop = g.tableRowTops[r] - scrollY;
+        float rowBottom = g.tableRowTops[r + 1] - scrollY;
+        if (tableZebraBrush && (bodyRow % 2 == 1)) {
+            target_->FillRectangle(D2D1::RectF(left, rowTop, right, rowBottom), tableZebraBrush);
+        }
+        if (tableRowHoverBrush && bodyRow == hoverRow) {
+            target_->FillRectangle(D2D1::RectF(left, rowTop, right, rowBottom), tableRowHoverBrush);
+        }
     }
 
     if (!tableGridBrush) return;
@@ -2430,6 +2448,8 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
                           ID2D1SolidColorBrush* linkBrush,
                           ID2D1SolidColorBrush* tableHeaderBrush,
                           ID2D1SolidColorBrush* tableGridBrush,
+                          ID2D1SolidColorBrush* tableZebraBrush,
+                          ID2D1SolidColorBrush* tableRowHoverBrush,
                           ID2D1SolidColorBrush* checkboxBorderBrush,
                           ID2D1SolidColorBrush* checkboxCheckBrush,
                           ID2D1SolidColorBrush* placeholderBgBrush,
@@ -2486,9 +2506,13 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
         target_->DrawLine(D2D1::Point2F(g.indent, y), D2D1::Point2F(rightX, y), hrBrush, 1.0f);
     }
 
-    // 表格网格线/表头背景(T26):只在 Table 容器块自身画一次,覆盖整张表。
+    // 表格网格线/表头背景/斑马纹/悬浮行高亮:只在 Table 容器块自身画一次,覆盖整张表。
+    // hoverRow 从 overlay_ 里读——只有当前块就是鼠标悬浮所在的那张表时才生效。
     if (g.type == BlockType::Table) {
-        DrawTableChrome(g, scrollY, tableHeaderBrush, tableGridBrush);
+        u32 hoverRow = kInvalidIndex;
+        if (overlay_ && overlay_->hoverTableBlock == blockIndex) hoverRow = overlay_->hoverTableRow;
+        DrawTableChrome(g, scrollY, tableHeaderBrush, tableGridBrush, tableZebraBrush,
+                         tableRowHoverBrush, hoverRow);
     }
 
     // 脚注定义编号标签(T28):每条脚注定义前缀 "[n]"。
@@ -2692,6 +2716,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     ID2D1SolidColorBrush* linkBrush = nullptr;
     ID2D1SolidColorBrush* tableHeaderBrush = nullptr;
     ID2D1SolidColorBrush* tableGridBrush = nullptr;
+    ID2D1SolidColorBrush* tableZebraBrush = nullptr;
+    ID2D1SolidColorBrush* tableRowHoverBrush = nullptr;
     ID2D1SolidColorBrush* checkboxBorderBrush = nullptr;
     ID2D1SolidColorBrush* checkboxCheckBrush = nullptr;
     ID2D1SolidColorBrush* placeholderBgBrush = nullptr;
@@ -2732,6 +2758,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->link, &linkBrush);
     target_->CreateSolidColorBrush(palette_->tableHeaderBackground, &tableHeaderBrush);
     target_->CreateSolidColorBrush(palette_->tableGrid, &tableGridBrush);
+    target_->CreateSolidColorBrush(palette_->tableZebraBackground, &tableZebraBrush);
+    target_->CreateSolidColorBrush(palette_->tableRowHoverBackground, &tableRowHoverBrush);
     target_->CreateSolidColorBrush(palette_->checkboxBorder, &checkboxBorderBrush);
     target_->CreateSolidColorBrush(palette_->checkboxCheck, &checkboxCheckBrush);
     target_->CreateSolidColorBrush(palette_->imagePlaceholderBackground, &placeholderBgBrush);
@@ -2843,7 +2871,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
             if (g.bottom < cullTop || g.top > cullBottom) continue;
             DrawBlock(g, i, scrollY, contentWidth,
                       textBrush, quoteBrush, codeBgBrush, codeBorderBrush, hrBrush, linkBrush,
-                      tableHeaderBrush, tableGridBrush, checkboxBorderBrush, checkboxCheckBrush,
+                      tableHeaderBrush, tableGridBrush, tableZebraBrush, tableRowHoverBrush,
+                      checkboxBorderBrush, checkboxCheckBrush,
                       placeholderBgBrush, placeholderBorderBrush, badgeBgBrush, badgeTextBrush,
                       findHighlightBrush, findCurrentBrush, selectionBrush,
                       copyIconBrush, copyHoverBgBrush, copyPaperBrush, copyDoneBrush,
@@ -2962,6 +2991,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     if (linkBrush) linkBrush->Release();
     if (tableHeaderBrush) tableHeaderBrush->Release();
     if (tableGridBrush) tableGridBrush->Release();
+    if (tableZebraBrush) tableZebraBrush->Release();
+    if (tableRowHoverBrush) tableRowHoverBrush->Release();
     if (checkboxBorderBrush) checkboxBorderBrush->Release();
     if (checkboxCheckBrush) checkboxCheckBrush->Release();
     if (placeholderBgBrush) placeholderBgBrush->Release();

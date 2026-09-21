@@ -153,6 +153,11 @@ struct WindowState {
     u32 copyButtonHover;   // 鼠标当前悬浮的复制按钮所属块下标
     u32 copyButtonCopied;  // 处于"已复制"反馈态的复制按钮所属块下标
 
+    // 表格行悬浮态(斑马纹之上叠加高亮),同样由 `CreateMainWindow` 初始化成
+    // `kInvalidIndex`。hoverTableRow 是该表**表体**内的行号(0 起,不含表头)。
+    u32 hoverTableBlock;
+    u32 hoverTableRow;
+
     // T47:主题三态状态机。`themeSetting` 是用户偏好(state.ini 的 theme 键 /
     // Ctrl+Shift+T 循环),`systemIsDark` 是最近一次探测到的系统深浅色结果
     // (启动时探测一次,之后由 WM_SETTINGCHANGE 更新)。两者都由调用方

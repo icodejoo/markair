@@ -46,6 +46,8 @@ struct Palette {
     D2D1_COLOR_F link;                        // 链接/自动链接文字色
     D2D1_COLOR_F tableHeaderBackground;       // 表格表头底色
     D2D1_COLOR_F tableGrid;                   // 表格网格线颜色
+    D2D1_COLOR_F tableZebraBackground;        // 表体斑马纹底色(奇数行),比表头底色更淡
+    D2D1_COLOR_F tableRowHoverBackground;     // 表体行悬浮态底色,叠在斑马纹之上
     D2D1_COLOR_F checkboxBorder;              // 任务列表勾选框边框色
     D2D1_COLOR_F checkboxCheck;               // 任务列表勾选框对勾色
     D2D1_COLOR_F imagePlaceholderBackground;  // 图片占位块底色
@@ -117,6 +119,10 @@ inline constexpr Palette kLightPalette{
     /* link                       */ MakeColor(0x0366D6u),
     /* tableHeaderBackground      */ MakeColor(0xF6F8FAu),
     /* tableGrid                  */ MakeColor(0xD0D7DEu),
+    // F2F4F6 太浅看不出来，EAEDF0 用户反馈又偏深，回调到中间的 0xF0F2F4u。
+    /* tableZebraBackground       */ MakeColor(0xF0F2F4u),
+    // 与 codeCopyHoverBackground 同一量级(同色号),复用既有的"悬浮态"视觉语言。
+    /* tableRowHoverBackground    */ MakeColor(0xD8DEE4u),
     /* checkboxBorder             */ MakeColor(0x808080u),
     /* checkboxCheck              */ MakeColor(0x22863Au),
     /* imagePlaceholderBackground */ MakeColor(0xF0F0F0u),
@@ -180,6 +186,10 @@ inline constexpr Palette kDarkPalette{
     /* link                       */ MakeColor(0x58A6FFu),
     /* tableHeaderBackground      */ MakeColor(0x161B22u),
     /* tableGrid                  */ MakeColor(0x30363Du),
+    // 181E26 太浅、1C232C 用户反馈又偏深，回调到中间的 0x191F27u。
+    /* tableZebraBackground       */ MakeColor(0x191F27u),
+    // 与 codeCopyHoverBackground 同一量级(同色号)。
+    /* tableRowHoverBackground    */ MakeColor(0x30363Du),
     /* checkboxBorder             */ MakeColor(0x8B949Eu),
     /* checkboxCheck              */ MakeColor(0x3FB950u),
     /* imagePlaceholderBackground */ MakeColor(0x161B22u),

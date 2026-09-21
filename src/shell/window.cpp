@@ -1135,6 +1135,48 @@ void UpdateCopyButtonHover(HWND hwnd, WindowState* state, int px, int py) {
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// 表格行悬浮态:鼠标移动 -> 找出落在哪张表的表体第几行(body-relative,不含
+// 表头)。与 UpdateCopyButtonHover 同一手法:纯矩形/区间判定,不走文本命中;
+// 只在悬浮目标真正变化时才 InvalidateRect。
+void UpdateTableRowHover(HWND hwnd, WindowState* state, int px, int py) {
+    if (!state || !state->layout) return;
+
+    DocPoint p = ClientToDocumentPoint(hwnd, state, px, py);
+    u32 hitBlock = kInvalidIndex;
+    u32 hitRow = kInvalidIndex;
+    u32 count = state->layout->BlockCount();
+    for (u32 i = 0; i < count; ++i) {
+        const BlockGeometry& g = state->layout->Geometry(i);
+        if (g.type != BlockType::Table) continue;
+        if (g.tableColWidths.len == 0 || g.tableRowTops.len < 2) continue;
+
+        float left = g.indent;
+        float right = left;
+        for (u32 c = 0; c < g.tableColWidths.len; ++c) right += g.tableColWidths[c];
+        if (p.x < left || p.x > right) continue;
+
+        u32 bodyStart = g.tableHeadRowCount;
+        if (bodyStart >= g.tableRowTops.len - 1) continue;  // 无表体行(纯表头)
+        float bodyTop = g.tableRowTops[bodyStart];
+        float bodyBottom = g.tableRowTops[g.tableRowTops.len - 1];
+        if (p.y < bodyTop || p.y > bodyBottom) continue;
+
+        for (u32 r = bodyStart; r + 1 < g.tableRowTops.len; ++r) {
+            if (p.y >= g.tableRowTops[r] && p.y < g.tableRowTops[r + 1]) {
+                hitBlock = i;
+                hitRow = r - bodyStart;
+                break;
+            }
+        }
+        break;  // 每个坐标最多落在一张表上,找到就不用再看后面的块
+    }
+
+    if (hitBlock == state->hoverTableBlock && hitRow == state->hoverTableRow) return;
+    state->hoverTableBlock = hitBlock;
+    state->hoverTableRow = hitRow;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 // T45:点击复制按钮 -> 拼出该代码块纯文本写进剪贴板,进入"已复制"反馈态,
 // 并起一个一次性定时器在 kCopyFeedbackDurationMs 之后清掉反馈态。
 // 复制失败(剪贴板被占用等)时不进反馈态,避免给出与事实不符的视觉确认。
@@ -1383,6 +1425,8 @@ void NavigateHistoryDirection(HWND hwnd, WindowState* state, bool isBack) {
     CloseFindUi(hwnd, state);
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
+    state->hoverTableBlock = kInvalidIndex;
+    state->hoverTableRow = kInvalidIndex;
     KillTimer(hwnd, kCopyFeedbackTimerId);
     SetScrollY(hwnd, state, entry.scrollY, /*forceRefresh=*/true);
 }
@@ -1439,6 +1483,8 @@ void ReloadCurrentDocument(HWND hwnd, WindowState* state) {
     CloseFindUi(hwnd, state);
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
+    state->hoverTableBlock = kInvalidIndex;
+    state->hoverTableRow = kInvalidIndex;
     KillTimer(hwnd, kCopyFeedbackTimerId);
 
     // 按块下标钳制到新文档范围内近似恢复位置;新文档 0 个块时滚到顶部。
@@ -1545,14 +1591,17 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     ShellOverlay overlay{};
     overlay.copyButtonHoverBlock = kInvalidIndex;
     overlay.copyButtonCopiedBlock = kInvalidIndex;
+    overlay.hoverTableBlock = kInvalidIndex;
+    overlay.hoverTableRow = kInvalidIndex;
     const ShellOverlay* overlayPtr = nullptr;
     bool hasCopyButtonState =
         state->copyButtonHover != kInvalidIndex || state->copyButtonCopied != kInvalidIndex;
+    bool hasTableHoverState = state->hoverTableBlock != kInvalidIndex;
     bool hasSelection = state->selection && state->selection->HasSelection();
     bool hasHistory = state->recentFiles && state->historyAnimState != SidebarAnimState::Closed;
     bool hasFolder = state->folderAnimState != SidebarAnimState::Closed || state->folderAnimProgress > 0.0001f;
-    if (state->find || state->statusMessage || hasCopyButtonState || state->outline ||
-        hasSelection || hasHistory || hasFolder) {
+    if (state->find || state->statusMessage || hasCopyButtonState || hasTableHoverState ||
+        state->outline || hasSelection || hasHistory || hasFolder) {
         // T80:鼠标拖选高亮,选区为空时保持聚合初始化留下的 false/0,渲染层
         // 不画任何高亮,零额外开销。
         if (hasSelection) {
@@ -1567,6 +1616,8 @@ void PaintOnce(HWND hwnd, WindowState* state) {
         // 因此不需要认识"外壳层状态"这个概念(与查找高亮同一条通路)。
         overlay.copyButtonHoverBlock = state->copyButtonHover;
         overlay.copyButtonCopiedBlock = state->copyButtonCopied;
+        overlay.hoverTableBlock = state->hoverTableBlock;
+        overlay.hoverTableRow = state->hoverTableRow;
         if (state->find) {
             Span<const Match> matches = state->find->Matches();
             overlay.matches = matches.data;
@@ -2427,6 +2478,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // 光标仍由 WM_SETCURSOR 负责,这里不重复做文本命中。
         if (state && state->layout) {
             UpdateCopyButtonHover(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            UpdateTableRowHover(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
             // 订阅一次 WM_MOUSELEAVE:鼠标直接移出窗口时把悬浮态收掉,
             // 否则按钮会停在悬浮样式上(TrackMouseEvent 是一次性的,每次
             // 鼠标移动都要重新订阅)。
@@ -2597,6 +2649,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         bool changed = false;
         if (state && state->copyButtonHover != kInvalidIndex) {
             state->copyButtonHover = kInvalidIndex;
+            changed = true;
+        }
+        if (state && state->hoverTableBlock != kInvalidIndex) {
+            state->hoverTableBlock = kInvalidIndex;
+            state->hoverTableRow = kInvalidIndex;
             changed = true;
         }
         if (state && state->scrollbarDragTarget == ScrollbarDragTarget::None &&
@@ -3609,6 +3666,9 @@ HWND CreateMainWindow(HINSTANCE instance, const wchar_t* title, WindowState* sta
     // "第 0 个块的复制按钮处于悬浮/已复制态"。
     state->copyButtonHover = kInvalidIndex;
     state->copyButtonCopied = kInvalidIndex;
+    // 表格行悬浮态同理,零值会被当成"悬浮在第 0 张表的第 0 行"。
+    state->hoverTableBlock = kInvalidIndex;
+    state->hoverTableRow = kInvalidIndex;
     // 底部栏悬浮提示(2026-09-18 新增):零值会被当成"悬浮在第 0 个按钮
     // (ZoomIn)上",必须显式置为 None,与上面两个 kInvalidIndex 同一条理由。
     state->bottomBarHoverButton = BottomBarButton::None;

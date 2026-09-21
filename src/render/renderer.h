@@ -53,6 +53,13 @@ struct ShellOverlay {
     u32 copyButtonHoverBlock;      // 鼠标当前悬浮的复制按钮所属块
     u32 copyButtonCopiedBlock;     // 处于"已复制"反馈态的复制按钮所属块
 
+    // 表格行悬浮态(斑马纹之上叠加高亮):hoverTableBlock 是鼠标所在 Table
+    // 容器块的下标,hoverTableRow 是该表**表体**内的行号(从 0 开始,不含
+    // 表头行——即相对 BlockGeometry::tableRowTops[tableHeadRowCount..] 的
+    // 区间下标)。两者都为 kInvalidIndex 表示当前没有悬浮任何表格行。
+    u32 hoverTableBlock;
+    u32 hoverTableRow;
+
     // T80 鼠标拖选文本高亮:selectionActive 为 false 时以下四个字段无意义、
     // 不画任何高亮(与查找高亮同一套"没有就不画"口径)。选区可能跨越当前
     // 不可见的块,DrawSelectionHighlights 只画落在"可见 ± 1 屏"内、持有
@@ -420,6 +427,8 @@ private:
                     ID2D1SolidColorBrush* linkBrush,
                     ID2D1SolidColorBrush* tableHeaderBrush,
                     ID2D1SolidColorBrush* tableGridBrush,
+                    ID2D1SolidColorBrush* tableZebraBrush,
+                    ID2D1SolidColorBrush* tableRowHoverBrush,
                     ID2D1SolidColorBrush* checkboxBorderBrush,
                     ID2D1SolidColorBrush* checkboxCheckBrush,
                     ID2D1SolidColorBrush* placeholderBgBrush,
@@ -505,11 +514,15 @@ private:
                             ID2D1SolidColorBrush* buttonHoverFillBrush,
                             ID2D1SolidColorBrush* buttonBorderBrush);
 
-    // 画表格网格线与表头背景(T26):只依赖 BlockGeometry 里已存好的
-    // tableColWidths/tableRowTops/tableHeadRowCount,不依赖 Document。
+    // 画表格网格线/表头背景/表体斑马纹/悬浮行高亮:只依赖 BlockGeometry 里
+    // 已存好的 tableColWidths/tableRowTops/tableHeadRowCount,不依赖 Document。
+    // @param hoverRow 当前悬浮的表体行(body-relative,0 起),kInvalidIndex 表示无。
     void DrawTableChrome(const BlockGeometry& g, float scrollY,
                           ID2D1SolidColorBrush* tableHeaderBrush,
-                          ID2D1SolidColorBrush* tableGridBrush);
+                          ID2D1SolidColorBrush* tableGridBrush,
+                          ID2D1SolidColorBrush* tableZebraBrush,
+                          ID2D1SolidColorBrush* tableRowHoverBrush,
+                          u32 hoverRow);
 
     // 给链接/自动链接 run 单独着色(T24):不用 SetDrawingEffect,而是对每个
     // link range 的 HitTestTextRange 矩形做 PushAxisAlignedClip 后重画一次
