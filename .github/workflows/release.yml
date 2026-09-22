@@ -15,21 +15,24 @@
 # manifest) rather than defining a second set of criteria.
 name: Release
 
-# 用户裁决(2026-09-19):源码推送到 master 即自动构建并发布,不要求先手动
-# 打 version tag。采用"latest"滚动发布——每次触发都覆盖同一个 tag/Release
-# 的产物,不为每次推送保留独立历史版本(需要历史版本时改用手动打 tag,
-# workflow_dispatch 仍保留作为手动重跑入口)。paths 过滤跳过纯文档/图片/
-# 产物类改动,与全局 CLAUDE.md 里 commit 前 code-review 的"源码范围判断"
-# 同一条原则:不产源码变化就不重新构建发布。
+# 用户裁决(2026-09-19,2026-09-22 更新):源码推送到 master 即自动构建并
+# 发布,不要求先手动打 version tag。2026-09-22 起改为按 commit 生成独立
+# Release——每次触发都用当前 commit 的短 sha 生成一个新 tag/Release,不再
+# 覆盖同一个 tag 的历史产物,每次推送都保留可追溯的独立版本(不需要再手动
+# 打 tag 才能留历史;workflow_dispatch 仍保留作为手动重跑入口)。paths 过滤
+# 跳过纯文档/图片/产物类改动,与全局 CLAUDE.md 里 commit 前 code-review 的
+# "源码范围判断"同一条原则:不产源码变化就不重新构建发布。
 #
-# User decision (2026-09-19): pushing source to master auto-builds and
-# publishes, no manual version tag required first. Uses a rolling "latest"
-# release — every trigger overwrites the same tag/Release's assets rather
-# than keeping a separate historical version per push (use a manual tag for
-# that instead; workflow_dispatch stays as a manual re-run entry point). The
-# paths filter skips pure doc/image/artifact-only changes, same "is this a
-# source change" principle as the pre-commit code-review gate in the global
-# CLAUDE.md — no source change, no rebuild-and-republish.
+# User decision (2026-09-19, updated 2026-09-22): pushing source to master
+# auto-builds and publishes, no manual version tag required first. As of
+# 2026-09-22, switched to per-commit Release generation — every trigger
+# creates a brand-new tag/Release named after the current commit's short sha,
+# instead of overwriting the same tag's historical assets; every push keeps
+# its own traceable version (no manual tagging needed to preserve history;
+# workflow_dispatch stays as a manual re-run entry point). The paths filter
+# skips pure doc/image/artifact-only changes, same "is this a source change"
+# principle as the pre-commit code-review gate in the global CLAUDE.md — no
+# source change, no rebuild-and-republish.
 on:
   push:
     branches: [master]
@@ -219,31 +222,43 @@ jobs:
           path: bench\artifacts\markair-release.zip
           if-no-files-found: error
 
-      # 发布/更新"latest"滚动 Release:tag_name 固定为 latest,softprops/
-      # action-gh-release 找不到这个 tag 时会在当前 commit 上新建它,已存在
-      # 时把它移到当前 commit 并把新产物追加/覆盖进同一个 Release——用户
-      # 始终从同一个固定链接(.../releases/tag/latest)下载到最新构建,不需要
-      # 每次去找新 tag。body 里写清楚对应的源码 commit,而不是每次自动生成
-      # 一份变更日志(那是"保留历史版本"策略才需要的东西,滚动发布不需要)。
+      # 提取短 sha(前 7 位,GitHub 惯例长度),用于生成本次 Release 的 tag/
+      # 名字——比完整 40 位 sha 更符合 GitHub Release 页面的可读习惯。
       #
-      # Publish/update the rolling "latest" Release: tag_name is fixed to
-      # `latest`; softprops/action-gh-release creates that tag on the current
-      # commit if it doesn't exist yet, or moves it forward and
-      # replaces/adds assets on the same Release if it already does — users
-      # always download the newest build from one stable link
-      # (.../releases/tag/latest) without hunting for a new tag each time.
-      # The body just records which source commit this build came from,
-      # rather than auto-generating a changelog every run (that belongs to
-      # a keep-history-per-push strategy, which this rolling release isn't).
-      - name: 发布/更新 latest 滚动 Release / Publish/update rolling latest Release
+      # Extract the short sha (first 7 chars, the GitHub convention length)
+      # for this run's Release tag/name — more readable on the Releases page
+      # than the full 40-char sha.
+      - name: 计算短 commit sha / Compute short commit sha
+        id: short-sha
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          "sha=$shortSha" >> $env:GITHUB_OUTPUT
+
+      # 按 commit 发布独立 Release:tag_name 用当前 commit 的短 sha 生成,
+      # 每次触发都是一个全新的 tag,softprops/action-gh-release 会在当前
+      # commit 上新建它,不会复用/覆盖历史 tag 的产物——每次推送都留下一份
+      # 独立可追溯的 Release。make_latest: true 保留,只是把"最新一个按
+      # commit 命名的 Release"标记为 Releases 页面上的 Latest,不代表复用
+      # 同一个 tag。body 里写清楚对应的源码 commit。
+      #
+      # Publish a per-commit standalone Release: tag_name is derived from the
+      # current commit's short sha, so every trigger is a brand-new tag —
+      # softprops/action-gh-release creates it fresh on the current commit
+      # rather than reusing/overwriting a historical tag's assets, leaving
+      # each push with its own traceable Release. make_latest: true is kept —
+      # it only marks the newest per-commit Release as "Latest" on the
+      # Releases page, it does not imply reusing the same tag. The body
+      # records which source commit this build came from.
+      - name: 按 commit 发布独立 Release / Publish per-commit Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: markair (latest build)
+          tag_name: build-${{ steps.short-sha.outputs.sha }}
+          name: markair (${{ steps.short-sha.outputs.sha }})
           body: |
-            自动滚动构建,对应源码 commit: ${{ github.sha }}
+            按 commit 自动发布,对应源码 commit: ${{ github.sha }}
 
-            Automatically updated rolling build, built from source commit ${{ github.sha }}.
+            Automatically published per-commit release, built from source commit ${{ github.sha }}.
           make_latest: true
           files: |
             build\src\Release\markair.exe
