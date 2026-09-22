@@ -10,6 +10,8 @@ using markair::BottomBarButton;
 using markair::BottomBarButtonRectDip;
 using markair::FormatBottomBarFileSize;
 using markair::HitTestBottomBar;
+using markair::IsBottomBarFileListEnabled;
+using markair::IsBottomBarOutlineEnabled;
 using markair::IsPointInBottomBar;
 using markair::kBottomBarButtonCount;
 using markair::kBottomBarButtonWidthDip;
@@ -38,6 +40,20 @@ MARKAIR_TEST(BottomBar_ButtonRectsPackedFromLeftAndRight) {
     auto rCopyPath = BottomBarButtonRectDip(static_cast<markair::u32>(BottomBarButton::CopyPath), clientW, clientH);
     MARKAIR_CHECK(rCopyPath.right == rHistory.left);
     MARKAIR_CHECK(rCopyPath.left == rHistory.left - kBottomBarButtonWidthDip);
+}
+
+// 启动状态机(main.cpp)的禁用态判定:文件列表按钮只要有文档或有文件夹
+// 上下文任一成立即可用;大纲按钮只看是否有文档。
+MARKAIR_TEST(BottomBar_FileListEnabledRequiresDocOrFolderContext) {
+    MARKAIR_CHECK(!IsBottomBarFileListEnabled(false, false));
+    MARKAIR_CHECK(IsBottomBarFileListEnabled(true, false));
+    MARKAIR_CHECK(IsBottomBarFileListEnabled(false, true));
+    MARKAIR_CHECK(IsBottomBarFileListEnabled(true, true));
+}
+
+MARKAIR_TEST(BottomBar_OutlineEnabledRequiresDocument) {
+    MARKAIR_CHECK(!IsBottomBarOutlineEnabled(false));
+    MARKAIR_CHECK(IsBottomBarOutlineEnabled(true));
 }
 
 // 点落在底部栏高度带内才算命中(按钮区/状态区都算在这条带里)。

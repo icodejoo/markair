@@ -106,6 +106,20 @@ enum class SidebarHitArea {
 };
 
 /**
+ * 左侧栏容器当前显示的视图(2026-09-22 起,文件列表与大纲共用同一个可拖拽
+ * 调宽、可收起的挤压式容器,同一时刻只显示其中一个)。历史记录侧栏不纳入
+ * 本容器,继续保持独立的悬浮抽屉,不受此枚举影响。
+ *
+ * 容器自身的宽度/展开收起动画复用 WindowState 里原文件夹侧栏那套字段
+ * (folderAnimState/folderPanelWidthDip 等),这个枚举只负责回答"当前该画
+ * 文件列表还是大纲、当前该由谁接管点击"。
+ */
+enum class SidebarContainerView : u8 {
+    FileList,  // 显示文件列表(原文件夹穿透侧栏)
+    Outline,   // 显示大纲
+};
+
+/**
  * Rectangle coordinates in DIP.
  *
  * DIP 物理坐标矩形。

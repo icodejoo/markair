@@ -79,18 +79,13 @@ struct ShellOverlay {
     // 自绘滚动条(方案A)悬浮/拖动态:鼠标落在侧栏滚动条区域内、或正在拖动
     // 它时为 true,渲染层据此在 Idle/Active 两档透明度间切换(见 theme.h)。
     bool outlineScrollbarActive;
-    // T63b:侧栏当前宽度(DIP,已经是拖拽调整后的实际值)。render 层不知道
-    // "拖拽调宽"这个外壳层概念,只接收这一个数字,与 leftPaddingDip 同一套
-    // "shell 算好了才传给 render"的约定。为 0 时(侧栏关闭,聚合初始化零值)
-    // 不会被读取——DrawOutlinePanel/DrawOutlineOverlayMask 只在
-    // `outlineItems` 非空时才会被调用。
+    // 2026-09-22 起:大纲随左侧栏容器改为挤压模式,不再自己维护一套宽度/
+    // 动画进度——这两个字段由外壳层直接从容器共用的 folderPanelWidthDip/
+    // folderAnimProgress 抄一份过来(与 containerShowsOutline 一起判断该不
+    // 该画),不是各自独立的状态。为 0 时(容器收起)不会被读取。
     float outlinePanelWidthDip;
 
-    // Outline drawer slide & mask fade animation progress in [0.0f, 1.0f].
-    // 0.0f = completely closed, 1.0f = fully open and interactive.
-    //
-    // 大纲侧栏滑动与蒙层淡入淡出动画进度，取值范围 [0.0f, 1.0f]。
-    // 0.0f 表示完全收起，1.0f 表示完全展开并可交互。
+    // 大纲(随容器)展开/收起的动画进度,取值范围 [0.0f, 1.0f],口径同上。
     float outlineAnimProgress;
 
     // History sidebar fields:
@@ -156,10 +151,16 @@ struct ShellOverlay {
     // 画的先后,所以"最近激活的浮在最上面"这件事只能靠这套取号传下来——不能
     // 再像以前那样把顺序写死在 RenderFrame 的调用序列里(写死的后果:侧栏挤压
     // 背景盖掉底部栏提示气泡)。0 表示从未激活过,计数器从 1 起号所以不会撞。
-    u32 outlineZOrder;         // 大纲侧栏(连同它的蒙层)整体的 z 值
     u32 historyZOrder;         // 历史侧栏(连同它的蒙层)整体的 z 值
-    u32 folderZOrder;          // 文件夹侧栏的 z 值(挤压模式,无蒙层)
+    u32 folderZOrder;          // 左侧栏容器的 z 值(文件列表/大纲共用,挤压模式,无蒙层)
     u32 bottomBarTooltipZOrder;  // 底部栏悬浮提示气泡的 z 值
+
+    // 2026-09-22:文件列表与大纲共用同一个左侧栏容器,同一时刻只显示其中
+    // 一个。true 表示当前该显示的是大纲(用上面的 outlineItems 等字段绘制,
+    // 挤压几何借用 folderPanelWidthDip/folderAnimProgress);false 表示显示
+    // 文件列表(用 folderEntries 等字段绘制)。只在容器展开(folderAnimProgress
+    // > 0)时才有意义。
+    bool containerShowsOutline;
 };
 
 /**
@@ -398,6 +399,11 @@ public:
      *              不受影响(滚动条因内容为空天然不出现)。
      * @param welcomeButtonHover 欢迎屏"打开文件"按钮当前是否处于鼠标悬浮态,
      *              welcomeScreen 为 false 时忽略。
+     * @param folderContextAvailable 是否已有文件夹上下文(如 folderRootPath
+     *              非空,即已经穿透扫描过某个目录)——与 documentPath 是否
+     *              非空一起决定底部栏"文件列表"/"大纲"两个按钮的禁用态
+     *              (见 bottom_bar.h::IsBottomBarFileListEnabled/
+     *              IsBottomBarOutlineEnabled),禁用态画淡一档的图标颜色。
      * @example bool ok = renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f, &overlay, true);
      */
     bool RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scrollY,
@@ -406,7 +412,8 @@ public:
                       u64 documentSizeBytes = 0,
                       u32 bottomBarHoverButtonIndex = kBottomBarButtonCountRender,
                       bool bottomBarPathCopied = false, bool welcomeScreen = false,
-                      bool welcomeButtonHover = false, bool welcomeFolderButtonHover = false);
+                      bool welcomeButtonHover = false, bool welcomeFolderButtonHover = false,
+                      bool folderContextAvailable = false);
 
     /**
      * 切换当前调色板(T46,为 T49 主题切换打基础):只改一个指针,不拷贝
@@ -617,16 +624,11 @@ private:
     void DrawFindBar(float targetWidth, const wchar_t* statusText, u32 statusTextLen,
                       ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush);
 
-    // 画大纲侧栏打开时盖在侧栏外正文区域的半透明蒙层:只盖侧栏矩形之外的
-    // 区域(侧栏本身随后单独画,不会被这层蒙层盖住),与 DrawOutlinePanel
-    // 共用同一个"侧栏是否打开"的判断依据(overlay_->outlineItems 非空),
-    // 侧栏关闭时不产生任何额外绘制。
-    void DrawOutlineOverlayMask(float targetWidth, float targetHeight,
-                                ID2D1SolidColorBrush* maskBrush);
-
-    // 画大纲侧栏(T63):悬浮在正文左侧上方的一条固定宽度面板,与
-    // DrawOverlayBar 同一套"浮出条"底色/风格,只是画成整块矩形 + 逐行文字。
-    // 只在 overlay_->outlineItems 非空时被调用,不参与任何布局重排。
+    // 画大纲(T63,2026-09-22 起随左侧栏容器改为挤压模式):容器展开且当前
+    // 视图是大纲时,画成整块矩形 + 逐行文字,几何借用容器共用的
+    // folderPanelWidthDip/folderAnimProgress,不再带半透明蒙层、不再参与
+    // 任何布局重排(挤压宽度已经由外壳层让出)。只在 overlay_->outlineItems
+    // 非空时被调用。
     void DrawOutlinePanel(float targetHeight,
                           ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                           ID2D1SolidColorBrush* highlightBgBrush,
@@ -765,11 +767,13 @@ private:
     //        (勾选图标),documentPath 为空时忽略(该按钮本就不存在)。
     // 悬浮提示气泡不在这里画,见 DrawBottomBarTooltip(必须晚于文件夹侧栏画,
     // 单独拆出去调用)。
+    // @param folderContextAvailable 见 RenderFrame 同名参数注释;决定
+    //        FileList/Outline 两个图标是否画禁用态(变淡)。
     void DrawBottomBar(float targetWidth, float targetHeight,
                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                         ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                         const wchar_t* documentPath = nullptr, u64 documentSizeBytes = 0,
-                        bool pathCopied = false);
+                        bool pathCopied = false, bool folderContextAvailable = false);
 
     // 底部栏悬浮提示气泡,从 DrawBottomBar 里拆出来单独画:必须在文件夹侧栏
     // (挤压模式,背景铺满 0~targetHeight-栏高 的整个区域)画完之后再画,否则

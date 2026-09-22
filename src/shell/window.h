@@ -82,9 +82,11 @@ struct WindowState {
     FindSession* find;                    // Ctrl+F 查找会话(T37/T38)
     const wchar_t* statusMessage;         // 窗口内提示(如"文件不存在"),不弹 MessageBox
 
-    // T63 大纲侧栏(`Ctrl+\` 切换,默认关闭)。"指针为空即不存在":为空表示
-    // 侧栏关闭,此时不会有任何 ExtractOutline/IDWriteTextLayout/Arena 分配
-    // 发生;由 window.cpp 在切换打开时用 `outlineArena` 现场构造。
+    // T63 大纲(`Ctrl+\` 切换,默认关闭;2026-09-22 起是左侧栏容器的其中一个
+    // 视图,与文件列表视图共用同一个容器)。"指针为空即不存在":为空表示
+    // 当前没有在显示大纲视图(容器整体收起,或容器展开着但显示的是文件
+    // 列表视图),此时不会有任何 ExtractOutline/IDWriteTextLayout/Arena 分配
+    // 发生;由 window.cpp 在切到/展开大纲视图时用 `outlineArena` 现场构造。
     OutlinePanel* outline;
     // 供 outline 对象自身与其内部 Vec<OutlineItem> 分配的 Arena,由调用方
     // (main.cpp)持有并传入指针;`Init` 延迟到首次打开侧栏才调用,默认关闭
@@ -251,45 +253,23 @@ struct WindowState {
     bool mainScrollbarHover;
     bool outlineScrollbarHover;
 
-    // 动态 z 序(2026-09-21):三个侧栏现在互相独立、可以同时打开并在屏幕上
-    // 重叠,再加上底部栏提示气泡,一共 4 个会互相遮挡的图层。每个图层在"变为
-    // 活动"的那一刻(侧栏从关闭/收起转为展开、气泡从无悬浮转为悬浮某个按钮)
-    // 用 ++nextZOrder 取一个号,渲染与命中测试都按这个号判先后:绘制按升序
+    // 动态 z 序(2026-09-21,2026-09-22 起文件列表/大纲合并进同一个容器 z 值):
+    // 左侧栏容器与历史记录侧栏可以同时打开并在屏幕上重叠,再加上底部栏提示
+    // 气泡,一共 3 个会互相遮挡的图层。每个图层在"变为活动"的那一刻(容器/
+    // 历史侧栏从关闭/收起转为展开、气泡从无悬浮转为悬浮某个按钮)用
+    // ++nextZOrder 取一个号,渲染与命中测试都按这个号判先后:绘制按升序
     // (后取号的最后画,浮在最上面),命中测试按降序(后取号的先吃点击)。
     // 计数器从 1 起号,未激活过的图层保持 0,不会与真实号码撞。
     u32 nextZOrder;
-    u32 outlineZOrder;
     u32 historyZOrder;
-    u32 folderZOrder;
+    u32 folderZOrder;  // 左侧栏容器(文件列表/大纲共用)的 z 值
     u32 bottomBarTooltipZOrder;
 
-    // T63b:大纲侧栏宽度支持拖拽调整(2026-09-18)。DIP,初始值由
-    // CreateMainWindow 设为 kOutlinePanelWidthDip 的默认值;拖拽范围钳制在
-    // [kOutlinePanelMinWidthDip, kOutlinePanelMaxWidthDip](见 outline_panel.h)。
-    float outlinePanelWidthDip;
-    bool outlinePanelResizing;            // 是否正在拖拽侧栏右边缘调宽度
-    float outlinePanelResizeStartMouseXDip;  // 拖拽起始时的鼠标横坐标(DIP)
-    float outlinePanelResizeStartWidthDip;   // 拖拽起始时的侧栏宽度(DIP)
-
-    // Outline drawer slide & mask fade animation state machine.
-    //
-    // 大纲抽屉式侧栏滑动与蒙层淡入淡出动画状态机。
-    OutlineAnimState outlineAnimState;
-
-    // Current normalized animation progress in [0.0f, 1.0f] (0.0f = closed, 1.0f = fully open).
-    //
-    // 当前归一化动画进度，取值范围 [0.0f, 1.0f] (0.0f 表示完全收起，1.0f 表示完全展开)。
-    float outlineAnimProgress;
-
-    // Millisecond timestamp when the current animation phase started (via GetTickCount64).
-    //
-    // 当前动画阶段开始时的毫秒时间戳 (通过 GetTickCount64 获取)。
-    ULONGLONG outlineAnimStartTick;
-
-    // Animation progress value when starting current transition (allows smooth reversal mid-flight).
-    //
-    // 动画本次过渡开始时的初始进度值 (支持动画进行中反向切换时的平滑过渡)。
-    float outlineAnimStartProgress;
+    // 2026-09-22 起:文件列表与大纲共用同一个左侧栏容器,容器自身的宽度/
+    // 展开收起动画统一复用下面 folderAnimState/folderPanelWidthDip 等字段
+    // (原文件夹侧栏专属,现在是容器的通用字段),不再各自维护一套。这个字段
+    // 只回答"容器当前展开着的时候,该显示文件列表还是大纲"。
+    SidebarContainerView activeLeftView;
 
     // 底部栏右侧状态区(2026-09-18 新增):与 `currentDocumentPath` 同步维护
     // 的当前文档字节数,换文档成功的每处都要一并更新,画进状态区的
@@ -411,11 +391,14 @@ struct WindowState {
     wchar_t folderRootName[MAX_PATH];  // 选中的文件夹根目录名称
     u32 folderCurrentItem;             // 当前打开文件匹配的条目下标; kInvalidIndex 表示无
     u32 folderHoverIndex;              // 鼠标悬浮的条目下标; kInvalidIndex 表示无
-    SidebarAnimState folderAnimState;  // 侧栏滑动动画状态机
+    // 以下几个字段现在是左侧栏容器本身的展开/收起动画与宽度(2026-09-22 起
+    // 文件列表与大纲视图共用,不再各自一套),字段名沿用"folder"前缀只是
+    // 历史原因(容器最早只装文件列表),行为上按"容器"理解。
+    SidebarAnimState folderAnimState;  // 容器展开/收起动画状态机
     float folderAnimProgress;          // 动画进度 [0.0f, 1.0f]
     ULONGLONG folderAnimStartTick;     // 动画开始时间戳
     float folderAnimStartProgress;     // 动画过渡初值
-    float folderPanelWidthDip;         // 侧栏宽度(DIP)
+    float folderPanelWidthDip;         // 容器宽度(DIP),挤压模式下从正文可用宽度中扣除同样多
     float folderScrollY;               // 纵向滚动偏移(DIP)
     bool folderScrollbarHover;         // 滚动条是否处于悬浮态
     bool folderPanelResizing;          // 是否正在拖拽调宽
@@ -614,16 +597,32 @@ float ClientWidthDip(HWND hwnd);
 float ClientHeightDip(HWND hwnd);
 
 /**
- * 计算文件夹侧栏（挤压模式）当前应从正文可用宽度中占用的宽度（DIP）。
+ * 计算左侧栏容器（挤压模式,文件列表/大纲视图共用同一份宽度与动画进度）
+ * 当前应从正文可用宽度中占用的宽度（DIP）。
  * 正文换行宽度需要在窗口内换文档（main.cpp::OpenDocumentInPlace）、窗口
- * 尺寸变化（OnSize）与侧栏自身动画/拖拽调宽（window.cpp 内部）这几处
+ * 尺寸变化（OnSize）与容器自身动画/拖拽调宽（window.cpp 内部）这几处
  * 保持同一口径，因此抽成导出函数，不各自重复算一遍。
  *
  * @param state 窗口运行期状态，可为 nullptr（此时返回 0）。
- * @return 挤压宽度（DIP），文件夹侧栏关闭时为 0。
+ * @return 挤压宽度（DIP），容器收起时为 0。
  * @example float w = markair::ContentWidthDip(markair::ClientWidthDip(hwnd)) - markair::FolderSqueezeWidthDip(state);
  */
 float FolderSqueezeWidthDip(const WindowState* state);
+
+/**
+ * 切换左侧栏容器展示的视图(文件列表 / 大纲),供底部栏两个按钮与 `Ctrl+\`
+ * 共用同一份行为:
+ *   - 容器收起 -> 展开容器并显示 `view`。
+ *   - 容器展开且当前正显示 `view` -> 收起容器。
+ *   - 容器展开但显示的是另一个视图 -> 不重启滑动动画,原地切到 `view`
+ *     (大纲视图按"零开销"约束现场构造/释放 `OutlinePanel`)。
+ *
+ * @param hwnd 主窗口句柄。
+ * @param state 窗口运行期状态。
+ * @param view 期望显示的视图。
+ * @example markair::ActivateLeftContainerView(hwnd, state, markair::SidebarContainerView::Outline);
+ */
+void ActivateLeftContainerView(HWND hwnd, WindowState* state, SidebarContainerView view);
 
 /**
  * 跑标准的 `GetMessage` 消息循环,直到窗口关闭(收到 `WM_QUIT`)。

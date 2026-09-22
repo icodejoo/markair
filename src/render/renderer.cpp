@@ -156,6 +156,10 @@ constexpr u32 kBottomBarLeftButtonCount = 8;
 // CopyPath 仅当前有打开文档时存在,不存在时不占位、不参与命中/绘制。
 constexpr u32 kBottomBarCopyPathIndex = 8;
 constexpr u32 kBottomBarHistoryIndex = 9;
+// 左侧最靠前的两个按钮下标(与 shell/bottom_bar.h::BottomBarButton::FileList/
+// Outline 保持一致),禁用态判定要用到。
+constexpr u32 kBottomBarFileListIndex = 0;
+constexpr u32 kBottomBarOutlineIndex = 1;
 constexpr float kBottomBarButtonWidthDip = kBottomBarHeightDip;  // 正方形按钮,与栏高相等
 constexpr float kBottomBarIconSizeDip = 14.0f;   // 图标绘制区正方形边长(右侧固定按钮群)
 // 左侧 8 个按钮整体比右侧固定按钮群小 2px,
@@ -809,32 +813,6 @@ void Renderer::DrawFindBar(float targetWidth, const wchar_t* statusText, u32 sta
     }
 }
 
-void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
-                                       ID2D1SolidColorBrush* maskBrush) {
-    // 与 DrawOutlinePanel 同一个"侧栏是否打开"判断依据,侧栏关闭时本函数
-    // 直接返回,不产生任何额外绘制(维持 T63"关闭时开销为 0"的设计)。
-    // 注意:不能拿 outlineItemCount == 0 当"侧栏未打开"的判据——大纲为空的
-    // 文档(或欢迎屏空状态)打开侧栏时 itemCount 恒为 0,之前误把这种情况当
-    // "侧栏关闭"直接跳过,导致点击大纲按钮蒙层/侧栏都不出现(真实 bug)。
-    if (!overlay_) return;
-    if (!maskBrush || !target_) return;
-
-    float animProgress = overlay_->outlineAnimProgress;
-    if (animProgress <= 0.0001f) return;
-
-    // 只盖侧栏当前可见矩形之外的正文区域,侧栏本身随后单独画(DrawOutlinePanel),
-    // 不会被这层蒙层盖住。滑动动画期间,蒙层从侧栏当前可见右边缘开始向右铺满。
-    //
-    // Only cover the text area outside the visible sliding outline panel.
-    float visibleWidth = overlay_->outlinePanelWidthDip * animProgress;
-    if (visibleWidth < 0.0f) visibleWidth = 0.0f;
-    if (visibleWidth > overlay_->outlinePanelWidthDip) visibleWidth = overlay_->outlinePanelWidthDip;
-
-    D2D1_RECT_F maskRect =
-        D2D1::RectF(visibleWidth, 0.0f, targetWidth, targetHeight);
-    target_->FillRectangle(maskRect, maskBrush);
-}
-
 // 自绘滚动条滑块(方案A,见类头文件注释):按视口/内容尺寸算出滑块矩形,
 // 内容不超过一屏时不画。几何公式与 shell/scrollbar.h::CalcScrollbarMetrics
 // 保持一致(纯数字,那边可单测;这里只负责按结果画一个直角轨道与圆角滑块)。
@@ -887,9 +865,16 @@ void Renderer::DrawOutlinePanel(float targetHeight,
     float animProgress = overlay_->outlineAnimProgress;
     if (animProgress <= 0.0001f) return;
 
-    // 悬浮覆盖:侧栏浮在正文左侧上方,不改变正文视口宽度,几何与主内容布局
-    // 完全无关(不读取任何 BlockGeometry 几何字段),开关侧栏因此是纯重绘。
-    // T63b:宽度可拖拽调整,用外壳层传来的实际当前宽度。
+    // 2026-09-22 起:大纲随左侧栏容器改为挤压模式,不再悬浮覆盖正文——
+    // 容器展开时正文可用宽度已经在外壳层让出了同样多空间(FolderSqueezeWidthDip)。
+    // 高度处理与 DrawFolderPanel 同一手法:让出底部栏那一条,否则侧栏自己的
+    // 背景会把底部栏(唯一能收起它的入口)盖在下面。
+    targetHeight -= kBottomBarHeightDip;
+    if (targetHeight < 0.0f) targetHeight = 0.0f;
+
+    // 宽度/动画进度都是容器共用的那一份(外壳层从 folderPanelWidthDip/
+    // folderAnimProgress 抄过来,见 renderer.h 字段注释),不是大纲自己
+    // 独立维护的一套。
     float panelWidth = overlay_->outlinePanelWidthDip;
 
     // Apply horizontal translation for slide drawer animation.
@@ -1937,13 +1922,22 @@ float BottomBarButtonLeftDip(u32 index, float targetWidth) {
 // 底部操作栏(2026-09-18 改版:左图标 + 右状态):固定占据客户区底部一条
 // 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧最右边是历史按钮,
 // 中间是状态文字(当前文档路径 + 大小)。
+// 禁用态图标透明度(纯淡化,不引入新配色):与自绘滚动条 Idle/Active 两档
+// 透明度是同一个"用透明度表达状态"的思路,不新造一套禁用色。
+constexpr float kBottomBarDisabledIconOpacity = 0.35f;
+
 void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
                               ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                               const wchar_t* documentPath, u64 documentSizeBytes,
-                              bool pathCopied) {
+                              bool pathCopied, bool folderContextAvailable) {
     if (!target_ || !bgBrush) return;
     bool hasDocument = documentPath && documentPath[0] != L'\0';
+    // 禁用态判定与 shell/bottom_bar.h::IsBottomBarFileListEnabled/
+    // IsBottomBarOutlineEnabled 同一套口径,数值常量各自复制一份——render 不
+    // 反向 include shell 头文件(与本文件顶部其余按钮几何常量同一约束)。
+    bool fileListEnabled = hasDocument || folderContextAvailable;
+    bool outlineEnabled = hasDocument;
 
     float barTop = targetHeight - kBottomBarHeightDip;
     D2D1_RECT_F barRect = D2D1::RectF(0.0f, barTop, targetWidth, targetHeight);
@@ -1986,10 +1980,18 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
             // 但最终矩形经 IconButtonRectDip 得到,图标内容经 paintIcon
             // 回调(PaintBottomBarIcon,见文件末尾实现)画出,不再由这里直接
             // 内联一整套 switch。
+            // 禁用态(FileList/Outline 无文档/无文件夹上下文时)只淡化图标
+            // 透明度,不新造一套禁用色——与自绘滚动条 Idle/Active 同一思路。
+            bool isDisabled = (i == kBottomBarFileListIndex && !fileListEnabled) ||
+                               (i == kBottomBarOutlineIndex && !outlineEnabled);
+            if (isDisabled) iconBrush->SetOpacity(kBottomBarDisabledIconOpacity);
+
             IconButton btn{btnW, 0.0f, kBottomBarTooltipLabels[i], &Renderer::PaintBottomBarIcon, nullptr};
             ButtonRectDip iconRect = IconButtonRectDip(btn, centerX, iconCenterY);
             BottomBarIconPaintCtx ctx{i, pathCopied, iconBrush, bgBrush};
             if (btn.paintIcon) btn.paintIcon(this, iconRect, &ctx);
+
+            if (isDisabled) iconBrush->SetOpacity(1.0f);
         }
     }
 
@@ -2720,7 +2722,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                             bool mainScrollbarActive, const wchar_t* documentPath,
                             u64 documentSizeBytes, u32 bottomBarHoverButtonIndex,
                             bool bottomBarPathCopied, bool welcomeScreen,
-                            bool welcomeButtonHover, bool welcomeFolderButtonHover) {
+                            bool welcomeButtonHover, bool welcomeFolderButtonHover,
+                            bool folderContextAvailable) {
     if (!EnsureRenderTarget(hwnd)) return false;
 
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
@@ -2795,27 +2798,14 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     target_->CreateSolidColorBrush(palette_->outlineHighlightText, &outlineHighlightTextBrush);
     target_->CreateSolidColorBrush(palette_->historyRowButtonBackground, &historyRowButtonBgBrush);
 
-    // Fade-in / fade-out alpha animation for outline & history & folder mask overlay.
+    // Fade-in / fade-out alpha animation for the history mask overlay.
     //
-    // 大纲/历史/文件夹侧栏共用同一个蒙层画笔,透明度必须覆盖"当前所有用到它的
-    // 侧栏"的动画进度——以后再新增第四个用这个画笔的侧栏时,也要记得在这里加一行,
-    // 否则会重演"只开某个侧栏时蒙层恒透明"的漏算 bug。
+    // 历史侧栏是当前唯一还用这个蒙层画笔的悬浮抽屉——2026-09-22 起大纲随左
+    // 侧栏容器改为挤压模式,不再带蒙层,不再计入这里;左侧栏容器(文件列表/
+    // 大纲共用)本身也从来不带蒙层。以后再新增别的悬浮抽屉侧栏时记得在这里
+    // 加一行,否则会重演"只开某个侧栏时蒙层恒透明"的漏算 bug。
     D2D1_COLOR_F maskColor = palette_->outlineOverlayMaskBackground;
-    float animProgress = 0.0f;
-    // 不能再拿 itemCount > 0 当"侧栏打开"判据(空大纲/空历史/欢迎屏空状态
-    // 打开侧栏时 itemCount 恒为 0)——outlineAnimProgress/historyAnimProgress
-    // 本身在侧栏关闭时已经是 0(见 window.cpp 组装 overlay 处),直接读它们
-    // 就够了,itemCount 只影响画不画条目,不该影响蒙层透明度。
-    if (overlay_ && overlay_->outlineAnimProgress > animProgress) {
-        animProgress = overlay_->outlineAnimProgress;
-    }
-    if (overlay_ && overlay_->historyAnimProgress > animProgress) {
-        animProgress = overlay_->historyAnimProgress;
-    }
-    // 文件夹侧栏动画进度此前漏算,导致单独打开文件夹侧栏时蒙层恒为全透明。
-    if (overlay_ && overlay_->folderAnimProgress > animProgress) {
-        animProgress = overlay_->folderAnimProgress;
-    }
+    float animProgress = overlay_ ? overlay_->historyAnimProgress : 0.0f;
     if (animProgress < 0.0f) animProgress = 0.0f;
     if (animProgress > 1.0f) animProgress = 1.0f;
     maskColor.a *= animProgress;
@@ -2901,9 +2891,9 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 叠加层(查找条/窗口内提示)不随内容平移——先恢复 Identity 变换。
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
 
-    // 大纲或历史侧栏打开时正文整块被蒙层盖住、也不可滚动，此时正文滚动条不画。
-    bool outlineOpen = overlay_ && overlay_->outlineItems && overlay_->outlineItemCount > 0 &&
-                       overlay_->outlineAnimProgress > 0.0001f;
+    // 历史侧栏打开时正文整块被蒙层盖住、也不可滚动，此时正文滚动条不画。
+    // 2026-09-22 起大纲随左侧栏容器改为挤压模式(与文件夹侧栏同类),不再
+    // 盖住正文,不再计入这条判断。
     bool historyOpen = overlay_ && overlay_->historyEntries && overlay_->historyItemCount > 0 &&
                        overlay_->historyAnimProgress > 0.0001f;
 
@@ -2912,7 +2902,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // leftPaddingDip 已经是外壳层减去过 kContentPaddingDip 的"有效滚动偏移",
     // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
     // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
-    if (!welcomeScreen && !outlineOpen && !historyOpen) {
+    if (!welcomeScreen && !historyOpen) {
         float scrollbarHeight = targetSize.height - kBottomBarHeightDip - 2.0f * leftPaddingDip;
         if (scrollbarHeight < 0.0f) scrollbarHeight = 0.0f;
         // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
@@ -2955,7 +2945,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         target_->CreateSolidColorBrush(palette_->bottomBarDivider, &bottomBarDividerBrush);
         DrawBottomBar(targetSize.width, targetSize.height, bottomBarBgBrush, bottomBarIconBrush,
                       bottomBarTextBrush, bottomBarDividerBrush, documentPath, documentSizeBytes,
-                      bottomBarPathCopied);
+                      bottomBarPathCopied, folderContextAvailable);
         if (bottomBarIconBrush) bottomBarIconBrush->Release();
         if (bottomBarDividerBrush) bottomBarDividerBrush->Release();
     }
@@ -2976,28 +2966,28 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         }
     }
 
-    // 可互相遮挡的 4 个图层按动态 z 序绘制。之所以不再写死"大纲→历史→文件夹
-    // →气泡"的调用顺序:三个侧栏现在可以同时打开、在屏幕上真实重叠,谁该压在
-    // 上面取决于"谁最近被激活",这个信息只有外壳层知道(ShellOverlay 里的
-    // 那四个 z 值)。条目数最多 4,直接开栈上定长数组 + 插入排序,渲染路径
-    // 不做任何堆分配。每个侧栏的蒙层与面板是一个整体,同一个 case 里连着画。
-    enum LayerKind : u32 { kLayerOutline, kLayerHistory, kLayerFolder, kLayerBottomBarTooltip };
+    // 可互相遮挡的 3 个图层按动态 z 序绘制。之所以不再写死"容器→历史→气泡"
+    // 的调用顺序:左侧栏容器与历史记录侧栏现在可以同时打开、在屏幕上真实
+    // 重叠,谁该压在上面取决于"谁最近被激活",这个信息只有外壳层知道
+    // (ShellOverlay 里的那几个 z 值)。条目数最多 3,直接开栈上定长数组 +
+    // 插入排序,渲染路径不做任何堆分配。2026-09-22 起文件列表与大纲共用
+    // 同一个容器 z 值(folderZOrder),同一个 kLayerContainer case 里按
+    // containerShowsOutline 分派给其中一个 DrawXxxPanel,不再是两个各自
+    // 独立入选的图层。
+    enum LayerKind : u32 { kLayerHistory, kLayerContainer, kLayerBottomBarTooltip };
     struct ZLayer {
         u32 z;
         u32 kind;
     };
-    ZLayer layers[4];
+    ZLayer layers[3];
     u32 layerCount = 0;
     // 入选条件与各 DrawXxx 自己的提前返回判据保持一致(动画进度 > 0.0001f),
     // 免得给一个当帧根本不画的图层白排一次序。
-    if (overlay_ && overlay_->outlineAnimProgress > 0.0001f) {
-        layers[layerCount++] = ZLayer{overlay_->outlineZOrder, kLayerOutline};
-    }
     if (overlay_ && overlay_->historyAnimProgress > 0.0001f) {
         layers[layerCount++] = ZLayer{overlay_->historyZOrder, kLayerHistory};
     }
     if (overlay_ && overlay_->folderAnimProgress > 0.0001f) {
-        layers[layerCount++] = ZLayer{overlay_->folderZOrder, kLayerFolder};
+        layers[layerCount++] = ZLayer{overlay_->folderZOrder, kLayerContainer};
     }
     // 气泡不依赖 overlay_(底部栏本身就是常驻的,没有任何侧栏时也要能弹提示),
     // z 值缺省为 0,单独悬浮时它是唯一图层,顺序无所谓。
@@ -3017,18 +3007,6 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     }
     for (u32 i = 0; i < layerCount; ++i) {
         switch (layers[i].kind) {
-            case kLayerOutline: {
-                // 蒙层压暗侧栏之外的正文,再画侧栏本体——这两步之间的先后是
-                // 固定的(蒙层在下),跟着整个图层一起在 z 序里移动。
-                DrawOutlineOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
-                bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
-                DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
-                                 outlineHighlightBgBrush, outlineHighlightTextBrush,
-                                 scrollbarTrackIdleBrush,
-                                 outlineScrollbarActive ? scrollbarThumbActiveBrush
-                                                        : scrollbarThumbIdleBrush);
-                break;
-            }
             case kLayerHistory: {
                 DrawHistoryOverlayMask(targetSize.width, targetSize.height, outlineOverlayMaskBrush);
                 bool historyScrollbarActive = overlay_->historyScrollbarActive;
@@ -3039,17 +3017,27 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
                                                         : scrollbarThumbIdleBrush);
                 break;
             }
-            case kLayerFolder: {
+            case kLayerContainer: {
                 // 挤压模式,不画悬浮蒙层——正文宽度已经在外壳层按
-                // FolderSqueezeWidthDip 收窄让出这块空间,见 DrawFolderPanel 注释。
-                bool folderScrollbarActive = overlay_->folderScrollbarActive;
-                DrawFolderPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
-                                outlineHighlightBgBrush, copyHoverBgBrush,
-                                historyRowButtonBgBrush,
-                                scrollbarTrackIdleBrush,
-                                folderScrollbarActive ? scrollbarThumbActiveBrush
-                                                      : scrollbarThumbIdleBrush,
-                                overlayBarBgBrush, overlayBarTextBrush);
+                // FolderSqueezeWidthDip 收窄让出这块空间。同一时刻只显示
+                // 文件列表或大纲其中一个视图,由 containerShowsOutline 分派。
+                if (overlay_->containerShowsOutline) {
+                    bool outlineScrollbarActive = overlay_->outlineScrollbarActive;
+                    DrawOutlinePanel(targetSize.height, outlinePanelBgBrush, textBrush,
+                                     outlineHighlightBgBrush, outlineHighlightTextBrush,
+                                     scrollbarTrackIdleBrush,
+                                     outlineScrollbarActive ? scrollbarThumbActiveBrush
+                                                            : scrollbarThumbIdleBrush);
+                } else {
+                    bool folderScrollbarActive = overlay_->folderScrollbarActive;
+                    DrawFolderPanel(targetSize.width, targetSize.height, outlinePanelBgBrush, textBrush,
+                                    outlineHighlightBgBrush, copyHoverBgBrush,
+                                    historyRowButtonBgBrush,
+                                    scrollbarTrackIdleBrush,
+                                    folderScrollbarActive ? scrollbarThumbActiveBrush
+                                                          : scrollbarThumbIdleBrush,
+                                    overlayBarBgBrush, overlayBarTextBrush);
+                }
                 break;
             }
             case kLayerBottomBarTooltip:

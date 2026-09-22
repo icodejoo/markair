@@ -209,6 +209,34 @@ inline BottomBarButton HitTestBottomBar(float clientWidthDip, float pointXDip, b
 }
 
 /**
+ * 判断底部栏"文件列表"按钮当前是否可用（纯函数）。
+ * 有文档打开，或已有文件夹上下文（例如穿透扫描过一个文件夹，即使其中
+ * 有多个文件而没有自动打开任何一个）时可用；两者都没有（如冷启动且无
+ * 历史记录的欢迎屏）时禁用——点了也没有目录/文件可看。
+ *
+ * @param hasDocument 当前是否有文档打开。
+ * @param hasFolderContext 是否已有文件夹上下文（如 folderRootPath 非空）。
+ * @return 可用返回 true。
+ * @example bool enabled = markair::IsBottomBarFileListEnabled(hasDoc, state->folderRootPath[0] != 0);
+ */
+inline bool IsBottomBarFileListEnabled(bool hasDocument, bool hasFolderContext) {
+    return hasDocument || hasFolderContext;
+}
+
+/**
+ * 判断底部栏"大纲"按钮当前是否可用（纯函数）。
+ * 大纲内容来自当前文档的标题结构，没有打开任何文档时没有内容可提取，
+ * 禁用。
+ *
+ * @param hasDocument 当前是否有文档打开。
+ * @return 可用返回 true。
+ * @example bool enabled = markair::IsBottomBarOutlineEnabled(hasDoc);
+ */
+inline bool IsBottomBarOutlineEnabled(bool hasDocument) {
+    return hasDocument;
+}
+
+/**
  * Format file size in bytes to human-readable string (e.g. "856.0 KB" / "2.3 MB"). Pure function.
  *
  * 将文件字节大小格式化为易读字符串（如 "856.0 KB" 或 "2.3 MB"）。纯函数。

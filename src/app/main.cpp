@@ -754,14 +754,22 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
     SetPropW(hwnd, kPathHashPropName,
              reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(HashPathCaseInsensitive(normalizedPath))));
 
+    // 容器展示哪个视图统一交给 ActivateLeftContainerView 决定,与 wWinMain
+    // 首窗口路径同一口径(见那边的详细注释)——本函数所有实际调用点
+    // (打开文件对话框/文件列表"新窗口打开"/历史记录/拖拽等)传入的都是
+    // 单文件路径,这里的文件夹分支只是防御性保留,不做单文件促成扫描。
     DWORD attrs = GetFileAttributesW(normalizedPath);
     if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        markair::OpenAndScanFolder(hwnd, &bundle->windowState, normalizedPath, true /* openSidebar */);
+        markair::OpenAndScanFolder(hwnd, &bundle->windowState, normalizedPath, false /* openSidebar */);
+        markair::ActivateLeftContainerView(hwnd, &bundle->windowState, markair::SidebarContainerView::FileList);
     } else {
         wchar_t parentDir[MAX_PATH]{};
         ExtractDirectory(normalizedPath, parentDir, MAX_PATH);
         if (parentDir[0] != 0) {
             markair::OpenAndScanFolder(hwnd, &bundle->windowState, parentDir, false /* openSidebar */);
+        }
+        if (fileOpened) {
+            markair::ActivateLeftContainerView(hwnd, &bundle->windowState, markair::SidebarContainerView::Outline);
         }
     }
 
@@ -868,10 +876,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     }
     bool autoOpenedFromHistory = false;
     const wchar_t* effectiveFilePath = benchArgs.filePath;
-    if (!hasTarget && !benchArgs.benchEnabled && g_recentFiles.count > 0) {
-        effectiveFilePath = g_recentFiles.entries[0].path;
-        hasTarget = true;
-        autoOpenedFromHistory = true;
+    // 无命令行参数时,依次尝试历史记录里的条目,直到找到一个真正能打开的
+    // 文件(裁决 1.3):打不开的条目弹窗询问是否删除,与手动点击该条目失败
+    // 时完全相同的确认框(见 window.cpp::ConfirmAndRemoveMissingHistoryEntry),
+    // 用户选择保留则停止尝试,退化为欢迎屏(1.1)。此刻窗口尚未创建,
+    // MessageBoxW 用 nullptr 属主(合法,只是不会居中在某个窗口上)。
+    if (!hasTarget && !benchArgs.benchEnabled) {
+        while (g_recentFiles.count > 0) {
+            const wchar_t* candidate = g_recentFiles.entries[0].path;
+            markair::FileMap probe;
+            bool candidateOpenable = probe.Open(candidate) == markair::FileMapError::None;
+            if (candidateOpenable) {
+                probe.Close();
+                effectiveFilePath = candidate;
+                hasTarget = true;
+                autoOpenedFromHistory = true;
+                break;
+            }
+            int choice = MessageBoxW(nullptr, L"文件不存在，是否从历史记录中删除？", L"提示",
+                                     MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+            if (choice != IDYES) break;  // 用户选择保留,不继续尝试下一条
+            markair::RemoveRecentFileAt(&g_recentFiles, 0);
+            markair::SaveRecentFiles(g_recentFiles);  // 窗口尚未创建,直接同步落盘
+        }
     }
 
     // T13:同一文件路径的命名互斥体 + 尽力而为的"前置已有窗口"。每个文件
@@ -886,6 +913,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         }
         uint64_t pathHash = HashPathCaseInsensitive(normalizedPath);
         fileMutex = AcquireFileMutexAndMaybeFocusExisting(pathHash);
+    }
+
+    // 目标是文件夹、且里面刚好只有一个 markdown 文件时,等价于直接打开
+    // 那个文件(裁决 2.2:单文件与"文件夹里只有一个文件"同一效果——正文+
+    // 大纲容器,而不是文件列表多文件态)。在这里(尚未决定 fileOpened/文档
+    // 加载之前)就把 normalizedPath 换成那个文件,后续 fileMap.Open/文档
+    // 加载全部按"单文件"路径走,不需要再单独分支;`folderTargetIsDirectory`
+    // 保留 true 的情形只剩"零个或多个 markdown 文件的文件夹"这一种。
+    bool folderTargetIsDirectory = false;
+    if (hasTarget) {
+        DWORD attrs = GetFileAttributesW(normalizedPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            folderTargetIsDirectory = true;
+            markair::Arena promoArena;
+            promoArena.Init(4 * 1024 * 1024);
+            markair::Vec<markair::FolderEntry> promoEntries;
+            markair::u32 promoCount =
+                markair::ScanMarkdownFolder(normalizedPath, &promoArena, &promoEntries);
+            if (promoCount == 1) {
+                wcscpy_s(normalizedPath, promoEntries[0].fullPath);
+                folderTargetIsDirectory = false;
+            }
+        }
     }
 
     // 单实例 IPC 汇聚(P0):带文件参数启动、且不是 bench 场景时,先探测
@@ -1054,10 +1104,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     markair::Arena clipboardScratch;
     clipboardScratch.Init(16 * 1024 * 1024);
 
-    // T63:大纲侧栏专用 Arena,刻意**不在这里 Init**——`Init` 只是
-    // `VirtualAlloc` 预留地址空间(见 arena.cpp),但"默认关闭时不分配任何
-    // Arena"这条验收要求的是字面意义上"不调用 Init",因此延迟到用户第一次
-    // 按 `Ctrl+\` 打开侧栏时,由 window.cpp 的 ToggleOutlinePanel 现场调用。
+    // T63:大纲专用 Arena,刻意**不在这里 Init**——`Init` 只是
+    // `VirtualAlloc` 预留地址空间(见 arena.cpp),但"不是当前视图时不分配
+    // 任何 Arena"这条验收要求的是字面意义上"不调用 Init",因此延迟到用户
+    // 第一次切到/展开大纲视图时,由 window.cpp 的 ConstructOutlinePanel
+    // (经 ActivateLeftContainerView)现场调用。
     markair::Arena outlineArena;
 
     // T65:历史前进/后退栈,纯数据结构,直接放栈上,不需要 Arena。
@@ -1210,22 +1261,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         markair::RequestRecentFilesSave(hwnd, &windowState);
     }
 
-    // 未带文件参数、自动打开历史记录第一条时的收尾:成功则让历史侧栏直接
-    // 以展开态出现(不放开屏动画);目标文件已不存在则走与手动点击该条目
-    // 完全相同的"文件不存在,是否删除?"流程——同一套失败处理。
-    // CreateMainWindow 内部会把 historyAnimState 重置为 Closed,所以这里的
-    // 覆盖必须在它返回之后才生效。
-    if (autoOpenedFromHistory) {
-        if (fileOpened) {
-            windowState.historyAnimState = markair::SidebarAnimState::Open;
-            windowState.historyAnimProgress = 1.0f;
-        } else {
-            markair::ConfirmAndRemoveMissingHistoryEntry(hwnd, &windowState, 0);
-            if (windowState.recentFiles->count > 0) {
-                windowState.historyAnimState = markair::SidebarAnimState::Open;
-                windowState.historyAnimProgress = 1.0f;
-            }
-        }
+    // 未带文件参数、自动打开历史记录第一条时的收尾(1.2):目标文件在上面
+    // 的重试循环里已经确认真正能打开,让历史侧栏直接以展开态出现(不放
+    // 开屏动画)。CreateMainWindow 内部会把 historyAnimState 重置为
+    // Closed,所以这里的覆盖必须在它返回之后才生效。fileOpened 理论上
+    // 此刻应恒为 true(重试循环已经探测过);万一探测之后、真正打开之前
+    // 文件被外部删除这种极端竞态命中,不再二次重试,直接按未打开处理
+    // (退化为欢迎屏,不弹第二次确认框)。
+    if (autoOpenedFromHistory && fileOpened) {
+        windowState.historyAnimState = markair::SidebarAnimState::Open;
+        windowState.historyAnimProgress = 1.0f;
         InvalidateRect(hwnd, nullptr, FALSE);
     }
 
@@ -1240,16 +1285,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         markair::BeginUpdateCheck(hwnd);
     }
 
-    // 命令行传入的是文件夹路径时，自动穿透扫描并展开文件夹侧栏；若是单文件，扫描兄弟目标文件（不展开侧栏）。
+    // 命令行传入的是文件夹路径时,自动穿透扫描该文件夹;若是单文件(含
+    // 历史记录还原、以及"文件夹里只有一个 markdown 文件"被上面提前
+    // 促成单文件的情形),扫描兄弟目标文件所在目录。容器展示哪个视图
+    // 统一交给 ActivateLeftContainerView 决定(不再由 OpenAndScanFolder
+    // 的 openSidebar 参数兼管动画展开),folderTargetIsDirectory 为 true
+    // 时是"零个或多个 markdown 文件的文件夹"(裁决 2.2):正文保持欢迎屏
+    // 空态,展开文件列表容器,大纲按钮因无文档而禁用。
     if (hasTarget) {
-        DWORD attrs = GetFileAttributesW(normalizedPath);
-        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-            markair::OpenAndScanFolder(hwnd, &windowState, normalizedPath, true /* openSidebar */);
+        if (folderTargetIsDirectory) {
+            markair::OpenAndScanFolder(hwnd, &windowState, normalizedPath, false /* openSidebar */);
+            markair::ActivateLeftContainerView(hwnd, &windowState, markair::SidebarContainerView::FileList);
         } else {
             wchar_t parentDir[MAX_PATH]{};
             ExtractDirectory(normalizedPath, parentDir, MAX_PATH);
             if (parentDir[0] != 0) {
                 markair::OpenAndScanFolder(hwnd, &windowState, parentDir, false /* openSidebar */);
+            }
+            if (fileOpened) {
+                markair::ActivateLeftContainerView(hwnd, &windowState, markair::SidebarContainerView::Outline);
             }
         }
     }
