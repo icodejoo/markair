@@ -1,6 +1,14 @@
-# markair CI：构建 + 单元测试 + 性能门禁（M0 T16，M1 T44 扩展了 BENCH-B 内存门禁
-# 与 run_fuzz.ps1 畸形语料门禁，两项都已并入 ci\check_budget.ps1 内部，
-# 这里不需要拆成独立 job/step——check_budget.ps1 本身就是单一入口）。
+# markair CI + Release：单文件 workflow，拆成两个 job（M0 T16 构建门禁，
+# M1 T44 扩展了 BENCH-B 内存门禁与 run_fuzz.ps1 畸形语料门禁，两项都已并入
+# ci\check_budget.ps1 内部，这里不需要拆成独立 job/step——check_budget.ps1
+# 本身就是单一入口；2026-09-22 合并 Release 发布流程）。
+#
+# 说明：原本 ci.yml（构建+单测+性能门禁）与 release.yml（打包发布 exe）是
+# 两个独立 workflow，都在源码 push 到 master 时被同一次 push 同时触发，
+# 各自完整编译一次 markair.exe——重复构建，浪费 CI 资源。现在合并成本文件
+# 一个 workflow、两个 job：job1（build-and-check-budget）负责构建 + 单测 +
+# 性能门禁，job2（build-release-exe）复用 job1 编译好的 markair.exe 产物
+# 做验收+打包+发布，不再重新 configure/build 一次。
 #
 # 说明：本 workflow 未在本机实际跑通（本机没有 GitHub Actions runner），
 # 只做过 YAML 语法/字段结构的人工核对，实际生效情况需在真实 push/PR 时观察。
@@ -25,13 +33,28 @@
 # （08-m3-tasks.md T83 明文禁止）。真正需要区分本机/CI 两套阈值时，用
 # check_budget.ps1 的 -Strict 开关（当前只影响暖启动与 leak_probe 两项的
 # 判据严格度，见脚本内注释），而不是在这个 workflow 文件里维护第二套数字。
+#
+# ——— Release 发布流程（原 release.yml，2026-09-22 并入本文件）———
+# 用户裁决(2026-09-19,2026-09-22 更新):源码推送到 master 即自动构建并
+# 发布,不要求先手动打 version tag。2026-09-22 起改为按 commit 生成独立
+# Release——每次触发都用当前 commit 的短 sha 生成一个新 tag/Release,不再
+# 覆盖同一个 tag 的历史产物,每次推送都保留可追溯的独立版本(不需要再手动
+# 打 tag 才能留历史;workflow_dispatch 仍保留作为手动重跑入口)。paths 过滤
+# 跳过纯文档/图片/产物类改动,与全局 CLAUDE.md 里 commit 前 code-review 的
+# "源码范围判断"同一条原则:不产源码变化就不重新构建发布。
 name: CI
 
+# push/pull_request 覆盖原 ci.yml 的触发条件（job1 对任何 push/PR 都要跑，
+# 不做 paths 收窄）；workflow_dispatch 覆盖原 release.yml 的手动全量重跑
+# 入口（触发时 job1+job2 都跑）。源码路径过滤（原 release.yml 的 paths）
+# 现在放到 job2 内部用 dorny/paths-filter 判断，因为同一个 push 事件下
+# job1 和 job2 需要不同的触发范围，没法在顶层用一套 paths 同时满足两者。
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch: {}
 
 jobs:
   build-and-check-budget:
@@ -58,7 +81,7 @@ jobs:
       # 不变的 vendored 源码。key 按 CMakeLists/源码内容哈希。
       #
       # 拆成 restore(这里)+ save(check_budget.ps1 那一步之后、带
-      # if: success())两步,理由同 release.yml 同一处改动:一体式
+      # if: success())两步,理由同 release job 同一处改动:一体式
       # actions/cache 会在门禁失败时仍把"坏"build 目录存回缓存,污染下次
       # restore-keys 前缀回退的命中结果。restore-keys 前缀回退命中生成器
       # 不匹配的陈旧缓存这条风险,由 check_budget.ps1 内新加的"CMakeCache.txt
@@ -72,7 +95,7 @@ jobs:
       # source content.
       #
       # Split into restore (here) + save (after the check_budget.ps1 step,
-      # gated on if: success()), same reasoning as the release.yml change:
+      # gated on if: success()), same reasoning as the release job's change:
       # the single-step actions/cache form would save a "bad" build dir back
       # even when the budget gate fails, poisoning the next restore-keys
       # prefix fallback. The generator-mismatch risk from that prefix
@@ -139,3 +162,222 @@ jobs:
         with:
           path: build
           key: ${{ steps.restore-cache.outputs.cache-primary-key }}
+
+      # 供下面 build-release-exe job 复用,避免其重新 configure/build 一次
+      # markair.exe——同一次 push 里两个 job 各编译一遍是纯浪费。只上传
+      # exe 本身(job2 还需要 LICENSE/THIRD-PARTY-NOTICES 走 verify_release.ps1
+      # 自己的打包逻辑,不在这里重复)。retention-days 设得短,因为这只是
+      # job 间的临时传递产物,不是最终发布物——最终发布物由 job2 自己再上传
+      # 一份 markair-exe/markair-release-zip artifact,用默认保留期。
+      #
+      # Uploaded for the build-release-exe job below to reuse, so it doesn't
+      # have to configure/build markair.exe a second time — compiling it
+      # twice in the same push is pure waste. Only the exe itself (job2 still
+      # needs LICENSE/THIRD-PARTY-NOTICES, handled by verify_release.ps1's own
+      # packaging logic, not duplicated here). Short retention-days because
+      # this is only a temporary inter-job handoff artifact, not the final
+      # release asset — job2 uploads its own markair-exe/markair-release-zip
+      # artifact with the default retention for that.
+      - name: 上传 markair.exe 供发布 job 复用 / Upload markair.exe for the release job to reuse
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markair-built-exe
+          path: build\src\Release\markair.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  build-release-exe:
+    # 依赖 job1 构建+门禁通过,且复用 job1 编译好的 markair.exe,不重新编译。
+    needs: build-and-check-budget
+    # markair 是 Win32 桌面应用,必须在 Windows runner 上构建。
+    #
+    # markair is a Win32 desktop app; must build on a Windows runner.
+    runs-on: windows-latest
+
+    # GitHub Release 创建/上传附件需要 contents:write。放在 job 级别而不是
+    # workflow 顶层——job1(build-and-check-budget)不需要这个权限,按最小
+    # 权限原则只给需要发布 Release 的 job2。
+    #
+    # Creating a GitHub Release and uploading its assets needs contents:write.
+    # Scoped at job level, not workflow top level — job1 doesn't need this
+    # permission; least-privilege means only job2 (which publishes the
+    # Release) gets it.
+    permissions:
+      contents: write
+
+    # 触发条件:workflow_dispatch 直接跑(手动全量重跑入口);push 到 master
+    # 则还要求 paths-filter(下面第一步)判定命中源码相关路径才跑——对齐
+    # 原 release.yml 的 paths 过滤(跳过纯文档/图片/产物类改动)。push 事件
+    # 里 job1 要求"每次都跑"、job2 要求"只有源码路径变化才跑",两者范围
+    # 不同,没法在 workflow 顶层用一套 paths 同时满足,所以用 job 级 if +
+    # paths-filter 在 job2 内部单独判断。
+    #
+    # Trigger: workflow_dispatch always runs it (manual full re-run entry
+    # point); a push to master additionally requires the paths-filter step
+    # below to report a hit on source-relevant paths — matching the original
+    # release.yml paths filter (skip pure doc/image/artifact-only changes).
+    # job1 needs "run on every push" while job2 needs "run only when source
+    # paths change" — different scopes that can't both be satisfied by one
+    # top-level paths list, hence the job-level if + paths-filter inside job2.
+    if: |
+      needs.build-and-check-budget.result == 'success' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/master')
+      )
+
+    steps:
+      - name: 拉取代码 / Checkout
+        uses: actions/checkout@v4
+
+      # 判断本次改动是否命中"源码相关路径",对齐原 release.yml 的 paths
+      # 过滤列表。原列表里的 .github/workflows/release.yml 一项,在合并后
+      # 这个文件本身就没了,改成盯本文件 .github/workflows/ci.yml 自身——
+      # workflow 定义改了也应该重新发布一次验证。workflow_dispatch 触发时
+      # 不看这个过滤结果(上面 job if 已经放行),这一步仍会跑但其输出不影响
+      # 是否继续,只是为了让后续步骤统一使用同一套逻辑。
+      #
+      # Detects whether this change touches "source-relevant paths",
+      # matching the original release.yml paths filter list. That list's
+      # .github/workflows/release.yml entry no longer exists after the
+      # merge, so it now watches this file itself, .github/workflows/ci.yml —
+      # a workflow definition change should still trigger a verification
+      # publish. On workflow_dispatch this step's output doesn't gate
+      # anything further (the job-level if above already allows it through).
+      - name: 判断是否命中发布相关路径 / Check release-relevant paths
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            release:
+              - "src/**"
+              - "CMakeLists.txt"
+              - "tests/CMakeLists.txt"
+              - "ci/verify_release.ps1"
+              - "LICENSE"
+              - "THIRD-PARTY-NOTICES.md"
+              - ".github/workflows/ci.yml"
+
+      # push 触发时,只有命中上面 filter 才继续发布;workflow_dispatch 触发
+      # 时(没有 filter 输出)直接放行。用一个独立 step 承载这个判断,后续
+      # 步骤统一用 steps.gate.outputs.should_release 判断是否继续,避免
+      # 每一步都重复写一遍这段条件表达式。
+      #
+      # On push, only continue publishing if the filter above matched; on
+      # workflow_dispatch (no filter output) always proceed. A dedicated
+      # step holds this decision so downstream steps can all key off
+      # steps.gate.outputs.should_release instead of repeating the condition.
+      - name: 汇总是否继续发布 / Decide whether to continue releasing
+        id: gate
+        shell: pwsh
+        run: |
+          $shouldRelease = "${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.release == 'true' }}"
+          "should_release=$shouldRelease" >> $env:GITHUB_OUTPUT
+
+      # 下载 job1 已经编译好的 markair.exe,落地到与本地构建完全一致的路径
+      # build\src\Release\markair.exe——ci\verify_release.ps1 默认就从这个
+      # 路径读取产物,不需要为复用 artifact 改验收脚本。不再重新 configure/
+      # build 一次:这正是本次合并要消除的重复编译。
+      #
+      # Downloads the markair.exe job1 already built, landing it at the exact
+      # same path a local build would produce, build\src\Release\markair.exe —
+      # ci\verify_release.ps1 reads from this path by default, so no change
+      # needed there to consume the reused artifact. No re-configure/re-build
+      # here: eliminating that duplicate compile is the whole point of this
+      # merge.
+      - name: 下载 job1 编译好的 markair.exe / Download markair.exe built by job1
+        if: steps.gate.outputs.should_release == 'True'
+        uses: actions/download-artifact@v4
+        with:
+          name: markair-built-exe
+          path: build\src\Release
+
+      # 单元测试已经在 job1(build-and-check-budget)的 check_budget.ps1
+      # 里跑过一次,这里不重复跑——正是本次合并要消除的那类重复工作,连带
+      # 也不再需要在 job2 里安装 CMake/配置 MSVC 开发者命令行(job2 全程
+      # 不再执行任何编译/CMake 命令,只做产物验收 + 打包 + 发布)。
+      #
+      # Unit tests already ran once inside job1's (build-and-check-budget)
+      # check_budget.ps1 — not repeated here, which is exactly the kind of
+      # duplicate work this merge is meant to eliminate. As a consequence
+      # job2 no longer needs to install CMake or set up the MSVC dev command
+      # prompt either (job2 never runs any compile/CMake command; it only
+      # verifies, packages, and publishes the artifact).
+
+      # 提取短 sha(前 7 位,GitHub 惯例长度),用于生成本次 Release 的 tag/
+      # 名字——比完整 40 位 sha 更符合 GitHub Release 页面的可读习惯。
+      #
+      # Extract the short sha (first 7 chars, the GitHub convention length)
+      # for this run's Release tag/name — more readable on the Releases page
+      # than the full 40-char sha.
+      - name: 计算短 commit sha / Compute short commit sha
+        if: steps.gate.outputs.should_release == 'True'
+        id: short-sha
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          "sha=$shortSha" >> $env:GITHUB_OUTPUT
+
+      # 复用既有验收脚本:不加壳/不压缩声明性检查、无 CRT 动态依赖、
+      # WINDOWS 子系统、体积记录、LICENSE/THIRD-PARTY-NOTICES 打包清单、
+      # 子进程数恒为 0。失败即整个 job 失败,不允许发布不合格产物。不再
+      # 自己重新编译——exe 已经从 job1 下载好,这一步只做验收 + 生成 zip。
+      #
+      # Reuse the existing verification script: no-packer declaration
+      # check, no CRT DLL dependency, WINDOWS subsystem, size record,
+      # LICENSE/THIRD-PARTY-NOTICES packaging manifest, zero subprocess
+      # count. Any failure fails the whole job — no shipping a
+      # non-conforming artifact. No longer recompiles here — the exe was
+      # already downloaded from job1; this step only verifies + builds the zip.
+      - name: 验收产物 / Verify release artifact
+        if: steps.gate.outputs.should_release == 'True'
+        shell: pwsh
+        run: .\ci\verify_release.ps1
+
+      - name: 上传单文件 exe / Upload single-file exe
+        if: steps.gate.outputs.should_release == 'True'
+        uses: actions/upload-artifact@v4
+        with:
+          name: markair-exe
+          path: build\src\Release\markair.exe
+          if-no-files-found: error
+
+      - name: 上传发布包(exe+LICENSE+THIRD-PARTY-NOTICES) / Upload release zip
+        if: steps.gate.outputs.should_release == 'True'
+        uses: actions/upload-artifact@v4
+        with:
+          name: markair-release-zip
+          path: bench\artifacts\markair-release.zip
+          if-no-files-found: error
+
+      # 按 commit 发布独立 Release:tag_name 用当前 commit 的短 sha 生成,
+      # 每次触发都是一个全新的 tag,softprops/action-gh-release 会在当前
+      # commit 上新建它,不会复用/覆盖历史 tag 的产物——每次推送都留下一份
+      # 独立可追溯的 Release。make_latest: true 保留,只是把"最新一个按
+      # commit 命名的 Release"标记为 Releases 页面上的 Latest,不代表复用
+      # 同一个 tag。body 里写清楚对应的源码 commit。
+      #
+      # Publish a per-commit standalone Release: tag_name is derived from the
+      # current commit's short sha, so every trigger is a brand-new tag —
+      # softprops/action-gh-release creates it fresh on the current commit
+      # rather than reusing/overwriting a historical tag's assets, leaving
+      # each push with its own traceable Release. make_latest: true is kept —
+      # it only marks the newest per-commit Release as "Latest" on the
+      # Releases page, it does not imply reusing the same tag. The body
+      # records which source commit this build came from.
+      - name: 按 commit 发布独立 Release / Publish per-commit Release
+        if: steps.gate.outputs.should_release == 'True'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ steps.short-sha.outputs.sha }}
+          name: markair (${{ steps.short-sha.outputs.sha }})
+          body: |
+            按 commit 自动发布,对应源码 commit: ${{ github.sha }}
+
+            Automatically published per-commit release, built from source commit ${{ github.sha }}.
+          make_latest: true
+          files: |
+            build\src\Release\markair.exe
+            bench\artifacts\markair-release.zip
