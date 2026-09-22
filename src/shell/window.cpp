@@ -2044,10 +2044,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         // 当代理信号,与最小化共用同一套压内存函数)。最小化本身也会先触发
         // 一次 WA_INACTIVE,这里用 IsIconic 让给 WM_SIZE/SIZE_MINIMIZED 分支
         // 处理,避免同一次最小化重复触发两遍全量淘汰 + SetProcessWorkingSetSize。
+        // 首帧尚未 Present 前忽略:CI/无交互桌面会话下,新窗口创建后可能立刻
+        // 收到一次虚假的 WA_INACTIVE(没有真实前台窗口可抢),若此时就跑一遍
+        // 全量淘汰 + SetProcessWorkingSetSize,会直接拖慢"进程启动到首帧"
+        // 这段被基准测量的关键路径(实测暖启动 P95 从 78ms 恶化到 152ms,
+        // 超过 01§4 的 120ms 硬上限)。首帧之后再失活才是真正的"进入后台"。
         // 重新激活(WA_ACTIVE/WA_CLICKACTIVE)不需要特殊处理,画面还停留在
         // 最后一帧,后续任何 WM_PAINT 都会照常懒重建。仍要交回 DefWindowProcW,
         // 不能吞掉——它负责真正切换激活态/输入焦点。
-        if (LOWORD(wparam) == WA_INACTIVE && !IsIconic(hwnd)) {
+        if (state && state->firstPresentDone && LOWORD(wparam) == WA_INACTIVE && !IsIconic(hwnd)) {
             TrimMemoryForBackground(state);
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);
