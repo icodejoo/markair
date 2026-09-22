@@ -403,7 +403,7 @@ ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
     }
 
     cache_->Put(box.href, decoded.bitmap, decoded.width, decoded.height, decoded.status,
-                decoded.wasDownsampled);
+                decoded.wasDownsampled, decoded.originalWidth, decoded.originalHeight);
     return decoded.status;
 }
 

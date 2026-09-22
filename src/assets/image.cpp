@@ -5,6 +5,8 @@
 #include <objbase.h>
 #include <wincodec.h>
 
+#include <cmath>
+
 namespace markair {
 
 namespace {
@@ -41,7 +43,7 @@ StrSlice StripQueryAndFragment(StrSlice href) {
 
 // 失败结果的快捷构造。
 DecodedImage MakeStatus(ImageStatus status) {
-    return DecodedImage{nullptr, 0, 0, status, false};
+    return DecodedImage{nullptr, 0, 0, status, false, 0, 0};
 }
 
 }  // namespace
@@ -66,6 +68,25 @@ void ComputeDownscaledSize(u32 srcWidth, u32 srcHeight, u32 maxDim, u32* outWidt
     double ratio = static_cast<double>(maxDim) / longest;
     u32 nw = static_cast<u32>(static_cast<double>(w) * ratio);
     u32 nh = static_cast<u32>(static_cast<double>(h) * ratio);
+    *outWidth = nw == 0 ? 1u : nw;
+    *outHeight = nh == 0 ? 1u : nh;
+}
+
+void ComputeDownscaledSizeForBudget(u32 srcWidth, u32 srcHeight, u64 maxBytes,
+                                     u32* outWidth, u32* outHeight) {
+    u32 w = srcWidth == 0 ? 1u : srcWidth;
+    u32 h = srcHeight == 0 ? 1u : srcHeight;
+    u64 srcBytes = DecodedByteSize(w, h);
+    if (maxBytes == 0 || srcBytes <= maxBytes) {
+        *outWidth = w;
+        *outHeight = h;
+        return;
+    }
+    // 按面积等比缩放:scale^2 = maxBytes/srcBytes,再把 scale 套到宽高上,
+    // 用 double 避免大尺寸下的整数溢出与精度丢失(与 ComputeDownscaledSize 同一处理方式)。
+    double scale = std::sqrt(static_cast<double>(maxBytes) / static_cast<double>(srcBytes));
+    u32 nw = static_cast<u32>(static_cast<double>(w) * scale);
+    u32 nh = static_cast<u32>(static_cast<double>(h) * scale);
     *outWidth = nw == 0 ? 1u : nw;
     *outHeight = nh == 0 ? 1u : nh;
 }
@@ -120,7 +141,7 @@ DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget*
     }
 
     u32 dstW = 0, dstH = 0;
-    ComputeDownscaledSize(srcW, srcH, kMaxDecodedDimension, &dstW, &dstH);
+    ComputeDownscaledSizeForBudget(srcW, srcH, kMaxDecodedBytes, &dstW, &dstH);
 
     // 超尺寸时"边解码边缩小"(裁决 #5):IWICBitmapScaler 挂在帧解码器上游,
     // 不会先把原始整图展开成像素缓冲,严格限住单张图片的最坏内存。
@@ -157,7 +178,7 @@ DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget*
         return MakeStatus(ImageStatus::Failed);
     }
 
-    DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled};
+    DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled, srcW, srcH};
 
     if (target) {
         ID2D1Bitmap* bitmap = nullptr;

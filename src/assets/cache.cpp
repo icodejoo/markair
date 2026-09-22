@@ -115,11 +115,17 @@ const ImageCacheEntry* ImageCache::Find(StrSlice key) const {
 }
 
 const ImageCacheEntry* ImageCache::Put(StrSlice key, ID2D1Bitmap* bitmap, u32 width, u32 height,
-                                        ImageStatus status, bool wasDownsampled) {
+                                        ImageStatus status, bool wasDownsampled,
+                                        u32 originalWidth, u32 originalHeight) {
     if (!arena_ || !buckets_ || !entries_) {
         if (bitmap) bitmap->Release();  // 缓存不可用时也不能泄漏位图
         return nullptr;
     }
+
+    // originalWidth/originalHeight 传 0 表示调用方不关心("旧口径"调用/占位写入),
+    // 退化为与解码尺寸相同——ResolveImageSize 据此显示,等价于"按解码尺寸显示"。
+    u32 ow = originalWidth > 0 ? originalWidth : width;
+    u32 oh = originalHeight > 0 ? originalHeight : height;
 
     u64 hash = HashImageKey(key);
     u32 slot = ProbeSlot(key, hash);
@@ -144,6 +150,8 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, ID2D1Bitmap* bitmap, u32 wi
         if (width > 0 && height > 0) {
             e.width = width;
             e.height = height;
+            e.originalWidth = ow;
+            e.originalHeight = oh;
         }
         if (bitmap) totalBytes_ += DecodedByteSize(e.width, e.height);
         return &e;
@@ -181,6 +189,8 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, ID2D1Bitmap* bitmap, u32 wi
     e.remoteLen = 0;
     e.width = width;
     e.height = height;
+    e.originalWidth = ow;
+    e.originalHeight = oh;
     e.status = status;
     e.wasDownsampled = wasDownsampled;
     buckets_[slot] = entryCount_;

@@ -576,9 +576,12 @@ void BlockLayoutEngine::ResolveImageSize(StrSlice href, float availableWidth, fl
 
     const ImageCacheEntry* entry = imageCache_ ? imageCache_->Find(href) : nullptr;
     if (entry && entry->status == ImageStatus::Ok && entry->width > 0 && entry->height > 0) {
-        // 已知真实(降采样后)像素尺寸:1 像素 = 1 DIP,超过可用宽度时等比缩小。
-        float w = static_cast<float>(entry->width);
-        float h = static_cast<float>(entry->height);
+        // 2026-09-22 裁决:显示尺寸按"原始像素尺寸"算(1 像素 = 1 DIP),不是按
+        // 解码时按体积预算降采样后的 entry->width/height——解码出的小位图靠
+        // DrawBitmap 拉伸填满这个矩形。超过可用宽度时等比缩小(不会超出窗口),
+        // 原图比窗口窄时也不会反向放大超过原尺寸。
+        float w = static_cast<float>(entry->originalWidth);
+        float h = static_cast<float>(entry->originalHeight);
         if (w > maxWidth) {
             h = h * (maxWidth / w);
             w = maxWidth;

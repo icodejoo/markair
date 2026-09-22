@@ -7,10 +7,11 @@
 
 #include <cstring>
 
+using markair::DecodedByteSize;
 using markair::DecodedImage;
 using markair::DecodeSvgFromMemory;
 using markair::ImageStatus;
-using markair::kMaxDecodedDimension;
+using markair::kMaxDecodedBytes;
 using markair_test::ImageTestEnv;
 
 namespace {
@@ -28,6 +29,12 @@ const char kClipSvg[] =
 const char kOversizedSvg[] =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2048\" height=\"1024\">"
     "<rect width=\"2048\" height=\"1024\" fill=\"#0000ff\"/></svg>";
+
+// 带 UTF-8 BOM(EF BB BF)的合法 SVG,回归"BOM 前缀导致 lunasvg 解析失败"的 bug。
+const char kBomPrefixedSvg[] =
+    "\xEF\xBB\xBF"
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"32\">"
+    "<rect width=\"64\" height=\"32\" fill=\"#ff0000\"/></svg>";
 
 }  // namespace
 
@@ -61,7 +68,8 @@ MARKAIR_TEST(SvgDecoder_ClipPathDecodesOk) {
     env.Shutdown();
 }
 
-// 用例:超大 SVG 应等比降采样到 kMaxDecodedDimension,而不是整图拒绝(与 WIC 路径同一口径)。
+// 用例:超大 SVG 应等比降采样到 kMaxDecodedBytes 体积预算内,而不是整图拒绝
+// (与 WIC 路径同一口径);originalWidth/originalHeight 保留降采样前的真实尺寸。
 MARKAIR_TEST(SvgDecoder_OversizedIsDownsampledNotRejected) {
     ImageTestEnv env{};
     if (!env.Init()) { env.Shutdown(); return; }
@@ -69,9 +77,9 @@ MARKAIR_TEST(SvgDecoder_OversizedIsDownsampledNotRejected) {
     DecodedImage img = DecodeSvgFromMemory(kOversizedSvg, sizeof(kOversizedSvg) - 1, env.target);
     MARKAIR_CHECK(img.status == ImageStatus::Ok);
     MARKAIR_CHECK(img.wasDownsampled);
-    MARKAIR_CHECK(img.width <= kMaxDecodedDimension);
-    MARKAIR_CHECK(img.height <= kMaxDecodedDimension);
-    MARKAIR_CHECK_EQ(img.width, kMaxDecodedDimension);
+    MARKAIR_CHECK(DecodedByteSize(img.width, img.height) <= kMaxDecodedBytes);
+    MARKAIR_CHECK_EQ(img.originalWidth, 2048u);
+    MARKAIR_CHECK_EQ(img.originalHeight, 1024u);
     if (img.bitmap) img.bitmap->Release();
 
     env.Shutdown();
@@ -92,6 +100,14 @@ MARKAIR_TEST(SvgDecoder_MalformedXmlFailsGracefully) {
     DecodedImage img = DecodeSvgFromMemory(kBroken, sizeof(kBroken) - 1, nullptr);
     MARKAIR_CHECK(img.status != ImageStatus::Ok);
     MARKAIR_CHECK(img.bitmap == nullptr);
+}
+
+// 用例:带 UTF-8 BOM 的 SVG 应剥离 BOM 后正常解码,而不是解析失败。
+MARKAIR_TEST(SvgDecoder_Utf8BomPrefixDecodesOk) {
+    DecodedImage img = DecodeSvgFromMemory(kBomPrefixedSvg, sizeof(kBomPrefixedSvg) - 1, nullptr);
+    MARKAIR_CHECK(img.status == ImageStatus::Ok);
+    MARKAIR_CHECK_EQ(img.width, 64u);
+    MARKAIR_CHECK_EQ(img.height, 32u);
 }
 
 // 用例:空输入 / 超限输入不崩溃。

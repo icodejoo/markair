@@ -2,7 +2,7 @@
 //
 // 设计要点:
 //   - 与 ImageDecoder(WIC 路径)平行、独立的解码入口,复用同一套 DecodedImage/
-//     ImageStatus/kMaxDecodedDimension 口径,解码结果同样经 ImageCache 常驻。
+//     ImageStatus/kMaxDecodedBytes 口径,解码结果同样经 ImageCache 常驻。
 //   - lunasvg 输出 ARGB32_Premultiplied,内存字节序与现有 WIC 路径统一用的
 //     32bppPBGRA + 预乘 alpha 完全一致,创建 ID2D1Bitmap 时无需再转换格式。
 //   - 惰性:不解码 SVG 就不会构造 lunasvg::Document,不产生额外常驻开销。
@@ -21,7 +21,7 @@ namespace markair {
  * 从内存字节解码一张 SVG 图片,栅格化到位图。
  *
  * 中文:按 SVG 内在尺寸(width/height,缺失时退化用 lunasvg 默认值)计算目标像素,
- * 超过 kMaxDecodedDimension 时按 ComputeDownscaledSize 等比降采样后再栅格化
+ * 超过 kMaxDecodedBytes 时按 ComputeDownscaledSizeForBudget 等比降采样后再栅格化
  * ——与 WIC 路径的降采样口径一致,不会先展开一份超大像素缓冲。
  *
  * @param bytes SVG 源文本/字节,非空。

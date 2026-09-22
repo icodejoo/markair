@@ -8,7 +8,7 @@ namespace {
 
 // 失败结果的快捷构造,与 image.cpp 同一套口径。
 DecodedImage MakeStatus(ImageStatus status) {
-    return DecodedImage{nullptr, 0, 0, status, false};
+    return DecodedImage{nullptr, 0, 0, status, false, 0, 0};
 }
 
 }  // namespace
@@ -17,8 +17,19 @@ DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* 
     if (!bytes || len == 0) return MakeStatus(ImageStatus::Failed);
     if (len > kMaxEncodedBytes) return MakeStatus(ImageStatus::TooLarge);
 
-    auto document = lunasvg::Document::loadFromData(
-        static_cast<const char*>(bytes), static_cast<size_t>(len));
+    // lunasvg 的 XML 解析器不认 UTF-8 BOM(EF BB BF),带 BOM 的 SVG 文件会直接
+    // 解析失败,这里跳过开头的 BOM 再喂给 lunasvg。
+    const char* data = static_cast<const char*>(bytes);
+    size_t size = static_cast<size_t>(len);
+    if (size >= 3 &&
+        static_cast<unsigned char>(data[0]) == 0xEF &&
+        static_cast<unsigned char>(data[1]) == 0xBB &&
+        static_cast<unsigned char>(data[2]) == 0xBF) {
+        data += 3;
+        size -= 3;
+    }
+
+    auto document = lunasvg::Document::loadFromData(data, size);
     if (!document) return MakeStatus(ImageStatus::Failed);
 
     // 内在尺寸取自 width/height(缺失时退化用 lunasvg 自身默认值),与 WIC 路径
@@ -36,13 +47,13 @@ DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* 
     if (srcW == 0 || srcH == 0) return MakeStatus(ImageStatus::Failed);
 
     u32 dstW = 0, dstH = 0;
-    ComputeDownscaledSize(srcW, srcH, kMaxDecodedDimension, &dstW, &dstH);
+    ComputeDownscaledSizeForBudget(srcW, srcH, kMaxDecodedBytes, &dstW, &dstH);
     bool downsampled = (dstW != srcW) || (dstH != srcH);
 
     lunasvg::Bitmap bitmap = document->renderToBitmap(static_cast<int>(dstW), static_cast<int>(dstH));
     if (bitmap.isNull()) return MakeStatus(ImageStatus::Failed);
 
-    DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled};
+    DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled, srcW, srcH};
 
     if (target) {
         // lunasvg 输出 ARGB32_Premultiplied,内存字节序与 DXGI_FORMAT_B8G8R8A8_UNORM

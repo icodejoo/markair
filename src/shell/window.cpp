@@ -1277,10 +1277,25 @@ void OnOutlineItemClicked(HWND hwnd, WindowState* state, int clientY) {
     ScrollToBlock(hwnd, state, panel->Item(item).blockIdx);
 }
 
+// 已解码成功、但解码时没有被降采样过的图片:显示的就是原始分辨率,没有
+// "更大的原图"可看,因此不该响应点击(既不弹查看器,光标也不该变手型)。
+// 网络图片尚未下载时例外——那次点击的含义是 T34 的"加载这张图",与降采样
+// 与否无关,得先放行。
+bool ImageBoxIsClickable(const WindowState* state, const ImageBox& box) {
+    if (box.kind == LinkTargetKind::External && state->images) {
+        if (state->images->FindRemoteBytes(box.href, nullptr) == nullptr) return true;
+    }
+    const ImageCacheEntry* entry = state->images ? state->images->Find(box.href) : nullptr;
+    if (entry && entry->status == ImageStatus::Ok && !entry->wasDownsampled) return false;
+    return true;
+}
+
 // T36b:点击一张图片 -> 打开它的原始数据。
 // 本地路径图直接打开原文件;data: URI / 已下载的网络图把原始字节写临时文件后打开。
 // 网络图片尚未下载时,这一次点击的含义是 T34 的"点击加载",不走打开原图分支。
 void OnImageClicked(HWND hwnd, WindowState* state, const ImageBox& box) {
+    if (!ImageBoxIsClickable(state, box)) return;
+
     // T34:网络图片且还没下载过 -> 这次点击是"加载这张图",只发一次请求。
     if (box.kind == LinkTargetKind::External && state->images && state->remote) {
         if (state->images->FindRemoteBytes(box.href, nullptr) == nullptr) {
@@ -3101,10 +3116,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     SidebarHitTest(SidebarDirection::Left, ClientWidthDip(hwnd), FolderPanelHeightDip(hwnd),
                                    state->folderPanelWidthDip, state->folderAnimProgress, dipX,
                                    dipY) == SidebarHitArea::InsideDrawer;
-                if (!insideFolderDrawer &&
-                    ShouldUseHandCursor(HitTestAtClientPoint(hwnd, state, pt.x, pt.y))) {
-                    SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
-                    return TRUE;
+                if (!insideFolderDrawer) {
+                    HitResult hit = HitTestAtClientPoint(hwnd, state, pt.x, pt.y);
+                    // 图片额外过一道"未降采样不可点"的判定(见 ImageBoxIsClickable),
+                    // 其余命中类型(链接/复制按钮)维持原判定,不查图片缓存。
+                    const ImageBox* hoveredImage = ImageBoxOfHit(*state->layout, hit);
+                    bool handCursor = hoveredImage ? ImageBoxIsClickable(state, *hoveredImage)
+                                                    : ShouldUseHandCursor(hit);
+                    if (handCursor) {
+                        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));  // IDC_HAND
+                        return TRUE;
+                    }
                 }
             }
         }

@@ -4,8 +4,8 @@
 //   - **惰性初始化**:文档里没有图片就不 CoInitializeEx、不创建 IWICImagingFactory
 //     (架构 §1 第 4 条),配合根 CMakeLists 的 /DELAYLOAD:windowscodecs.dll,
 //     无图文档全程不加载 windowscodecs.dll。
-//   - 解码时若原始像素尺寸超过 kMaxDecodedDimension,用 IWICBitmapScaler
-//     边解码边缩小,而不是整图拒绝(裁决 #5)。
+//   - 解码时若原始像素缓冲超过 kMaxDecodedBytes,用 IWICBitmapScaler
+//     边解码边缩小,而不是整图拒绝(裁决 #5,2026-09-22 改为体积预算口径)。
 //   - 动图 GIF 只解第 0 帧,GetFrame(0) 之后立即释放解码器。
 //   - SVG 不进本解码器:由调用方(ImageResidencyManager::DecodeNow)按
 //     IsSvgImageRef 分流到 svg_decoder.h(lunasvg 离线栅格化),WIC 本身
@@ -27,7 +27,16 @@ namespace markair {
 // 更激进的降采样把单图解码后成本压到 ~1MB 级(512×512×4 ≈ 1MB),几十张图
 // 累计才仍在内存预算内。高清需求由 T36b"点击查看原图"满足(打开原文件/原始
 // 字节,不受此处降采样影响)。
+// 仍保留给 ComputeDownscaledSize 这个通用工具函数用(有独立单测),但解码路径
+// 已改用下面的体积预算口径,不再引用这个常量。
 constexpr u32 kMaxDecodedDimension = 512u;
+
+// 单张图片解码后像素缓冲的体积预算(2026-09-22 裁决):按此反推降采样后的
+// 像素尺寸,而不是卡任一边的像素数上限——布局层用"原始尺寸(封顶到可用宽度)"
+// 定显示矩形,解码出来的小位图再靠 D2D 的线性插值拉伸画,用清晰度换内存。
+// 100KB 意味着典型图片解码后只有一两百像素见方,拉伸到整屏宽度会明显模糊,
+// 这是本次裁决主动接受的取舍。
+constexpr u64 kMaxDecodedBytes = 100u * 1024u;
 
 /** 单张图片压缩字节数上限(16MB),超过直接判超限,不进 WIC。 */
 constexpr u32 kMaxEncodedBytes = 16u * 1024u * 1024u;
@@ -55,11 +64,16 @@ enum class ImageStatus : u8 {
  */
 struct DecodedImage {
     ID2D1Bitmap* bitmap; // 解码得到的 D2D 位图,所有权转移给调用方;可为 nullptr
-    u32 width;           // 降采样之后的像素宽
+    u32 width;           // 降采样之后的像素宽(解码位图的真实像素宽)
     u32 height;          // 降采样之后的像素高
     ImageStatus status;  // 解码结果状态
-    bool wasDownsampled; // 原始尺寸超过 kMaxDecodedDimension、真的缩小过时为 true
+    bool wasDownsampled; // 原始像素缓冲超过 kMaxDecodedBytes、真的缩小过时为 true
                           // (T33 据此在图片右下角画"已压缩·点击看原图"提示标签)
+    u32 originalWidth;   // 降采样前的原始像素宽;未降采样时与 width 相同,
+                          // 解码失败/探测失败时为 0。布局层用它(而不是 width)
+                          // 算显示矩形,配合渲染层拉伸,实现"体积按预算砍,
+                          // 显示按原尺寸(封顶到可用宽度)"。
+    u32 originalHeight;  // 降采样前的原始像素高,语义同上。
 };
 
 /**
@@ -87,6 +101,25 @@ bool IsSvgImageRef(StrSlice href);
  *   markair::ComputeDownscaledSize(8000, 4000, 4096, &w, &h); // w=4096, h=2048
  */
 void ComputeDownscaledSize(u32 srcWidth, u32 srcHeight, u32 maxDim, u32* outWidth, u32* outHeight);
+
+/**
+ * 按 kMaxDecodedBytes 这类体积预算计算降采样之后的目标尺寸(等比,至少 1 像素)。
+ * 与 ComputeDownscaledSize 的区别:后者卡的是"任一边的像素数上限",这个卡的是
+ * "解码后像素缓冲的总字节数上限"——解码路径(image.cpp / svg_decoder.cpp)
+ * 用的是这个。纯数字函数,不依赖 WIC,可脱离 COM 单测。
+ *
+ * @param srcWidth 原始像素宽(0 视为 1)。
+ * @param srcHeight 原始像素高(0 视为 1)。
+ * @param maxBytes 解码后像素缓冲(宽×高×4)的字节数上限,传 0 视为不限制。
+ * @param outWidth 输出:缩放后的宽,非空。
+ * @param outHeight 输出:缩放后的高,非空。
+ * @example
+ *   markair::u32 w = 0, h = 0;
+ *   markair::ComputeDownscaledSizeForBudget(2048, 1024, 100 * 1024, &w, &h);
+ *   // w×h×4 <= 100*1024,且 w:h 与原始比例一致
+ */
+void ComputeDownscaledSizeForBudget(u32 srcWidth, u32 srcHeight, u64 maxBytes,
+                                     u32* outWidth, u32* outHeight);
 
 /**
  * 解码后位图占用的像素缓冲字节数(width × height × 4),即 T32 LRU 的计量口径(裁决 #5)。

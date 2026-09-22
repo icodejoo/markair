@@ -10,6 +10,7 @@
 #include <cstring>
 
 using markair::ComputeDownscaledSize;
+using markair::ComputeDownscaledSizeForBudget;
 using markair::DecodedByteSize;
 using markair::DecodedImage;
 using markair::ImageDecoder;
@@ -68,6 +69,31 @@ MARKAIR_TEST(Image_DownscaledSizeMath) {
     // maxDim 传 0 表示不限制。
     ComputeDownscaledSize(9000, 9000, 0, &w, &h);
     MARKAIR_CHECK_EQ(w, 9000u);
+}
+
+// 用例:体积预算口径的降采样计算(解码路径实际使用的公式)。
+MARKAIR_TEST(Image_DownscaledSizeForBudgetMath) {
+    u32 w = 0, h = 0;
+    // 2048x1024 原图 = 8388608 字节,远超 100KB 预算,按面积等比缩小。
+    ComputeDownscaledSizeForBudget(2048, 1024, 100u * 1024u, &w, &h);
+    MARKAIR_CHECK(DecodedByteSize(w, h) <= 100u * 1024u);
+    // 宽高比不应跑偏(允许取整误差 1)。
+    double srcRatio = 2048.0 / 1024.0;
+    double dstRatio = static_cast<double>(w) / static_cast<double>(h);
+    MARKAIR_CHECK(dstRatio > srcRatio - 0.1 && dstRatio < srcRatio + 0.1);
+
+    // 未超预算时原样返回。
+    ComputeDownscaledSizeForBudget(100, 50, 100u * 1024u, &w, &h);
+    MARKAIR_CHECK_EQ(w, 100u);
+    MARKAIR_CHECK_EQ(h, 50u);
+
+    // maxBytes 传 0 表示不限制。
+    ComputeDownscaledSizeForBudget(9000, 9000, 0, &w, &h);
+    MARKAIR_CHECK_EQ(w, 9000u);
+
+    // 极端长条图:短边不会缩到 0。
+    ComputeDownscaledSizeForBudget(100000, 1, 100u * 1024u, &w, &h);
+    MARKAIR_CHECK(h >= 1u);
 }
 
 // 用例:LRU/预算计量口径 —— 解码后像素缓冲字节数 = w × h × 4。
@@ -152,7 +178,8 @@ MARKAIR_TEST(Image_DecodeMultiFrameGifTakesFirstFrameOnly) {
     env.Shutdown();
 }
 
-// 用例:超大尺寸图应"边解码边缩小"到 kMaxDecodedDimension,而不是整图拒绝。
+// 用例:超大尺寸图应"边解码边缩小"到 kMaxDecodedBytes 体积预算内,而不是整图拒绝;
+// originalWidth/originalHeight 应保留降采样前的真实尺寸供布局层显示用。
 MARKAIR_TEST(Image_OversizedSampleIsDownsampledNotRejected) {
     ImageTestEnv env{};
     if (!env.Init()) { env.Shutdown(); return; }
@@ -160,7 +187,7 @@ MARKAIR_TEST(Image_OversizedSampleIsDownsampledNotRejected) {
     u8* buf = AllocSampleBuffer();
     if (!buf) { env.Shutdown(); return; }
 
-    const u32 kSrcW = 2048, kSrcH = 1024;  // 长边远超 kMaxDecodedDimension(512)
+    const u32 kSrcW = 2048, kSrcH = 1024;  // 远超 100KB 体积预算
     u32 n = EncodeTestImage(env.wic, GUID_ContainerFormatPng, kSrcW, kSrcH, 1, buf, kSampleCapacity);
     MARKAIR_CHECK(n > 0);
 
@@ -168,11 +195,9 @@ MARKAIR_TEST(Image_OversizedSampleIsDownsampledNotRejected) {
     DecodedImage img = decoder.DecodeFromMemory(buf, n, env.target);
     MARKAIR_CHECK(img.status == ImageStatus::Ok);       // 关键:不是 TooLarge/Failed
     MARKAIR_CHECK(img.wasDownsampled);                   // T33 据此画"已压缩"标签
-    MARKAIR_CHECK(img.width <= markair::kMaxDecodedDimension);
-    MARKAIR_CHECK(img.height <= markair::kMaxDecodedDimension);
-    MARKAIR_CHECK_EQ(img.width, markair::kMaxDecodedDimension);
-    // 单图解码后内存被死死限住在 ~1MB 级。
-    MARKAIR_CHECK(DecodedByteSize(img.width, img.height) <= 4ull * 1024ull * 1024ull);
+    MARKAIR_CHECK(DecodedByteSize(img.width, img.height) <= markair::kMaxDecodedBytes);
+    MARKAIR_CHECK_EQ(img.originalWidth, kSrcW);
+    MARKAIR_CHECK_EQ(img.originalHeight, kSrcH);
     if (img.bitmap) img.bitmap->Release();
 
     FreeSampleBuffer(buf);

@@ -67,6 +67,35 @@ MARKAIR_TEST(Cache_FindAndPutBasics) {
     MARKAIR_CHECK_EQ(cache.Count(), 1u);
 }
 
+// 用例:originalWidth/originalHeight 不传(旧口径调用)时退化为与解码尺寸相同;
+// 显式传入时按体积预算降采样场景保留真实原始尺寸,布局层据此显示。
+MARKAIR_TEST(Cache_OriginalSizeFallbackAndExplicit) {
+    MARKAIR_MAKE_CACHE_ARENA();
+    ImageCache cache;
+    MARKAIR_CHECK(cache.Init(&arena));
+
+    // 不传 originalWidth/originalHeight:退化为与 width/height 相同(未降采样场景)。
+    // 注意:变量名避开 Windows 头文件里的宏 small/big(rpcndr.h 把它们 #define
+    // 成 char/long,踩上会报一堆离谱的语法错误)。
+    cache.Put(Lit("small.png"), nullptr, 64, 32, ImageStatus::Ok, false);
+    const ImageCacheEntry* smallEntry = cache.Find(Lit("small.png"));
+    MARKAIR_CHECK(smallEntry != nullptr);
+    if (smallEntry) {
+        MARKAIR_CHECK_EQ(smallEntry->originalWidth, 64u);
+        MARKAIR_CHECK_EQ(smallEntry->originalHeight, 32u);
+    }
+
+    // 显式传入:降采样后的位图很小,但原始尺寸保留真实值。
+    cache.Put(Lit("big.png"), nullptr, 200, 100, ImageStatus::Ok, true, 2048u, 1024u);
+    const ImageCacheEntry* bigEntry = cache.Find(Lit("big.png"));
+    MARKAIR_CHECK(bigEntry != nullptr);
+    if (bigEntry) {
+        MARKAIR_CHECK_EQ(bigEntry->width, 200u);
+        MARKAIR_CHECK_EQ(bigEntry->originalWidth, 2048u);
+        MARKAIR_CHECK_EQ(bigEntry->originalHeight, 1024u);
+    }
+}
+
 // 用例:不同图片各自独立计量,大量条目下哈希表扩容后仍然全部可查。
 MARKAIR_TEST(Cache_DistinctKeysAndRehash) {
     MARKAIR_MAKE_CACHE_ARENA();

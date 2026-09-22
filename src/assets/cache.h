@@ -42,8 +42,10 @@ struct ImageCacheEntry {
     ID2D1Bitmap* bitmap; // 解码位图;跟随块虚拟化生灭,滚出可见范围即为 nullptr
     const u8* remoteBytes; // 网络图片已下载的原始压缩字节(arena 拥有);非网络图恒为 nullptr
     u32 remoteLen;       // remoteBytes 的字节数
-    u32 width;           // 解码(降采样)后的像素宽;从未解码成功过时为 0
-    u32 height;          // 解码(降采样)后的像素高;从未解码成功过时为 0
+    u32 width;           // 解码(按体积预算降采样)后的像素宽;从未解码成功过时为 0
+    u32 height;          // 解码(按体积预算降采样)后的像素高;从未解码成功过时为 0
+    u32 originalWidth;   // 降采样前的原始像素宽;布局层据此算显示矩形(不是 width)
+    u32 originalHeight;  // 降采样前的原始像素高,语义同上
     ImageStatus status;  // 该图片当前的状态,决定渲染时画位图还是画占位块
     bool wasDownsampled; // 解码时真的被降采样过,渲染层据此画"已压缩·点击看原图"标签
 };
@@ -104,12 +106,18 @@ public:
      * @param height 解码后像素高。
      * @param status 该图片的状态。
      * @param wasDownsampled 解码时是否真的降采样过(来自 DecodedImage 同名字段)。
+     * @param originalWidth 降采样前的原始像素宽;传 0(默认值,未降采样场景/调用方
+     *        不关心原始尺寸的旧用法)时退化为与 width 相同。
+     * @param originalHeight 降采样前的原始像素高,语义同上,默认退化为 height。
      * @return 写入后的条目指针;Arena 耗尽导致写入失败时返回 nullptr(此时会
      *         直接 Release 传入的 bitmap,避免泄漏)。
-     * @example cache.Put(href, img.bitmap, img.width, img.height, img.status, img.wasDownsampled);
+     * @example
+     *   cache.Put(href, img.bitmap, img.width, img.height, img.status, img.wasDownsampled,
+     *             img.originalWidth, img.originalHeight);
      */
     const ImageCacheEntry* Put(StrSlice key, ID2D1Bitmap* bitmap, u32 width, u32 height,
-                                ImageStatus status, bool wasDownsampled = false);
+                                ImageStatus status, bool wasDownsampled = false,
+                                u32 originalWidth = 0, u32 originalHeight = 0);
 
     /**
      * 释放某张图片的解码位图,保留其 {width, height} 与状态。
