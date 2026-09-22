@@ -75,10 +75,18 @@ jobs:
         with:
           arch: x64
 
-      # 缓存 CMake 配置产物 + 编译中间对象:check_budget.ps1 内部按
-      # Test-Path $exePath 判断是否需要重建,命中缓存时直接跳过整个构建段,
-      # 不用每次从零重装/重编 third_party/lunasvg+plutovg+md4c 这类基本
-      # 不变的 vendored 源码。key 按 CMakeLists/源码内容哈希。
+      # 缓存 CMake 配置产物 + 编译中间对象,减少 third_party/lunasvg+plutovg+
+      # md4c 这类基本不变的 vendored 源码从零重装/重编的开销。key 按
+      # CMakeLists/源码/资源内容哈希(含 resources/** ——图标/rc 也是
+      # src/CMakeLists.txt 里 markair 目标的真实构建输入,理应参与哈希)。
+      #
+      # 2026-09-22 修复(真实事故:发布的 exe 图标是旧的):此前 key 没把
+      # resources/** 算进去,且 check_budget.ps1 只要 exe 已存在就跳过整个
+      # `cmake --build`——两者叠加导致 restore-keys 前缀回退命中一份旧
+      # build 目录后,即使 resources/app.ico 已经换了新图标也不会重新编译。
+      # 现在 key 补上 resources/**,且 check_budget.ps1 改成每次都跑增量
+      # `cmake --build`(Ninja 对无变化的输入是 no-op,详见脚本内注释)——
+      # 即便未来 key 又漏收某个真实构建输入,也不会再产出过时二进制。
       #
       # 拆成 restore(这里)+ save(check_budget.ps1 那一步之后、带
       # if: success())两步,理由同 release job 同一处改动:一体式
@@ -87,12 +95,22 @@ jobs:
       # 不匹配的陈旧缓存这条风险,由 check_budget.ps1 内新加的"CMakeCache.txt
       # 生成器不符就整目录删掉重配"兜底。
       #
-      # Cache the CMake configure output + compiled objects: check_budget.ps1
-      # decides whether a rebuild is needed via Test-Path $exePath, so a
-      # cache hit skips the whole build section instead of reinstalling and
-      # recompiling the largely-static vendored third_party/lunasvg+plutovg+
+      # Cache the CMake configure output + compiled objects, cutting the cost
+      # of recompiling the largely-static vendored third_party/lunasvg+plutovg+
       # md4c source from scratch every run. Key is hashed from CMakeLists/
-      # source content.
+      # source/resource content (resources/** included — the icon/rc file is
+      # a real build input of the markair target in src/CMakeLists.txt and
+      # belongs in the hash).
+      #
+      # 2026-09-22 fix (real incident: the shipped exe had a stale icon): the
+      # key used to omit resources/**, and check_budget.ps1 used to skip the
+      # whole `cmake --build` once the exe already existed — together, a
+      # restore-keys prefix-fallback hit on an older build dir meant a new
+      # resources/app.ico never got recompiled in. The key now includes
+      # resources/**, and check_budget.ps1 always runs an incremental
+      # `cmake --build` (a no-op for Ninja when nothing changed, see the
+      # script's own comment) — so even a future gap in the hash key can no
+      # longer ship a stale binary.
       #
       # Split into restore (here) + save (after the check_budget.ps1 step,
       # gated on if: success()), same reasoning as the release job's change:
@@ -106,15 +124,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build
-          key: ci-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/CMakeLists.txt', 'tests/CMakeLists.txt', 'third_party/**', 'src/**', 'tests/**') }}
+          key: ci-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/CMakeLists.txt', 'tests/CMakeLists.txt', 'third_party/**', 'src/**', 'tests/**', 'resources/**') }}
           restore-keys: |
             ci-build-${{ runner.os }}-
 
-      # ci/check_budget.ps1 内部会在构建产物缺失时自动执行
-      # cmake -S . -B build -G "Ninja Multi-Config" 与
-      # cmake --build build --config Release，因此这里不单独拆分构建步骤。
-      # 不写死 VS 版本号生成器、改用 Ninja Multi-Config 的理由见脚本内注释
-      # (windows-latest 镜像 VS 版本会不定期升级)。
+      # check_budget.ps1 内部总会执行一次增量 `cmake --build`(缺失/生成器
+      # 不匹配时先 `cmake -S . -B build -G "Ninja Multi-Config"`),因此这里
+      # 不单独拆分构建步骤。2026-09-22 起不再靠"exe 是否已存在"跳过整个
+      # 构建段,原因见脚本内注释与本文件上方缓存 key 处的说明。不写死 VS
+      # 版本号生成器、改用 Ninja Multi-Config 的理由见脚本内注释 (windows-latest
+      # 镜像 VS 版本会不定期升级)。
       #
       # check_budget.ps1 现在是覆盖 01§4 全部 8 行硬指标 + M1/M2 既有门禁的
       # 单一入口（M3 T83），CI 侧不新增独立 job/step——拆分反而会让"任一项

@@ -5,7 +5,9 @@
 .DESCRIPTION
     T83 把现行 8 步门禁**逐项对齐 01-requirements.md §4** 的硬指标表（该表 8 行，
     见文末汇总）。依次执行：
-    1. 若 Release 构建产物不存在（或指定 -ForceRebuild），先执行 CMake 构建；
+    1. 先执行 CMake 增量构建（2026-09-22 起总是执行，不再靠"exe 是否已存在"
+       跳过，避免缓存回退命中旧构建产物时误把过时二进制当成本次门禁/发布
+       结果，见第一步实现处的注释）；
     2. 运行 markair_tests.exe，退出码非 0 则整体失败；
     3. 暖启动首屏测量（BENCH-A，01 §4 第 1 行）——2026-09-22 起不再硬性门禁，
        只记录（见下方"2026-09-22 门禁降级"说明）；
@@ -73,7 +75,10 @@
     CMake 构建配置，默认 Release。
 
 .PARAMETER ForceRebuild
-    即使构建产物已存在，也强制重新构建一次。
+    2026-09-22 起：脚本每次都会走一遍增量 `cmake --build`（Ninja 对无变化
+    的输入是 no-op，不再靠"exe 是否已存在"跳过整个构建段，见下方第一步的
+    注释）。本开关改为"删除整个 build 目录后重新配置"，用于怀疑缓存本身
+    损坏、需要彻底重来的场景，不是控制"要不要构建"的开关。
 
 .PARAMETER Strict
     见上方 DESCRIPTION"本机门禁 vs CI 门禁"一节：暖启动门禁改用 01 §4 的
@@ -341,43 +346,58 @@ function Get-LatestCsv([string]$afterFile) {
     return $csv
 }
 
-# ------------------------- 第一步：构建（若需要） -------------------------
+# ------------------------- 第一步：构建 -------------------------
+#
+# 2026-09-22 修复(真实事故:发布出去的 exe 图标是旧的):此前这里用
+# `-not (Test-Path $exePath)` 判断"要不要构建"——只要 build\ 目录下已经有
+# 一份 markair.exe 就整体跳过 `cmake --build`。问题是 GitHub Actions 的
+# `actions/cache` restore-keys 前缀回退经常命中的不是"本次 commit 精确对应"
+# 的缓存,而是"最近一次缓存成功的某个旧 commit"的 build 目录——里面已经有
+# 一份用旧源码编译好的 markair.exe,Test-Path 判到"存在"就直接跳过构建,
+# CI 门禁验收的、发布出去的都是那份过时二进制,不是当前 commit 的代码
+# (`resources/app.ico` 换了新图标但线上 exe 图标还是旧的,就是这个 bug
+# 暴露出来的)。改成**每次都走 configure(仅缺失/生成器不匹配时)+
+# `cmake --build` 的增量构建路径**:Ninja 对没有实际变化的输入是近乎零成本
+# 的 no-op,不会因为"总是跑一遍构建命令"明显拖慢 CI,但保证产物永远对应
+# 当前源码,不再依赖"文件存在即代表是最新的"这个不可靠假设。
+# -ForceRebuild 参数改为"直接删除整个 build 目录重新配置"(用于怀疑缓存本身
+# 损坏的场景),不再是"是否跳过构建"的唯一开关。
 
-$needBuild = $ForceRebuild -or (-not (Test-Path $exePath)) -or (-not (Test-Path $testsExePath))
-if ($needBuild) {
-    Write-Host "[1/15] 未找到构建产物或指定强制重建，开始构建（$BuildConfig）..."
-    # 防御:GitHub Actions 缓存(restore-keys 前缀回退)可能恢复出一份用旧
-    # 生成器("Visual Studio 17 2022")配置过的 $buildDir(比如切到 Ninja
-    # Multi-Config 之前的缓存条目)。若只判 Test-Path 就直接跳过 cmake 配置,
-    # 会拿着不匹配当前生成器的 CMakeCache.txt 去 --build,轻则报错、重则用
-    # 陈旧目标静默通过——整个目录删了重配,比条件判断"是否要重新配"更简单
-    # 可靠。
-    $cacheFile = Join-Path $buildDir "CMakeCache.txt"
-    if ((Test-Path $cacheFile) -and
-        -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
-        Write-Host "[1/15] 检测到 $buildDir 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
-        Remove-Item -Recurse -Force $buildDir
-    }
-    if (-not (Test-Path $buildDir)) {
-        # 不写死 VS 版本号生成器("Visual Studio 17 2022"):GitHub Actions
-        # windows-latest 镜像的 VS 版本会不定期升级(如 2026-09-19 观测到已是
-        # VS 18),硬编码 17 会在镜像升级后直接报"could not find any instance
-        # of Visual Studio"。改用 "Ninja Multi-Config"——不依赖任何 VS 生成器
-        # 命名/版本探测,只需要 cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经
-        # 配置好),产出的多配置目录结构(build\src\Release\...)与原 VS 生成器
-        # 完全一致,不影响下游脚本按 $BuildConfig 子目录取产物的路径假设。
-        # 本机实测过(2026-09-19):同一份源码配置+构建 markair.exe 成功,
-        # 产物落在 build\src\Release\markair.exe,与切换前路径一致。
-        cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
-        if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
-    }
-    cmake --build $buildDir --config $BuildConfig
-    if ($LASTEXITCODE -ne 0) { throw "CMake 构建失败，退出码 $LASTEXITCODE" }
-} else {
-    Write-Host "[1/15] 构建产物已存在，跳过构建（传 -ForceRebuild 可强制重建）。"
+if ($ForceRebuild -and (Test-Path $buildDir)) {
+    Write-Host "[1/15] -ForceRebuild 已指定，删除既有 build 目录后重新配置。"
+    Remove-Item -Recurse -Force $buildDir
 }
 
+# 防御:GitHub Actions 缓存(restore-keys 前缀回退)可能恢复出一份用旧
+# 生成器("Visual Studio 17 2022")配置过的 $buildDir(比如切到 Ninja
+# Multi-Config 之前的缓存条目)。若不做这层判断就直接拿着不匹配当前生成器的
+# CMakeCache.txt 去 --build,轻则报错、重则用陈旧目标静默通过——整个目录
+# 删了重配,比条件判断"是否要重新配"更简单可靠。
+$cacheFile = Join-Path $buildDir "CMakeCache.txt"
+if ((Test-Path $cacheFile) -and
+    -not (Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config$' -Quiet)) {
+    Write-Host "[1/15] 检测到 $buildDir 是用其他生成器配置的(可能是陈旧缓存)，删除后重新配置。"
+    Remove-Item -Recurse -Force $buildDir
+}
+if (-not (Test-Path $buildDir)) {
+    # 不写死 VS 版本号生成器("Visual Studio 17 2022"):GitHub Actions
+    # windows-latest 镜像的 VS 版本会不定期升级(如 2026-09-19 观测到已是
+    # VS 18),硬编码 17 会在镜像升级后直接报"could not find any instance
+    # of Visual Studio"。改用 "Ninja Multi-Config"——不依赖任何 VS 生成器
+    # 命名/版本探测,只需要 cl.exe/link.exe 在 PATH 里(msvc-dev-cmd 已经
+    # 配置好),产出的多配置目录结构(build\src\Release\...)与原 VS 生成器
+    # 完全一致,不影响下游脚本按 $BuildConfig 子目录取产物的路径假设。
+    # 本机实测过(2026-09-19):同一份源码配置+构建 markair.exe 成功,
+    # 产物落在 build\src\Release\markair.exe,与切换前路径一致。
+    cmake -S $repoRoot -B $buildDir -G "Ninja Multi-Config"
+    if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败，退出码 $LASTEXITCODE" }
+}
+Write-Host "[1/15] 增量构建（$BuildConfig，Ninja 对无变化的输入是 no-op）..."
+cmake --build $buildDir --config $BuildConfig
+if ($LASTEXITCODE -ne 0) { throw "CMake 构建失败，退出码 $LASTEXITCODE" }
+
 if (-not (Test-Path $exePath)) { throw "构建后仍找不到 markair.exe：$exePath" }
+if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 markair_tests.exe：$testsExePath" }
 if (-not (Test-Path $testsExePath)) { throw "构建后仍找不到 markair_tests.exe：$testsExePath" }
 
 # ------------------------- 第二步：单元测试 -------------------------
