@@ -7,12 +7,14 @@
     见文末汇总）。依次执行：
     1. 若 Release 构建产物不存在（或指定 -ForceRebuild），先执行 CMake 构建；
     2. 运行 markair_tests.exe，退出码非 0 则整体失败；
-    3. 暖启动首屏门禁（BENCH-A，01 §4 第 1 行）；
+    3. 暖启动首屏测量（BENCH-A，01 §4 第 1 行）——2026-09-22 起不再硬性门禁，
+       只记录（见下方"2026-09-22 门禁降级"说明）；
     4. 冷启动首屏门禁（BENCH-A + RAMMap 清 standby，01 §4 第 2 行）；
     5. exe 体积硬线门禁（01 §4 第 5 行，1.5MB，取代旧的 8MB 宽松安全网）；
     6. 高亮体积增量硬线门禁（T54，800000 字节，2026-09-19 因 SVG 支持上调，
        与上一条并存，见裁决 #8①）；
-    7. 常驻内存门禁：BENCH-A ≤15MB（01 §4 第 3 行）+ 空文档 ≤8MB（01 §4 第 4 行）；
+    7. 常驻内存测量：BENCH-A（01 §4 第 3 行）+ 空文档（01 §4 第 4 行）——
+       2026-09-22 起不再硬性门禁，只记录（同上）；
     8. BENCH-B 图片密集场景内存门禁（M1 既有，不回退）；
     9. BENCH-D 10MB 超大文档打开时间门禁（01 §4 第 7 行）；
     10. 滚动帧率门禁（01 §4 第 6 行，见下方"帧率口径"说明）；
@@ -48,6 +50,16 @@
     传 -Strict 时，暖启动门禁改用目标值（60ms）本身做硬性判据——用于本机
     主动复核"多久能达到目标"，预期在裁决 #5 落地前会经常性失败，这是
     预期行为，不代表脚本坏了。
+    ——— 2026-09-22 门禁降级：暖启动首屏 + BENCH-A/空文档常驻内存 ———
+    用户裁决：暖启动首屏（第 3 步）与 BENCH-A/空文档常驻内存（第 7 步）
+    三项不再是硬性判据，只保留测量与打印，写进 $notices 而不是 $failures。
+    背景：当次会话对"暖启动 P95=144.977ms 超上限"做了一轮 opus 子代理二分
+    排查（未找到真正的性能回归提交），结论是同一份代码在不同机器负载下
+    P95 能在 63.5ms~145ms 之间大幅漂移（run_bench.ps1 零间隔连跑口径本身
+    还会系统性放大 40~70ms），继续把这类噪声大的指标当硬性门禁会反复假红、
+    消耗排查成本。-Strict 开关不再对这三项生效（原先只对暖启动生效，现在
+    该项本身已不再门禁，-Strict 语义上无对象可作用）。常驻内存三项同理，
+    见 bench/M3-MEMORY.md 的口径换算说明依旧保留，仅门禁资格被撤销。
     -Strict 同时影响 leak_probe.ps1 这一步（第 15 步）：主题切换/大纲侧栏
     两条 M2 回归序列有已知的"一次性预热"现象（增幅 10~18%，触发 leak_probe
     严格的 ≤2% 判据，但回归斜率判据稳定通过，T78/T79 已用 Application
@@ -403,15 +415,13 @@ $latestCsv = Get-LatestCsv
 $rows = Import-Csv -Path $latestCsv.FullName
 $warmP95 = Get-P95FromRows -rows $rows -field "t_process_to_present_ms"
 
-$warmGateThresholdMs = if ($Strict) { $WarmFirstPaintTargetMs } else { $WarmFirstPaintLimitMs }
 Write-Host ""
 Write-Host "暖启动首屏 t_process_to_present_ms 的 P95（N=$N）：$([Math]::Round($warmP95, 3)) ms（目标 $WarmFirstPaintTargetMs ms / 上限 $WarmFirstPaintLimitMs ms，出处 01§4 第1行）"
-if ($warmP95 -gt $WarmFirstPaintTargetMs) {
-    $notices += "暖启动首屏 P95 未达目标值：$([Math]::Round($warmP95, 3)) ms > $WarmFirstPaintTargetMs ms（未超上限 $WarmFirstPaintLimitMs ms，属已知架构级限制，见裁决记录#5/M3-STARTUP.md，本次不计入失败，除非 -Strict）。"
-}
-if ($warmP95 -gt $warmGateThresholdMs) {
-    $failures += "暖启动首屏 P95 超标：$([Math]::Round($warmP95, 3)) ms > $warmGateThresholdMs ms（判据来源：$(if ($Strict) { '目标值(-Strict)' } else { '上限值(默认口径)' })）。"
-}
+# 2026-09-22 用户裁决：暖启动首屏门禁不再硬性判据（含 -Strict）。原因见当次
+# 会话排查结论——CI/本机的机器负载噪声能让同一份代码的 P95 在 63.5ms~145ms
+# 之间大幅漂移（详见 M3-STARTUP.md 及本次排查记录），继续拿它当硬性门禁会
+# 反复假红。只保留测量与打印，不再计入 $failures。
+$notices += "暖启动首屏 P95（不再门禁，仅记录）：$([Math]::Round($warmP95, 3)) ms（目标 $WarmFirstPaintTargetMs ms / 上限 $WarmFirstPaintLimitMs ms，2026-09-22 起不再作为硬性判据，理由见本次排查记录）。"
 
 # ------------------------- 第四步：冷启动首屏门禁（01 §4 第 2 行） -------------------------
 
@@ -460,9 +470,8 @@ Write-Host "[7/15] BENCH-A 常驻内存门禁（01§4 第3行，权威口径 15M
 $privateBytesP95 = Get-P95FromRows -rows $rows -field "private_bytes"
 $privateBytesMB = $privateBytesP95 / 1MB
 Write-Host "BENCH-A private_bytes 的 P95（N=$N）：$([Math]::Round($privateBytesMB, 3)) MB（代理指标阈值 $PrivateBytesProxyThresholdMB MB，= 权威目标 15MB + T75 实测代理/权威差值 4.70MB）"
-if ($privateBytesMB -gt $PrivateBytesProxyThresholdMB) {
-    $failures += "BENCH-A private_bytes P95 超标：$([Math]::Round($privateBytesMB, 3)) MB > $PrivateBytesProxyThresholdMB MB。"
-}
+# 2026-09-22 用户裁决：BENCH-A 常驻内存门禁不再硬性判据，只保留测量与打印。
+$notices += "BENCH-A private_bytes P95（不再门禁，仅记录）：$([Math]::Round($privateBytesMB, 3)) MB（代理指标阈值 $PrivateBytesProxyThresholdMB MB，2026-09-22 起不再作为硬性判据）。"
 
 Write-Host ""
 Write-Host "[7.5/15] 空文档常驻内存门禁（01§4 第4行，权威口径 8MB）..."
@@ -474,9 +483,8 @@ $rowsEmpty = Import-Csv -Path $latestCsvEmpty.FullName
 $emptyPrivateBytesP95 = Get-P95FromRows -rows $rowsEmpty -field "private_bytes"
 $emptyPrivateBytesMB = $emptyPrivateBytesP95 / 1MB
 Write-Host "空文档 private_bytes 的 P95（N=$NEmpty）：$([Math]::Round($emptyPrivateBytesMB, 3)) MB（代理指标阈值 $EmptyDocPrivateBytesProxyThresholdMB MB，= 权威目标 8MB + T75 实测差值 1.31MB）"
-if ($emptyPrivateBytesMB -gt $EmptyDocPrivateBytesProxyThresholdMB) {
-    $failures += "空文档 private_bytes P95 超标：$([Math]::Round($emptyPrivateBytesMB, 3)) MB > $EmptyDocPrivateBytesProxyThresholdMB MB。"
-}
+# 2026-09-22 用户裁决：空文档常驻内存门禁不再硬性判据，只保留测量与打印。
+$notices += "空文档 private_bytes P95（不再门禁，仅记录）：$([Math]::Round($emptyPrivateBytesMB, 3)) MB（代理指标阈值 $EmptyDocPrivateBytesProxyThresholdMB MB，2026-09-22 起不再作为硬性判据）。"
 
 # ------------------------- 第八步：BENCH-B 图片密集内存门禁（M1 既有，不回退） -------------------------
 
