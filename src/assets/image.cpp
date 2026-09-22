@@ -4,8 +4,11 @@
 #include <windows.h>
 #include <objbase.h>
 #include <wincodec.h>
+#include <objidl.h>
+#include <gdiplus.h>
 
 #include <cmath>
+#include <cstring>
 
 namespace markair {
 
@@ -95,6 +98,41 @@ u64 DecodedByteSize(u32 width, u32 height) {
     return static_cast<u64>(width) * static_cast<u64>(height) * 4ull;
 }
 
+Gdiplus::Bitmap* MakeOwnedBgraBitmap(u32 width, u32 height, const void* pixels, u32 strideBytes) {
+    if (width == 0 || height == 0 || !pixels || strideBytes == 0) return nullptr;
+
+    // 物理尺寸故意比内容大 1×1(右边/下边各留 1 像素安全边距)——见 image.h 的
+    // doc-comment:GDI+ 的 DrawImage 插值拉伸会在源矩形边缘多采样一点,如果
+    // 物理内存刚好卡在 width×height,这次多采样就会读到分配区之外,直接崩溃。
+    // 用 GDI+ 自己的 Bitmap(w,h,format) 构造函数分配(内部自行管理内存、自选
+    // 对齐后的 stride),不是先包一层引用调用方指针的位图再 Clone——旧写法的
+    // Clone 结果仍然是"紧贴 width×height"的物理尺寸,边距加在源头（调用方
+    // 传入的 pixels 缓冲）无效,必须加在这个最终真正被 DrawImage 读取的位图上。
+    Gdiplus::Bitmap* owned = new Gdiplus::Bitmap(
+        static_cast<INT>(width) + 1, static_cast<INT>(height) + 1, PixelFormat32bppPARGB);
+    if (!owned || owned->GetLastStatus() != Gdiplus::Ok) {
+        delete owned;
+        return nullptr;
+    }
+
+    Gdiplus::Rect lockRect(0, 0, static_cast<INT>(width), static_cast<INT>(height));
+    Gdiplus::BitmapData bd{};
+    if (owned->LockBits(&lockRect, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) !=
+        Gdiplus::Ok) {
+        delete owned;
+        return nullptr;
+    }
+    const u8* src = static_cast<const u8*>(pixels);
+    u8* dst = static_cast<u8*>(bd.Scan0);
+    u32 rowBytes = width * 4u;
+    for (u32 y = 0; y < height; ++y) {
+        memcpy(dst + static_cast<size_t>(y) * bd.Stride, src + static_cast<size_t>(y) * strideBytes,
+               rowBytes);
+    }
+    owned->UnlockBits(&bd);
+    return owned;
+}
+
 ImageDecoder::ImageDecoder() : factory_(nullptr), comInitialized_(false) {}
 
 ImageDecoder::~ImageDecoder() {
@@ -127,7 +165,7 @@ bool ImageDecoder::EnsureFactory() {
     return true;
 }
 
-DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget* target) {
+DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, bool createBitmap) {
     IWICBitmapDecoder* decoder = static_cast<IWICBitmapDecoder*>(wicDecoder);
 
     // 动图 GIF 只解第 0 帧(裁决):取完帧就把解码器释放掉,不留住整个文件流。
@@ -180,16 +218,23 @@ DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget*
 
     DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled, srcW, srcH};
 
-    if (target) {
-        ID2D1Bitmap* bitmap = nullptr;
-        // 用 CreateBitmapFromWicBitmap 让 D2D 自己从转换器拉像素,不额外中转一份缓冲。
-        if (SUCCEEDED(target->CreateBitmapFromWicBitmap(converter, nullptr, &bitmap)) && bitmap) {
-            result.bitmap = bitmap;
+    if (createBitmap) {
+        // 自己申请一块像素缓冲接住转换器输出,再包成 GDI+ 位图——不像原来的
+        // D2D CreateBitmapFromWicBitmap 那样能让渲染后端直接拉,GDI+ 没有等价
+        // 的"零拷贝从 WIC 建位图"接口,这一步比迁移前多一次内存拷贝(单图
+        // 至多 kMaxDecodedBytes=100KB 级别,可忽略)。
+        UINT32 stride = dstW * 4u;
+        UINT32 bufSize = stride * dstH;
+        BYTE* buf = static_cast<BYTE*>(HeapAlloc(GetProcessHeap(), 0, bufSize));
+        if (buf && SUCCEEDED(converter->CopyPixels(nullptr, stride, bufSize, buf))) {
+            result.bitmap = MakeOwnedBgraBitmap(dstW, dstH, buf, stride);
+            if (!result.bitmap) result.status = ImageStatus::Failed;
         } else {
             result.status = ImageStatus::Failed;
         }
+        if (buf) HeapFree(GetProcessHeap(), 0, buf);
     } else {
-        // 没有渲染目标(单测/仅探测尺寸):仍然真实跑一次像素拷贝,确保"能解码"
+        // 不建位图(单测/仅探测尺寸):仍然真实跑一次像素拷贝,确保"能解码"
         // 这个结论不是靠元数据猜出来的,损坏文件会在这一步暴露。
         WICRect rect{0, 0, 1, 1};
         BYTE probe[4] = {0, 0, 0, 0};
@@ -204,7 +249,7 @@ DecodedImage ImageDecoder::DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget*
     return result;
 }
 
-DecodedImage ImageDecoder::DecodeFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target) {
+DecodedImage ImageDecoder::DecodeFromMemory(const void* bytes, u32 len, bool createBitmap) {
     if (!bytes || len == 0) return MakeStatus(ImageStatus::Failed);
     if (len > kMaxEncodedBytes) return MakeStatus(ImageStatus::TooLarge);
     if (!EnsureFactory()) return MakeStatus(ImageStatus::Failed);
@@ -226,13 +271,13 @@ DecodedImage ImageDecoder::DecodeFromMemory(const void* bytes, u32 len, ID2D1Ren
         return MakeStatus(ImageStatus::Failed);  // 损坏文件/未知格式走占位
     }
 
-    DecodedImage result = DecodeFirstFrame(decoder, target);
+    DecodedImage result = DecodeFirstFrame(decoder, createBitmap);
     decoder->Release();
     stream->Release();
     return result;
 }
 
-DecodedImage ImageDecoder::DecodeFromFile(const wchar_t* path, ID2D1RenderTarget* target) {
+DecodedImage ImageDecoder::DecodeFromFile(const wchar_t* path, bool createBitmap) {
     if (!path || path[0] == 0) return MakeStatus(ImageStatus::Failed);
     if (!EnsureFactory()) return MakeStatus(ImageStatus::Failed);
 
@@ -241,7 +286,7 @@ DecodedImage ImageDecoder::DecodeFromFile(const wchar_t* path, ID2D1RenderTarget
         path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
     if (FAILED(hr) || !decoder) return MakeStatus(ImageStatus::Failed);
 
-    DecodedImage result = DecodeFirstFrame(decoder, target);
+    DecodedImage result = DecodeFirstFrame(decoder, createBitmap);
     decoder->Release();
     return result;
 }

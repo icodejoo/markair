@@ -4,13 +4,11 @@
 //   - 与 ImageDecoder(WIC 路径)平行、独立的解码入口,复用同一套 DecodedImage/
 //     ImageStatus/kMaxDecodedBytes 口径,解码结果同样经 ImageCache 常驻。
 //   - lunasvg 输出 ARGB32_Premultiplied,内存字节序与现有 WIC 路径统一用的
-//     32bppPBGRA + 预乘 alpha 完全一致,创建 ID2D1Bitmap 时无需再转换格式。
+//     32bppPBGRA + 预乘 alpha 完全一致,建 GDI+ 位图时无需再转换格式。
 //   - 惰性:不解码 SVG 就不会构造 lunasvg::Document,不产生额外常驻开销。
 //   - 解码失败(格式错误/尺寸为 0)一律返回 Failed 状态,不崩溃、不抛异常出本模块
 //     (lunasvg 内部允许用异常,但调用全部包在本文件内,不越过本模块边界)。
 #pragma once
-
-#include <d2d1.h>
 
 #include "image.h"
 #include "../util/types.h"
@@ -32,19 +30,19 @@ namespace markair {
  *
  *   Byte length; returns Failed for 0, TooLarge when exceeding kMaxEncodedBytes.
  *
- * @param target D2D 渲染目标,用于创建 ID2D1Bitmap;传 nullptr 时只解码取尺寸、
- *               不创建位图(单元测试/仅探测尺寸场景)。
+ * @param createBitmap true 时额外建出位图;传 false 时只解码取尺寸、不建位图
+ *               (单元测试/仅探测尺寸场景)。
  *
- *   D2D render target used to create the ID2D1Bitmap; pass nullptr to only
- *   probe dimensions without creating a bitmap (unit tests / size-only probes).
+ *   Pass true to also build a bitmap; pass false to only probe dimensions
+ *   without building one (unit tests / size-only probes).
  *
  * @return 解码结果;失败时 bitmap 为 nullptr 且 status 非 Ok,绝不崩溃。
  *
  *   The decode result; on failure bitmap is nullptr and status is non-Ok,
  *   this function never crashes or throws past its own boundary.
  *
- * @example markair::DecodedImage img = markair::DecodeSvgFromMemory(buf, n, target);
+ * @example markair::DecodedImage img = markair::DecodeSvgFromMemory(buf, n, true);
  */
-DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target);
+DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, bool createBitmap);
 
 }  // namespace markair

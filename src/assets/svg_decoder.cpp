@@ -13,7 +13,7 @@ DecodedImage MakeStatus(ImageStatus status) {
 
 }  // namespace
 
-DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target) {
+DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, bool createBitmap) {
     if (!bytes || len == 0) return MakeStatus(ImageStatus::Failed);
     if (len > kMaxEncodedBytes) return MakeStatus(ImageStatus::TooLarge);
 
@@ -55,21 +55,13 @@ DecodedImage DecodeSvgFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* 
 
     DecodedImage result{nullptr, dstW, dstH, ImageStatus::Ok, downsampled, srcW, srcH};
 
-    if (target) {
-        // lunasvg 输出 ARGB32_Premultiplied,内存字节序与 DXGI_FORMAT_B8G8R8A8_UNORM
-        // + D2D1_ALPHA_MODE_PREMULTIPLIED 完全一致,直接 CreateBitmap,不需要
-        // 再中转一次像素格式转换(与 WIC 路径的 32bppPBGRA 同一约定)。
-        D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        ID2D1Bitmap* d2dBitmap = nullptr;
-        HRESULT hr = target->CreateBitmap(
-            D2D1::SizeU(dstW, dstH), bitmap.data(), static_cast<UINT32>(bitmap.stride()),
-            &props, &d2dBitmap);
-        if (SUCCEEDED(hr) && d2dBitmap) {
-            result.bitmap = d2dBitmap;
-        } else {
-            result.status = ImageStatus::Failed;
-        }
+    if (createBitmap) {
+        // lunasvg 输出 ARGB32_Premultiplied,内存字节序与 GDI+ 的
+        // PixelFormat32bppPARGB 完全一致,与 WIC 路径共用同一个
+        // MakeOwnedBgraBitmap 包装函数,不需要再中转一次像素格式转换。
+        result.bitmap = MakeOwnedBgraBitmap(dstW, dstH, bitmap.data(),
+                                            static_cast<u32>(bitmap.stride()));
+        if (!result.bitmap) result.status = ImageStatus::Failed;
     }
 
     return result;

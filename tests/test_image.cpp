@@ -7,6 +7,8 @@
 #include "image_test_support.h"
 #include "../src/assets/image.h"
 
+#include <objidl.h>
+#include <gdiplus.h>
 #include <cstring>
 
 using markair::ComputeDownscaledSize;
@@ -129,7 +131,7 @@ MARKAIR_TEST(Image_DecodePngSample) {
     MARKAIR_CHECK(!img.wasDownsampled);
     MARKAIR_CHECK(img.bitmap != nullptr);
     MARKAIR_CHECK(decoder.IsInitialized());  // 解码之后 WIC 才被初始化
-    if (img.bitmap) img.bitmap->Release();
+    delete img.bitmap;
 
     FreeSampleBuffer(buf);
     env.Shutdown();
@@ -172,7 +174,7 @@ MARKAIR_TEST(Image_DecodeMultiFrameGifTakesFirstFrameOnly) {
     MARKAIR_CHECK(img.status == ImageStatus::Ok);
     MARKAIR_CHECK_EQ(img.width, 32u);
     MARKAIR_CHECK_EQ(img.height, 16u);
-    if (img.bitmap) img.bitmap->Release();
+    delete img.bitmap;
 
     FreeSampleBuffer(buf);
     env.Shutdown();
@@ -198,7 +200,7 @@ MARKAIR_TEST(Image_OversizedSampleIsDownsampledNotRejected) {
     MARKAIR_CHECK(DecodedByteSize(img.width, img.height) <= markair::kMaxDecodedBytes);
     MARKAIR_CHECK_EQ(img.originalWidth, kSrcW);
     MARKAIR_CHECK_EQ(img.originalHeight, kSrcH);
-    if (img.bitmap) img.bitmap->Release();
+    delete img.bitmap;
 
     FreeSampleBuffer(buf);
     env.Shutdown();
