@@ -175,3 +175,9 @@ M0 剩余:T15(基准语料与脚本)、T16(CI 性能门禁)、T17(中英混排�
 - **P1: 闲置与后台主动 Working Set Trim**：利用 Win32 `SetProcessWorkingSetSize` 在最小化/闲置时将后台工作集压缩至 < 1.5MB。
 - **P2: 超大文档分块几何虚拟化**：万行超大文档按需分段生成几何结构。
 
+## CI/Release 发布流程调整（2026-09-22）
+
+1. **Release tag 策略从"latest 滚动覆盖"改为"按 commit 独立发布"**：`tag_name` 从固定的 `latest` 改成 `build-<短sha>`（如 `build-83df22c`），每次 push 到 master 都生成一个全新 tag/Release，不再覆盖历史产物；`make_latest: true` 保留，只标记"最新一个"，不代表复用同一 tag。
+2. **`ci.yml` 与 `release.yml` 合并为单文件两个 job**：此前两个 workflow 在同一次 push 里各自独立编译一遍 markair.exe，重复构建浪费 CI 资源。合并后 `build-and-check-budget`（原 ci.yml）编译一次并上传 exe 产物，`build-release-exe`（原 release.yml）改为下载复用该产物做验收+打包+发布，不再重新 `cmake configure/build`。`release.yml` 文件已删除，触发条件、`contents:write` 权限收敛到 job2、源码路径过滤（`dorny/paths-filter`）等细节见 `ci.yml` 内注释。
+3. 已清理 GitHub 上残留的 32 条旧 workflow 运行记录与过时的 `latest` Release/tag。
+
