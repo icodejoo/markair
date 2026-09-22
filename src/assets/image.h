@@ -13,12 +13,16 @@
 //   - 解码失败一律返回占位状态,不崩溃、不抛异常(本工程禁异常)。
 #pragma once
 
-#include <d2d1.h>
+#include <windows.h>
 
 #include "../util/str.h"
 #include "../util/types.h"
 
 struct IWICImagingFactory;
+
+namespace Gdiplus {
+class Bitmap;
+}
 
 namespace markair {
 
@@ -33,7 +37,7 @@ constexpr u32 kMaxDecodedDimension = 512u;
 
 // 单张图片解码后像素缓冲的体积预算(2026-09-22 裁决):按此反推降采样后的
 // 像素尺寸,而不是卡任一边的像素数上限——布局层用"原始尺寸(封顶到可用宽度)"
-// 定显示矩形,解码出来的小位图再靠 D2D 的线性插值拉伸画,用清晰度换内存。
+// 定显示矩形,解码出来的小位图再靠渲染层的双线性插值拉伸画,用清晰度换内存。
 // 100KB 意味着典型图片解码后只有一两百像素见方,拉伸到整屏宽度会明显模糊,
 // 这是本次裁决主动接受的取舍。
 constexpr u64 kMaxDecodedBytes = 100u * 1024u;
@@ -59,11 +63,11 @@ enum class ImageStatus : u8 {
 };
 
 /**
- * 一次解码的结果。bitmap 可能为空:传入的渲染目标为空(单测场景)或
- * 创建 D2D 位图失败时,width/height/status 仍然有效。
+ * 一次解码的结果。bitmap 可能为空:调用方传 createBitmap=false(单测/仅探测
+ * 尺寸场景)或创建位图失败时,width/height/status 仍然有效。
  */
 struct DecodedImage {
-    ID2D1Bitmap* bitmap; // 解码得到的 D2D 位图,所有权转移给调用方;可为 nullptr
+    Gdiplus::Bitmap* bitmap; // 解码得到的位图,所有权转移给调用方;可为 nullptr
     u32 width;           // 降采样之后的像素宽(解码位图的真实像素宽)
     u32 height;          // 降采样之后的像素高
     ImageStatus status;  // 解码结果状态
@@ -132,6 +136,36 @@ void ComputeDownscaledSizeForBudget(u32 srcWidth, u32 srcHeight, u64 maxBytes,
 u64 DecodedByteSize(u32 width, u32 height);
 
 /**
+ * 把一段 32bpp BGRA 预乘 alpha 的像素缓冲(WIC/lunasvg 解码结果都是这个格式)
+ * 包成一个 GDI+ 自己独立拥有内存的 `Gdiplus::Bitmap`,调用方拿到返回值后可以
+ * 立即释放 `pixels` 缓冲,不产生悬空引用。
+ *
+ * 实际分配的位图物理尺寸是 (width+1)×(height+1)——右边、下边各留 1 像素安全
+ * 边距,内容仍是原样的 width×height(边距像素未初始化,不会被画出来)。这是
+ * 2026-09-22 WinDbg 定位到的一个真实 GDI+ 引擎坑的修复:`Graphics::DrawImage`
+ * 做插值拉伸时(不管 Bilinear 还是 HighQualityBilinear)会在源矩形边缘多采样
+ * 一点,如果源位图的物理内存刚好只有 width×height 那么大,这次多采样就会读
+ * 到分配区之外的未映射页,直接 access violation——命中率随拉伸倍数增大而
+ * 升高,markair 现在"体积预算降采样后拉伸到显示尺寸"的策略经常是 5~10 倍拉伸,
+ * 稳定复现。加这 1 像素边距后,GDI+ 的越界采样落在自己确实拥有的内存里,不再
+ * 崩溃;调用方(`GdiRenderTarget::DrawBitmap`)必须显式传入 width/height 而不是
+ * 读 `bitmap->GetWidth()/GetHeight()`(那两个会报出带边距的 (width+1)/(height+1),
+ * 用它们当绘制源矩形会画出半像素的垃圾边)。
+ *
+ * @param width 像素宽,须大于 0。
+ * @param height 像素高,须大于 0。
+ * @param pixels 源像素数据,按行从上到下、每像素 4 字节 BGRA 预乘,非空。
+ * @param strideBytes 每行字节数(通常是 width * 4),须大于 0。
+ * @return 新建的位图(调用方持有,用 `delete` 释放;物理尺寸是 (width+1)×(height+1),
+ *         画图时源矩形要用原始 width×height,见上文);内存不足等失败场景返回 nullptr。
+ * @example
+ *   Gdiplus::Bitmap* bmp = markair::MakeOwnedBgraBitmap(64, 32, pixels, 64 * 4);
+ *   // 画的时候:DrawImage(bmp, destRect, 0, 0, 64, 32, UnitPixel) —— 不要用
+ *   // bmp->GetWidth()/GetHeight(),那会是 65/33。
+ */
+Gdiplus::Bitmap* MakeOwnedBgraBitmap(u32 width, u32 height, const void* pixels, u32 strideBytes);
+
+/**
  * WIC 解码器封装:惰性持有 COM 初始化与 IWICImagingFactory。
  *
  * 只要不调用任何 Decode* 接口,本对象就不会 CoInitializeEx、不会创建 WIC 工厂,
@@ -139,10 +173,10 @@ u64 DecodedByteSize(u32 width, u32 height);
  *
  * @example
  *   markair::ImageDecoder decoder;
- *   markair::DecodedImage img = decoder.DecodeFromMemory(bytes, len, renderTarget);
+ *   markair::DecodedImage img = decoder.DecodeFromMemory(bytes, len, true);
  *   if (img.status == markair::ImageStatus::Ok && img.bitmap) {
- *       renderTarget->DrawBitmap(img.bitmap, rect);
- *       img.bitmap->Release();
+ *       renderTarget->DrawBitmap(img.bitmap, img.width, img.height, rect);
+ *       delete img.bitmap;
  *   }
  */
 class ImageDecoder {
@@ -169,31 +203,31 @@ public:
      *
      * @param bytes 压缩图片字节,非空。
      * @param len 字节数;为 0 或超过 kMaxEncodedBytes 分别返回 Failed / TooLarge。
-     * @param target D2D 渲染目标,用于创建 ID2D1Bitmap;传 nullptr 时只解码取尺寸、
-     *               不创建位图(单元测试/仅探测尺寸场景)。
+     * @param createBitmap true 时额外建出 Gdiplus::Bitmap;传 false 时只解码取
+     *               尺寸、不建位图(单元测试/仅探测尺寸场景)。
      * @return 解码结果;失败时 bitmap 为 nullptr 且 status 非 Ok,绝不崩溃。
-     * @example markair::DecodedImage img = decoder.DecodeFromMemory(buf, n, nullptr);
+     * @example markair::DecodedImage img = decoder.DecodeFromMemory(buf, n, false);
      */
-    DecodedImage DecodeFromMemory(const void* bytes, u32 len, ID2D1RenderTarget* target);
+    DecodedImage DecodeFromMemory(const void* bytes, u32 len, bool createBitmap);
 
     /**
      * 从磁盘文件路径解码一张图片,语义同 DecodeFromMemory。调用方需先用
      * IsSvgImageRef 判断,SVG 不应传入本函数(应走 svg_decoder.h)。
      *
      * @param path 绝对或相对的宽字符文件路径,非空。
-     * @param target D2D 渲染目标,可为 nullptr(只取尺寸)。
+     * @param createBitmap true 时额外建出 Gdiplus::Bitmap,false 只取尺寸。
      * @return 解码结果;文件不存在/损坏返回 Failed。
-     * @example markair::DecodedImage img = decoder.DecodeFromFile(L"C:\\a\\b.png", target);
+     * @example markair::DecodedImage img = decoder.DecodeFromFile(L"C:\\a\\b.png", true);
      */
-    DecodedImage DecodeFromFile(const wchar_t* path, ID2D1RenderTarget* target);
+    DecodedImage DecodeFromFile(const wchar_t* path, bool createBitmap);
 
 private:
     // 惰性创建 COM + IWICImagingFactory,已创建时直接返回 true。
     bool EnsureFactory();
 
     // DecodeFromMemory/DecodeFromFile 共用的后半段:从 IWICBitmapDecoder 取第 0 帧、
-    // 按需降采样、转 32bppPBGRA、按需创建 D2D 位图。decoder 由调用方释放。
-    DecodedImage DecodeFirstFrame(void* wicDecoder, ID2D1RenderTarget* target);
+    // 按需降采样、转 32bppPBGRA、按需创建 Gdiplus::Bitmap。decoder 由调用方释放。
+    DecodedImage DecodeFirstFrame(void* wicDecoder, bool createBitmap);
 
     IWICImagingFactory* factory_; // 惰性创建的 WIC 工厂,未用过时恒为 nullptr
     bool comInitialized_;         // COM 是否由本对象初始化(决定析构时是否 CoUninitialize)

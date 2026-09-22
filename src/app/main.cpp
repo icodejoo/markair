@@ -6,14 +6,18 @@
 //
 // 架构决策(已在 memory.md 通过 spike 验证，直接落地):
 //   1. 进程级禁用 IME,避免第三方输入法把 TSF 模块注入进来(省内存)。
-//   2. D2D 渲染目标默认走软件光栅化,避免触发 Intel iGPU 的着色器编译器。
+//   2. 渲染后端走纯 GDI+/DirectWrite GDI Interop(2026-09-22,见 render/gdi_target.h),
+//      不碰 D3D/D2D——原先的 D2D HWND 渲染目标即便声明 SOFTWARE 类型,在这台
+//      机器上实测仍会触发 D3D10 WARP 软件光栅化驱动,私有内存随窗口尺寸线性
+//      增长(最大化窗口下 ~27~30MB);GDI+ 路径彻底绕开这条 D3D 依赖链。
 //   3. 每个文件一个独立窗口,不做单实例复用([裁决 #6]);命名互斥体只用于
 //      "同一文件重复打开时把已有窗口前置"这一体验优化,不阻止/不退出新进程。
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <imm.h>
-#include <d2d1.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <psapi.h>
 
 #include <cstdint>
@@ -51,15 +55,34 @@
 #include "../../third_party/md4c/md4c.h"
 
 #pragma comment(lib, "imm32.lib")
-#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "psapi.lib")
 
 namespace {
 
-// 以下全局变量均为 POD / 普通指针,零初始化,不含任何有副作用的构造函数。
-ID2D1Factory* g_d2dFactory = nullptr;
 wchar_t g_displayText[MAX_PATH + 16] = L"markair";
+
+// GDI+ 生命周期守卫:构造时 GdiplusStartup,析构时 GdiplusShutdown。
+// 必须在 wWinMain 里声明在 renderer/imageCache 等一切持有 Gdiplus::Bitmap/
+// Gdiplus::Graphics 的对象**之前**——C++ 局部变量按声明的反序析构,这样才能
+// 保证 GdiplusShutdown 在所有 GDI+ 对象析构完之后才执行(顺序反了会在
+// 退出路径上访问已经关闭的 GDI+ 子系统,未定义行为)。
+class GdiplusScope {
+public:
+    GdiplusScope() {
+        Gdiplus::GdiplusStartupInput input;
+        Gdiplus::GdiplusStartup(&token_, &input, nullptr);
+    }
+    ~GdiplusScope() {
+        if (token_) Gdiplus::GdiplusShutdown(token_);
+    }
+    GdiplusScope(const GdiplusScope&) = delete;
+    GdiplusScope& operator=(const GdiplusScope&) = delete;
+
+private:
+    ULONG_PTR token_ = 0;
+};
 markair::RecentFiles g_recentFiles{};
 
 // markair 命名互斥体/窗口属性统一使用的前缀,避免和系统其它对象重名冲突。
@@ -670,7 +693,7 @@ HWND CreateDocumentWindow(HINSTANCE instance, const wchar_t* normalizedPath) {
 
     bundle->layout.Relayout(bundle->doc, 760.0f, fonts.Scale(), &bundle->imageCache);
 
-    bundle->renderer.Init(g_d2dFactory, &fonts, &bundle->imageCache);
+    bundle->renderer.Init(fonts.Factory(), &fonts, &bundle->imageCache);
     if (markair::ResolveEffectiveTheme(bundle->settings.theme, systemIsDark)) {
         bundle->renderer.SetPalette(&markair::kDarkPalette);
     }
@@ -815,6 +838,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
     _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
 #endif
+    // 必须最先声明(见 GdiplusScope 类注释:局部变量反序析构,这样才能保证
+    // GdiplusShutdown 在下面所有 renderer/imageCache 等 GDI+ 对象析构完之后才跑)。
+    GdiplusScope gdiplusScope;
+
     // 命令行解析改用不依赖 shell32.dll 的 markair::ParseCommandLine(见 cmdline.h
     // 顶部注释)——CommandLineToArgvW 本身是 shell32 的导出符号,在这里被
     // 无条件调用会让 CMakeLists.txt 里的 /DELAYLOAD:shell32.dll 名存实亡。
@@ -921,8 +948,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         }
     }
 
-    D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_d2dFactory);
-
     // T39:启动期一次性读 %LOCALAPPDATA%\markair\state.ini(单次 < 1KB);
     // 文件不存在就按默认值走,不创建目录、不写盘。
     markair::AppSettings settings;
@@ -1018,7 +1043,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     markair::bench::MarkLayoutDone();
 
     markair::Renderer renderer;
-    renderer.Init(g_d2dFactory, &fonts, &imageCache);
+    renderer.Init(fonts.Factory(), &fonts, &imageCache);
 
     // Initialize palette according to the resolved effective theme (Dark or Light).
     //
@@ -1304,7 +1329,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     // 这个函数内部会判断,空操作零开销)。
     markair::ReleaseMainWindowClassResources();
 
-    if (g_d2dFactory) g_d2dFactory->Release();
     if (fileMutex) CloseHandle(fileMutex);
     if (singleInstanceMutex) CloseHandle(singleInstanceMutex);
     // argv/cmdlineArena 随函数返回时的栈析构自动回收,不需要手动释放

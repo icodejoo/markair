@@ -1,9 +1,9 @@
-// markair 的 D2D 渲染模块(T11):设备/渲染目标管理 + 把 BlockLayoutEngine 的
-// 布局结果画到窗口上。渲染目标默认软件光栅化(架构决策,见 memory.md),
-// 本模块不做"硬件优先、失败再降级"的运行时探测。
+// markair 的渲染模块(T11,2026-09-22 从 Direct2D 迁移到 GDI+/DirectWrite GDI
+// Interop,见 gdi_target.h 顶部注释):设备/渲染目标管理 + 把 BlockLayoutEngine
+// 的布局结果画到窗口上。不再触碰 D3D/D2D,彻底避免 HWND 渲染目标在这台机器
+// 上实际走 D3D10 WARP 软件光栅化驱动、随窗口尺寸线性增长私有内存的问题。
 #pragma once
 
-#include <d2d1.h>
 #include <windows.h>
 
 #include "../assets/image.h"
@@ -14,6 +14,7 @@
 #include "../shell/edit_box.h"  // EditBoxBorderStyle(输入框边框视觉枚举)
 #include "../util/arena.h"
 #include "../util/recent_files.h"
+#include "gdi_target.h"
 #include "theme.h"
 
 namespace markair {
@@ -163,16 +164,19 @@ struct ShellOverlay {
 };
 
 /**
- * 判断一个 D2D 调用返回的 HRESULT 是否要求重建渲染目标。
- * 抽成纯函数是因为这条判断本身不依赖真实设备,可以脱离 D2D 单独做单元测试;
- * 真正的重建(释放旧目标/下次绘制时惰性重新创建)仍需要真实 HWND,留在
- * Renderer::RenderFrame 里。
- * @param hr 某次 D2D 调用(通常是 EndDraw)返回的 HRESULT。
- * @return hr 等于 D2DERR_RECREATE_TARGET 时返回 true。
+ * 判断一次 `EndDraw` 返回的 HRESULT 是否要求重建渲染目标。
+ *
+ * GDI/GDI+ 渲染路径没有 D2D 那种"设备丢失"(`D2DERR_RECREATE_TARGET`)概念——
+ * DIB 是进程自己的内存,不依赖显卡设备状态,因此恒返回 false。仍然保留这个
+ * 函数(而不是直接删掉调用点)是为了让 `Renderer::RenderFrame` 里"渲染目标
+ * 重建"这条既有代码路径(DPI 变化等场景仍会主动调用)结构不变,不必改调用点。
+ * @param hr 某次 `EndDraw` 调用返回的 HRESULT。
+ * @return 恒为 false。
  * @example if (markair::ShouldRecreateRenderTarget(hr)) { / * 释放旧目标 * / }
  */
 inline bool ShouldRecreateRenderTarget(HRESULT hr) {
-    return hr == D2DERR_RECREATE_TARGET;
+    (void)hr;
+    return false;
 }
 
 /**
@@ -195,9 +199,8 @@ const wchar_t* DownsampledBadgeText();
 /**
  * 图片驻留管理器(T32):`ImageResidencyController` 的具体实现。
  *
- * 放在 render 层是因为解码出来的 `ID2D1Bitmap` 必须绑定到当前渲染目标,而渲染
- * 目标由 `Renderer` 持有;布局层只负责在正确的时机(块进出"可见 ± 1 屏")回调,
- * 不知道也不需要知道解码细节。
+ * 放在 render 层是因为解码复用 `Renderer` 持有的解码器/缓存实例;布局层
+ * 只负责在正确的时机(块进出"可见 ± 1 屏")回调,不知道也不需要知道解码细节。
  *
  * 行为:
  *   - `EnsureResident`:位图已在 -> 跳过;已判定为终态失败(损坏/SVG/超限)-> 跳过,
@@ -222,7 +225,7 @@ public:
 
     /**
      * 绑定依赖。
-     * @param renderer 渲染器,用于取当前 `ID2D1RenderTarget`;不拥有,可为 nullptr
+     * @param renderer 渲染器,用于取当前 `GdiRenderTarget`;不拥有,可为 nullptr
      *                 (此时只探测尺寸、不创建位图)。
      * @param cache 图片缓存,非空,不拥有。
      * @param scratch 解码 data: URI 用的临时 Arena,非空,不拥有(每次解码前 Reset)。
@@ -281,17 +284,18 @@ struct SidebarListItemParams {
 };
 
 /**
- * D2D 渲染器:持有并懒创建 `ID2D1HwndRenderTarget`(默认软件光栅化),
- * 把 `BlockLayoutEngine` 算出的块几何 + `IDWriteTextLayout` 画到窗口上。
+ * 渲染器:持有并懒创建 `GdiRenderTarget`(GDI+/DirectWrite GDI Interop,
+ * 见 gdi_target.h),把 `BlockLayoutEngine` 算出的块几何 + `IDWriteTextLayout`
+ * 画到窗口上。
  *
- * 渲染目标重建(`D2DERR_RECREATE_TARGET`)时只释放/重新创建渲染目标本体,
- * 传入的 `BlockLayoutEngine` 不受影响 —— 布局对象(几何数组、
- * `IDWriteTextLayout`)不依赖任何具体渲染目标实例,因此重建后无需重跑
- * `Relayout`,调用方按原样传入同一个布局引擎即可继续渲染。
+ * 渲染目标重建(DPI 变化等场景)时只释放/重新创建渲染目标本体,传入的
+ * `BlockLayoutEngine` 不受影响 —— 布局对象(几何数组、`IDWriteTextLayout`)
+ * 不依赖任何具体渲染目标实例,因此重建后无需重跑 `Relayout`,调用方按原样
+ * 传入同一个布局引擎即可继续渲染。
  *
  * @example
  *   markair::Renderer renderer;
- *   renderer.Init(d2dFactory);
+ *   renderer.Init(fonts.Factory(), &fonts, &imageCache);
  *   renderer.RenderFrame(hwnd, layoutEngine, 0.0f, 12.0f);
  */
 class Renderer {
@@ -299,39 +303,40 @@ public:
     // 构造一个未初始化的渲染器,渲染目标延迟到首次绘制时才创建。
     Renderer();
 
-    // 释放当前持有的渲染目标(工厂由调用方持有,不在此释放)。
+    // 释放当前持有的渲染目标(DirectWrite 工厂由调用方持有,不在此释放)。
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
     /**
-     * 绑定 D2D 工厂,不立即创建渲染目标。
-     * @param factory 已创建好的 `ID2D1Factory`,生命周期须覆盖本对象。
+     * 绑定 DirectWrite 工厂,不立即创建渲染目标。
+     * @param dwriteFactory 共享的 DirectWrite 工厂(通常传 `fonts->Factory()`,
+     *              与 `IDWriteTextLayout` 出自同一个工厂族系),生命周期须
+     *              覆盖本对象;为 nullptr 时 `EnsureRenderTarget` 恒失败。
      * @param fonts 可选的字体子系统,仅用于 T28 脚注编号标签("[n]")这种
      *              不参与虚拟化、临建临绘的极小号文本;传 nullptr 时静默跳过
      *              该项装饰,不影响其余渲染。生命周期须覆盖本对象,不持有所有权。
      * @param images 可选的图片缓存(T32/T33),用于按 ImageBox::href 取位图;
-     *               传 nullptr 时全部图片一律画占位块。渲染目标重建时本对象会
-     *               调用其 ReleaseAllBitmaps()(旧位图绑定在旧目标上,必须丢弃)。
-     *               不持有所有权。
-     * @example renderer.Init(g_d2dFactory, &fonts, &imageCache);
+     *               传 nullptr 时全部图片一律画占位块。不持有所有权。
+     * @example renderer.Init(fonts.Factory(), &fonts, &imageCache);
      */
-    void Init(ID2D1Factory* factory, FontSubsystem* fonts = nullptr, ImageCache* images = nullptr);
+    void Init(IDWriteFactory* dwriteFactory, FontSubsystem* fonts = nullptr,
+              ImageCache* images = nullptr);
 
     /**
-     * 取得当前渲染目标,供上层在需要时把图片解码成绑定该目标的 ID2D1Bitmap。
+     * 取得当前渲染目标,供上层在需要时把图片解码成位图。
      * @return 渲染目标指针;尚未创建/刚被释放时为 nullptr,调用方须判空。
-     * @example ID2D1RenderTarget* rt = renderer.Target();
+     * @example GdiRenderTarget* rt = renderer.Target();
      */
-    ID2D1RenderTarget* Target() const;
+    GdiRenderTarget* Target() const;
 
     /**
      * 确保渲染目标已创建(尚未创建时按 hwnd 当前客户区尺寸惰性创建)。
      *
-     * 存在的理由:图片解码出的 `ID2D1Bitmap` 必须绑定到渲染目标,而渲染目标本来
-     * 只在 `RenderFrame` 内部才惰性创建 —— 那样首帧的图片解码会拿到空目标、白白
-     * 解一次又建不出位图。外壳层在跑虚拟化/解码之前先调一次本函数即可避免。
+     * 存在的理由:渲染目标本来只在 `RenderFrame` 内部才惰性创建 —— 那样首帧
+     * 的图片解码时机会早于渲染目标就绪。外壳层在跑虚拟化/解码之前先调一次
+     * 本函数即可避免。
      *
      * @param hwnd 目标窗口。
      * @return 渲染目标可用返回 true;创建失败返回 false(调用方应跳过解码,不崩溃)。
@@ -350,8 +355,8 @@ public:
 
     /**
      * DPI 变化通知(`WM_DPICHANGED`):记下新 DPI 并释放当前渲染目标,
-     * 下次 `RenderFrame` 会按新 DPI 惰性重建 —— 即"DPI 变化必须重建 D2D 资源"。
-     * 传入的布局引擎不受影响,无需重跑 `Relayout`。
+     * 下次 `RenderFrame` 会按新 DPI 惰性重建。传入的布局引擎不受影响,
+     * 无需重跑 `Relayout`。
      * @param dpi 新的每英寸点数(如 96 / 144 / 192);传 0 表示跟随系统默认 DPI。
      * @example renderer.OnDpiChanged(static_cast<float>(LOWORD(wparam)));
      */
@@ -359,11 +364,8 @@ public:
 
     /**
      * 绘制一帧:清屏后按 scrollY 平移绘制布局引擎里全部块的可见内容——
-     * 正文用 `DrawTextLayout`,引用竖线/分割线/代码块背景全部用 D2D
-     * 几何图元(矩形/直线)画,不用图标字体模拟。
-     *
-     * 内部处理设备丢失:`EndDraw` 返回 `D2DERR_RECREATE_TARGET` 时释放
-     * 渲染目标并直接返回,不崩溃;下次调用会惰性重新创建。
+     * 正文用 `DrawTextLayout`,引用竖线/分割线/代码块背景全部用矩形/直线等
+     * 几何图元画,不用图标字体模拟。
      *
      * @param hwnd 目标窗口,渲染目标未创建时用它的客户区尺寸创建。
      * @param layout 已完成 `Relayout`/`UpdateVisibleRange` 的布局引擎,
@@ -419,40 +421,40 @@ public:
     void SetPalette(const Palette* palette);
 
 private:
-    // 渲染目标不存在时按 hwnd 当前客户区尺寸创建(软件光栅化,架构决策)。
+    // 渲染目标不存在时按 hwnd 当前客户区尺寸创建。
     bool EnsureRenderTarget(HWND hwnd);
 
-    // 释放当前渲染目标并置空,供 D2DERR_RECREATE_TARGET 与析构复用。
+    // 释放当前渲染目标并置空,供 OnDpiChanged 与析构复用。
     void ReleaseRenderTarget();
 
     // 画单个块:文本用 DrawTextLayout,引用竖线/代码背景/表格网格/任务勾选框
     // 用几何图元(矩形/直线/圆角矩形),分割线/脚注分隔线用 DrawLine,
     // 容器块(无文本/无装饰)什么都不画。
     void DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, float targetWidth,
-                    ID2D1SolidColorBrush* textBrush,
-                    ID2D1SolidColorBrush* quoteBrush,
-                    ID2D1SolidColorBrush* codeBgBrush,
-                    ID2D1SolidColorBrush* codeBorderBrush,
-                    ID2D1SolidColorBrush* hrBrush,
-                    ID2D1SolidColorBrush* linkBrush,
-                    ID2D1SolidColorBrush* tableHeaderBrush,
-                    ID2D1SolidColorBrush* tableGridBrush,
-                    ID2D1SolidColorBrush* tableZebraBrush,
-                    ID2D1SolidColorBrush* tableRowHoverBrush,
-                    ID2D1SolidColorBrush* checkboxBorderBrush,
-                    ID2D1SolidColorBrush* checkboxCheckBrush,
-                    ID2D1SolidColorBrush* placeholderBgBrush,
-                    ID2D1SolidColorBrush* placeholderBorderBrush,
-                    ID2D1SolidColorBrush* badgeBgBrush,
-                    ID2D1SolidColorBrush* badgeTextBrush,
-                    ID2D1SolidColorBrush* findHighlightBrush,
-                    ID2D1SolidColorBrush* findCurrentBrush,
-                    ID2D1SolidColorBrush* selectionBrush,
-                    ID2D1SolidColorBrush* copyIconBrush,
-                    ID2D1SolidColorBrush* copyHoverBgBrush,
-                    ID2D1SolidColorBrush* copyPaperBrush,
-                    ID2D1SolidColorBrush* copyDoneBrush,
-                    ID2D1SolidColorBrush* const* hlBrushes);
+                    GdiBrush* textBrush,
+                    GdiBrush* quoteBrush,
+                    GdiBrush* codeBgBrush,
+                    GdiBrush* codeBorderBrush,
+                    GdiBrush* hrBrush,
+                    GdiBrush* linkBrush,
+                    GdiBrush* tableHeaderBrush,
+                    GdiBrush* tableGridBrush,
+                    GdiBrush* tableZebraBrush,
+                    GdiBrush* tableRowHoverBrush,
+                    GdiBrush* checkboxBorderBrush,
+                    GdiBrush* checkboxCheckBrush,
+                    GdiBrush* placeholderBgBrush,
+                    GdiBrush* placeholderBorderBrush,
+                    GdiBrush* badgeBgBrush,
+                    GdiBrush* badgeTextBrush,
+                    GdiBrush* findHighlightBrush,
+                    GdiBrush* findCurrentBrush,
+                    GdiBrush* selectionBrush,
+                    GdiBrush* copyIconBrush,
+                    GdiBrush* copyHoverBgBrush,
+                    GdiBrush* copyPaperBrush,
+                    GdiBrush* copyDoneBrush,
+                    GdiBrush* const* hlBrushes);
 
     // The "copy" glyph itself (two overlapping rounded sheets, T45): pure
     // D2D geometry, no icon font, no bitmap. Shared by the code-block copy
@@ -460,7 +462,7 @@ private:
     // identical; only draws the sheets, not the button background/hover/
     // copied-state — those are each caller's own shell logic.
     //
-    // "复制"图标本体(两张叠压的圆角纸,T45):纯 D2D 几何,零图标字体零位图。
+    // "复制"图标本体(两张叠压的圆角纸,T45):纯 矢量几何,零图标字体零位图。
     // 代码块复制按钮与底部栏"复制路径"按钮共用这一份画法,保证两处图标
     // 长得一模一样;只画纸张,不画按钮底色/悬浮态/已复制态,那些是各调用方
     // 自己的外壳逻辑。
@@ -469,47 +471,47 @@ private:
     // @param strokeBrush 纸张描边刷子。
     // @param paperBrush 前纸"纸面"填充色,可为 nullptr(不填充,只描边)。
     void DrawCopySheetsGlyph(float left, float top, float size,
-                              ID2D1SolidColorBrush* strokeBrush,
-                              ID2D1SolidColorBrush* paperBrush);
+                              GdiBrush* strokeBrush,
+                              GdiBrush* paperBrush);
 
-    // 画代码块右上角的"复制"按钮(T45):纯 D2D 几何,零图标字体零位图。
+    // 画代码块右上角的"复制"按钮(T45):纯 矢量几何,零图标字体零位图。
     // 三态视觉区分——默认态只画灰色双层纸张轮廓;悬浮态先铺一层浅灰圆角底、
     // 图标不变(底色出现即反馈);已复制态换成绿色对勾 + 绿色圆角边框。
     // 悬浮/已复制两种状态从 overlay_ 里按块下标读(见 ShellOverlay 的两个字段),
     // 没有 overlay 时一律按默认态画。
     void DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                             ID2D1SolidColorBrush* iconBrush,
-                             ID2D1SolidColorBrush* hoverBgBrush,
-                             ID2D1SolidColorBrush* paperBrush,
-                             ID2D1SolidColorBrush* doneBrush);
+                             GdiBrush* iconBrush,
+                             GdiBrush* hoverBgBrush,
+                             GdiBrush* paperBrush,
+                             GdiBrush* doneBrush);
 
     // 画一个块内的全部图片(T33):缓存里有位图就 DrawBitmap,否则画统一样式的
     // 占位块(灰底圆角矩形 + 居中文案);画完位图后若该图被降采样过,再叠加
     // 右下角的"查看原图"提示标签。
     void DrawImages(const BlockGeometry& g, float scrollY,
-                     ID2D1SolidColorBrush* textBrush,
-                     ID2D1SolidColorBrush* placeholderBgBrush,
-                     ID2D1SolidColorBrush* placeholderBorderBrush,
-                     ID2D1SolidColorBrush* badgeBgBrush,
-                     ID2D1SolidColorBrush* badgeTextBrush);
+                     GdiBrush* textBrush,
+                     GdiBrush* placeholderBgBrush,
+                     GdiBrush* placeholderBorderBrush,
+                     GdiBrush* badgeBgBrush,
+                     GdiBrush* badgeTextBrush);
 
     // 占位块统一画法(T33,2026-09-17 追加图标):灰底圆角矩形 + 1px 边框 +
-    // 居中"图片"图标(相框+太阳+山峰,纯 D2D 几何,零图标字体零位图)+ 图标下方文案。
+    // 居中"图片"图标(相框+太阳+山峰,纯 矢量几何,零图标字体零位图)+ 图标下方文案。
     // 五种状态(未加载/失败/SVG/超限/网络未加载)共用本函数,只有 text 不同。
     void DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text, u32 textLen,
-                               ID2D1SolidColorBrush* bgBrush,
-                               ID2D1SolidColorBrush* borderBrush,
-                               ID2D1SolidColorBrush* textBrush);
+                               GdiBrush* bgBrush,
+                               GdiBrush* borderBrush,
+                               GdiBrush* textBrush);
 
     // 降采样提示标签(T33 追加):图片右下角的半透明圆角小标签 + 小号文字,
-    // 纯 D2D 几何图元,零图标字体、零位图(与 T27 勾选框同一套画法)。
+    // 纯 矢量几何图元,零图标字体、零位图(与 T27 勾选框同一套画法)。
     void DrawDownsampledBadge(const D2D1_RECT_F& imageRect,
-                               ID2D1SolidColorBrush* badgeBgBrush,
-                               ID2D1SolidColorBrush* badgeTextBrush);
+                               GdiBrush* badgeBgBrush,
+                               GdiBrush* badgeTextBrush);
 
     // 画欢迎屏(未打开任何文档时,取代正文 DrawBlock 循环):居中标题
     // "Welcome to markair"(与正文一级标题同一套字号/加粗手法)+ 下方一个
-    // 宽大的"打开文件"按钮(圆角矩形描边/填充 + 纯 D2D 几何画的文件夹图标
+    // 宽大的"打开文件"按钮(圆角矩形描边/填充 + 纯 矢量几何画的文件夹图标
     // + 居中文字)。不参与任何布局/虚拟化,每帧原样重画,开销可忽略。
     // @param targetWidth/targetHeight 渲染目标当前尺寸(DIP)。
     // @param buttonHover 按钮当前是否处于鼠标悬浮态,决定按钮底色深浅。
@@ -519,61 +521,61 @@ private:
     // @param buttonBorderBrush 按钮描边色。
     void DrawWelcomeScreen(float targetWidth, float targetHeight,
                             bool buttonHover, bool folderButtonHover,
-                            ID2D1SolidColorBrush* textBrush,
-                            ID2D1SolidColorBrush* buttonFillBrush,
-                            ID2D1SolidColorBrush* buttonHoverFillBrush,
-                            ID2D1SolidColorBrush* buttonBorderBrush);
+                            GdiBrush* textBrush,
+                            GdiBrush* buttonFillBrush,
+                            GdiBrush* buttonHoverFillBrush,
+                            GdiBrush* buttonBorderBrush);
 
     // 画表格网格线/表头背景/表体斑马纹/悬浮行高亮:只依赖 BlockGeometry 里
     // 已存好的 tableColWidths/tableRowTops/tableHeadRowCount,不依赖 Document。
     // @param hoverRow 当前悬浮的表体行(body-relative,0 起),kInvalidIndex 表示无。
     void DrawTableChrome(const BlockGeometry& g, float scrollY,
-                          ID2D1SolidColorBrush* tableHeaderBrush,
-                          ID2D1SolidColorBrush* tableGridBrush,
-                          ID2D1SolidColorBrush* tableZebraBrush,
-                          ID2D1SolidColorBrush* tableRowHoverBrush,
+                          GdiBrush* tableHeaderBrush,
+                          GdiBrush* tableGridBrush,
+                          GdiBrush* tableZebraBrush,
+                          GdiBrush* tableRowHoverBrush,
                           u32 hoverRow);
 
     // 给链接/自动链接 run 单独着色(T24):不用 SetDrawingEffect,而是对每个
     // link range 的 HitTestTextRange 矩形做 PushAxisAlignedClip 后重画一次
     // 整个 layout(裁剪区之外的部分不可见),不引入自定义渲染器。
-    void DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* linkBrush);
+    void DrawLinkOverlays(const BlockGeometry& g, float scrollY, GdiBrush* linkBrush);
 
     // 给围栏代码块的语法着色 run 单独换色(T53):与 DrawLinkOverlays 同一手法——
     // 不用 SetDrawingEffect/自定义渲染器,对每个 token range 的 HitTestTextRange
     // 矩形做 PushAxisAlignedClip 后重画一次整个 layout。hlBrushes 是按
     // hl/lexer.h::TokenType 取值下标的 7 支画笔数组,调用方保证非空且长度为 7。
     void DrawCodeHighlights(const BlockGeometry& g, float scrollY,
-                              ID2D1SolidColorBrush* const* hlBrushes);
+                              GdiBrush* const* hlBrushes);
 
     // 画任务列表勾选框(T27):圆角矩形 + 已勾选时叠加两段折线对勾,零字体零位图。
     void DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
-                           ID2D1SolidColorBrush* borderBrush,
-                           ID2D1SolidColorBrush* checkBrush);
+                           GdiBrush* borderBrush,
+                           GdiBrush* checkBrush);
 
     // 画脚注定义的 "[n]" 编号标签(T28):临时创建一个极小的 IDWriteTextLayout,
     // 画完立即释放,不参与虚拟化/不缓存——脚注定义数量通常很少,这点开销可忽略。
     // fonts_ 为空(未提供字体子系统)时静默跳过。
-    void DrawFootnoteLabel(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* textBrush);
+    void DrawFootnoteLabel(const BlockGeometry& g, float scrollY, GdiBrush* textBrush);
 
-    // 画列表项前的符号(T44):无序列表用 D2D 几何图元(实心圆点/空心圆/实心方块,
+    // 画列表项前的符号(T44):无序列表用 矢量几何图元(实心圆点/空心圆/实心方块,
     // 按 listMarkerLevel 三档循环),有序列表临时创建一个极小的 IDWriteTextLayout
     // 画 "N." 这样的序号(用法同 DrawFootnoteLabel,画完立即释放)。任务列表项
     // (g.taskCheckbox 非空)已经在 DrawTaskCheckbox 画了勾选框,这里用
     // g.listMarker.width <= 0 直接跳过,不会重复画。
-    void DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush);
+    void DrawListMarker(const BlockGeometry& g, float scrollY, GdiBrush* markerBrush);
 
     // 画一个块内的查找命中高亮(T38):用 HitTestTextRange 拿矩形,在**文本下方**
     // 填半透明底色(不改文本颜色,避免和链接蓝冲突),当前命中换另一种底色。
     void DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                             ID2D1SolidColorBrush* fillBrush,
-                             ID2D1SolidColorBrush* currentFillBrush);
+                             GdiBrush* fillBrush,
+                             GdiBrush* currentFillBrush);
 
     // 画一个块内的鼠标拖选高亮(T80):与 DrawFindHighlights 同一手法——
     // HitTestTextRange 拿矩形,画在文本下方。只处理选区与本块相交的那一段
     // (选区跨块时,起止块各自裁到块内偏移,中间块整块高亮)。
     void DrawSelectionHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                                  ID2D1SolidColorBrush* fillBrush);
+                                  GdiBrush* fillBrush);
 
     // 画顶部浮出的查找条(T37)与窗口内提示(T36 的"路径不存在"),
     // Both share the same "rounded top bar + small text" style; no new
@@ -581,7 +583,7 @@ private:
     //
     // 两者共用同一套"顶部圆角条 + 小号文字"的画法,不新增菜单栏/工具栏(§9)。
     void DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLen,
-                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                         GdiBrush* bgBrush, GdiBrush* textBrush,
                          float topOffset);
 
     // Draw the find bar (T37, 2026-09-19 revision): a fixed-width rounded
@@ -602,24 +604,24 @@ private:
     // 与 shell/find_bar.h 的同名常量保持一致——render 不反向 include shell
     // 头文件,这里只重复几个纯数字(与其余"浮出条"类控件同一条既有约束)。
     void DrawFindBar(float targetWidth, const wchar_t* statusText, u32 statusTextLen,
-                      ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush);
+                      GdiBrush* bgBrush, GdiBrush* textBrush);
 
     // 画大纲侧栏打开时盖在侧栏外正文区域的半透明蒙层:只盖侧栏矩形之外的
     // 区域(侧栏本身随后单独画,不会被这层蒙层盖住),与 DrawOutlinePanel
     // 共用同一个"侧栏是否打开"的判断依据(overlay_->outlineItems 非空),
     // 侧栏关闭时不产生任何额外绘制。
     void DrawOutlineOverlayMask(float targetWidth, float targetHeight,
-                                ID2D1SolidColorBrush* maskBrush);
+                                GdiBrush* maskBrush);
 
     // 画大纲侧栏(T63):悬浮在正文左侧上方的一条固定宽度面板,与
     // DrawOverlayBar 同一套"浮出条"底色/风格,只是画成整块矩形 + 逐行文字。
     // 只在 overlay_->outlineItems 非空时被调用,不参与任何布局重排。
     void DrawOutlinePanel(float targetHeight,
-                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
-                          ID2D1SolidColorBrush* highlightBgBrush,
-                          ID2D1SolidColorBrush* highlightTextBrush,
-                          ID2D1SolidColorBrush* scrollbarTrackBrush,
-                          ID2D1SolidColorBrush* scrollbarThumbBrush);
+                          GdiBrush* bgBrush, GdiBrush* textBrush,
+                          GdiBrush* highlightBgBrush,
+                          GdiBrush* highlightTextBrush,
+                          GdiBrush* scrollbarTrackBrush,
+                          GdiBrush* scrollbarThumbBrush);
 
     /**
      * Draw translucent mask overlay when history sidebar is opening or open.
@@ -639,7 +641,7 @@ private:
      *   绘制半透明蒙层的画刷。
      */
     void DrawHistoryOverlayMask(float targetWidth, float targetHeight,
-                                ID2D1SolidColorBrush* maskBrush);
+                                GdiBrush* maskBrush);
 
     /**
      * Draw history drawer sidebar panel on the right side of the window.
@@ -683,11 +685,11 @@ private:
      *   滚动条滑块画刷。
      */
     void DrawHistoryPanel(float targetWidth, float targetHeight,
-                          ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
-                          ID2D1SolidColorBrush* highlightBgBrush,
-                          ID2D1SolidColorBrush* buttonBgBrush,
-                          ID2D1SolidColorBrush* scrollbarTrackBrush,
-                          ID2D1SolidColorBrush* scrollbarThumbBrush);
+                          GdiBrush* bgBrush, GdiBrush* textBrush,
+                          GdiBrush* highlightBgBrush,
+                          GdiBrush* buttonBgBrush,
+                          GdiBrush* scrollbarTrackBrush,
+                          GdiBrush* scrollbarThumbBrush);
 
     /**
      * 按边框视觉方案(EditBoxBorderStyle)绘制一个输入框容器的边框——
@@ -700,7 +702,7 @@ private:
      * @param strokeWidth 描边宽度(DIP)。
      * @example renderer.DrawEditBoxBorder(rect, textBrush, EditBoxBorderStyle::Bordered, 0.8f);
      */
-    void DrawEditBoxBorder(D2D1_RECT_F rect, ID2D1SolidColorBrush* borderBrush,
+    void DrawEditBoxBorder(D2D1_RECT_F rect, GdiBrush* borderBrush,
                            EditBoxBorderStyle style, float strokeWidth);
 
     /**
@@ -717,14 +719,14 @@ private:
      * @param tooltipTextBrush 提示气泡的文字色,同上与 overlayBar 共用。
      */
     void DrawFolderPanel(float targetWidth, float targetHeight,
-                         ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
-                         ID2D1SolidColorBrush* highlightBgBrush,
-                         ID2D1SolidColorBrush* currentItemBrush,
-                         ID2D1SolidColorBrush* buttonBgBrush,
-                         ID2D1SolidColorBrush* scrollbarTrackBrush,
-                         ID2D1SolidColorBrush* scrollbarThumbBrush,
-                         ID2D1SolidColorBrush* tooltipBgBrush,
-                         ID2D1SolidColorBrush* tooltipTextBrush);
+                         GdiBrush* bgBrush, GdiBrush* textBrush,
+                         GdiBrush* highlightBgBrush,
+                         GdiBrush* currentItemBrush,
+                         GdiBrush* buttonBgBrush,
+                         GdiBrush* scrollbarTrackBrush,
+                         GdiBrush* scrollbarThumbBrush,
+                         GdiBrush* tooltipBgBrush,
+                         GdiBrush* tooltipTextBrush);
 
     /**
      * 绘制通用的侧边栏列表行项（背景、单行省略号截断文本与悬浮操作按钮）。
@@ -736,12 +738,12 @@ private:
      * @param buttonBgBrush 悬浮操作按钮遮罩底色画刷。
      */
     void DrawSidebarListItem(const SidebarListItemParams& params,
-                            ID2D1SolidColorBrush* textBrush,
-                            ID2D1SolidColorBrush* highlightBgBrush,
-                            ID2D1SolidColorBrush* currentItemBrush,
-                            ID2D1SolidColorBrush* buttonBgBrush);
+                            GdiBrush* textBrush,
+                            GdiBrush* highlightBgBrush,
+                            GdiBrush* currentItemBrush,
+                            GdiBrush* buttonBgBrush);
 
-    // 画底部操作栏(2026-09-18 改版):左侧 5 个固定宽度图标按钮(纯 D2D 几何
+    // 画底部操作栏(2026-09-18 改版):左侧 5 个固定宽度图标按钮(纯 矢量几何
     // 线条,不带常驻文字标签),按钮间用竖分隔线区分;右侧状态区画当前文档
     // 路径 + 大小(documentPath 为空/空串时不画任何文字)。不参与任何布局
     // 重排,几何常量与 shell/bottom_bar.h 的命中测试同一套口径(数值常量
@@ -753,8 +755,8 @@ private:
     // 悬浮提示气泡不在这里画,见 DrawBottomBarTooltip(必须晚于文件夹侧栏画,
     // 单独拆出去调用)。
     void DrawBottomBar(float targetWidth, float targetHeight,
-                        ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
-                        ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
+                        GdiBrush* bgBrush, GdiBrush* iconBrush,
+                        GdiBrush* textBrush, GdiBrush* dividerBrush,
                         const wchar_t* documentPath = nullptr, u64 documentSizeBytes = 0,
                         bool pathCopied = false);
 
@@ -769,7 +771,7 @@ private:
     // @param hasDocument 是否已打开文档,决定 CopyPath 按钮是否存在(命中
     //        测试口径与 shell/bottom_bar.h::HitTestBottomBar 一致)。
     void DrawBottomBarTooltip(float targetWidth, float targetHeight,
-                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                               GdiBrush* bgBrush, GdiBrush* textBrush,
                                u32 hoverButtonIndex, bool hasDocument);
 
     // 自绘滚动条(方案A):轨道(常驻,标示可滚动范围)+ 滑块,圆角矩形,
@@ -779,26 +781,25 @@ private:
     // 必须在 Identity 变换下调用——不能跟着正文的 leftPaddingDip 平移,否则
     // 位置会整体偏移。
     void DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight, float scrollY,
-                        ID2D1SolidColorBrush* trackBrush, ID2D1SolidColorBrush* thumbBrush);
+                        GdiBrush* trackBrush, GdiBrush* thumbBrush);
 
     // 底部栏"放大/缩小"图标几何(2026-09-19,按给定 SVG viewBox 0 0 24 24 的
     // 直线路径精确复刻:字母 "A" + 右下角 "+"/"-"),设备无关资源,首次用到才
-    // 建、跟工厂同生命周期,不必每帧重建。
-    ID2D1PathGeometry* zoomInIconGeometry_;
-    ID2D1PathGeometry* zoomOutIconGeometry_;
+    // 建、跟渲染器同生命周期,不必每帧重建。
+    Gdiplus::GraphicsPath* zoomInIconGeometry_;
+    Gdiplus::GraphicsPath* zoomOutIconGeometry_;
 
     // Build the fill geometry for the "zoom in" or "zoom out" icon from its
     // SVG path data (nonzero winding rule, matching SVG's default
     // fill-rule); called once and cached the first time that icon is drawn.
     // @param zoomIn true builds zoom-in ("A+"), false builds zoom-out ("A-").
-    // @return The newly built path geometry; nullptr if factory_ isn't ready
-    //         or creation fails.
+    // @return The newly built path; nullptr on allocation failure.
     //
-    // 按给定 SVG 路径数据构建"放大"或"缩小"图标的填充几何(nonzero 缠绕规则,
+    // 按给定 SVG 路径数据构建"放大"或"缩小"图标的填充路径(nonzero 缠绕规则,
     // 与 SVG 默认 fill-rule 一致),只在首次绘制该图标时调用一次并缓存。
     // @param zoomIn true 建放大("A+"),false 建缩小("A-")。
-    // @return 新建的路径几何;factory_ 未就绪或创建失败返回 nullptr。
-    ID2D1PathGeometry* BuildZoomFontIconGeometry(bool zoomIn);
+    // @return 新建的路径;分配失败返回 nullptr。
+    Gdiplus::GraphicsPath* BuildZoomFontIconGeometry(bool zoomIn);
 
     // 以下是 5 套按钮系统统一接入 Button/IconButton(shell/button.h)之后,
     // 各自图标内容的 ButtonIconPaintFn 实现——按钮"这是一个按钮"这件事
@@ -824,10 +825,10 @@ private:
     // 代码块复制按钮默认态的"两张叠压纸"图标(复用 DrawCopySheetsGlyph)。
     static void PaintCodeCopySheetsIcon(void* renderCtx, const ButtonRectDip& rect, void* userData);
 
-    ID2D1Factory* factory_;              // 不拥有,生命周期由调用方保证
+    IDWriteFactory* dwriteFactory_;        // 不拥有,生命周期由调用方保证
     FontSubsystem* fonts_;                // 不拥有,可为空;供 T28 脚注标签与 T33 占位文案使用
     ImageCache* images_;                  // 不拥有,可为空;T33 按 href 取已解码位图
-    ID2D1HwndRenderTarget* target_;       // 懒创建,可在 D2DERR_RECREATE_TARGET 后重建
+    GdiRenderTarget* target_;       // 懒创建,DPI 变化等场景会释放后惰性重建
     float dpi_;                           // 渲染目标 DPI,0 表示跟随系统默认
     const ShellOverlay* overlay_;         // 仅在一次 RenderFrame 期间有效的叠加层视图,不拥有
     // T76:本帧客户区高度(DIP),RenderFrame 开头写入。链接/语法着色的逐 run
