@@ -418,12 +418,25 @@ public:
      */
     void SetPalette(const Palette* palette);
 
+    /**
+     * 窗口进入后台(最小化)时主动释放渲染目标与全部图片位图,压低内存占用;
+     * 不影响布局引擎里的几何数据,恢复前台后下一帧 `RenderFrame`/`EnsureTarget`
+     * 会照常惰性重建(渲染延迟换内存,产品决策见调用方注释)。
+     * @example if (minimized) renderer.ReleaseForBackground();
+     */
+    void ReleaseForBackground();
+
 private:
     // 渲染目标不存在时按 hwnd 当前客户区尺寸创建(软件光栅化,架构决策)。
     bool EnsureRenderTarget(HWND hwnd);
 
     // 释放当前渲染目标并置空,供 D2DERR_RECREATE_TARGET 与析构复用。
     void ReleaseRenderTarget();
+
+    // DirectWrite 原生 Trimming 省略号:不换行 + 超宽时按字符截断补"...",
+    // 侧栏行文字/侧栏头部/底部栏路径状态区三处共用同一套设置,抽出来避免
+    // 反复复制这几行。`layout` 为空或字体工厂不可用时静默跳过。
+    void ApplyEllipsisTrimming(IDWriteTextLayout* layout);
 
     // 画单个块:文本用 DrawTextLayout,引用竖线/代码背景/表格网格/任务勾选框
     // 用几何图元(矩形/直线/圆角矩形),分割线/脚注分隔线用 DrawLine,

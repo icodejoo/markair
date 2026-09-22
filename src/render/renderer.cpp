@@ -473,6 +473,19 @@ void Renderer::OnDpiChanged(float dpi) {
     ReleaseRenderTarget();
 }
 
+void Renderer::ReleaseForBackground() { ReleaseRenderTarget(); }
+
+void Renderer::ApplyEllipsisTrimming(IDWriteTextLayout* layout) {
+    if (!layout || !fonts_ || !fonts_->Factory()) return;
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    IDWriteInlineObject* ellipsisSign = nullptr;
+    if (SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(layout, &ellipsisSign))) {
+        DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+        layout->SetTrimming(&trimming, ellipsisSign);
+        ellipsisSign->Release();
+    }
+}
+
 void Renderer::ReleaseRenderTarget() {
     if (target_) {
         target_->Release();
@@ -1131,14 +1144,7 @@ void Renderer::DrawSidebarListItem(const SidebarListItemParams& params,
                 params.text, params.textLen, FontRole::Body, maxTextWidth, params.rowHeight);
             if (textLayout) {
                 textLayout->SetFontSize(kSidebarRowFontSizeDip, DWRITE_TEXT_RANGE{0, params.textLen});
-                textLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-                IDWriteInlineObject* ellipsisSign = nullptr;
-                if (fonts_->Factory() &&
-                    SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(textLayout, &ellipsisSign))) {
-                    DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-                    textLayout->SetTrimming(&trimming, ellipsisSign);
-                    ellipsisSign->Release();
-                }
+                ApplyEllipsisTrimming(textLayout);
                 float textTop = params.rowTop + (params.rowHeight - kSidebarRowFontSizeDip - 4.0f) * 0.5f;
                 target_->DrawTextLayout(D2D1::Point2F(params.rowLeft + kSidebarPanelPaddingDip, textTop),
                                         textLayout, textBrush,
@@ -1424,14 +1430,7 @@ void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
         if (headerLayout) {
             headerLayout->SetFontSize(kSidebarHeaderFontSizeDip, DWRITE_TEXT_RANGE{0, headerLen});
             headerLayout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_RANGE{0, headerLen});
-            headerLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-            IDWriteInlineObject* headerEllipsis = nullptr;
-            if (fonts_->Factory() &&
-                SUCCEEDED(fonts_->Factory()->CreateEllipsisTrimmingSign(headerLayout, &headerEllipsis))) {
-                DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-                headerLayout->SetTrimming(&trimming, headerEllipsis);
-                headerEllipsis->Release();
-            }
+            ApplyEllipsisTrimming(headerLayout);
             float textTop = (kFolderHeaderRow1HeightDip - kSidebarHeaderFontSizeDip - 4.0f) * 0.5f;
             target_->DrawTextLayout(D2D1::Point2F(kSidebarPanelPaddingDip, textTop),
                                     headerLayout, textBrush,
@@ -2010,6 +2009,9 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
                 statusLayout->SetFontSize(kBottomBarStatusFontSizeDip, DWRITE_TEXT_RANGE{0, textLen});
                 statusLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
                 statusLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                // 路径过长时溢出省略,与侧栏行文字/侧栏头部同一套口径,见
+                // ApplyEllipsisTrimming。
+                ApplyEllipsisTrimming(statusLayout);
                 target_->DrawTextLayout(D2D1::Point2F(statusAreaLeft, barTop), statusLayout, textBrush,
                                         D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
                 statusLayout->Release();
@@ -2911,7 +2913,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 这里加回来换算成真实滚动偏移;视口高度同理用客户区高度减去两份内边距
     // 换算(与外壳层 UsableViewportHeightDip 同一口径,不重复 include shell 头文件)。
     if (!welcomeScreen && !outlineOpen && !historyOpen) {
-        float scrollbarHeight = targetSize.height - kBottomBarHeightDip;
+        float scrollbarHeight = targetSize.height - kBottomBarHeightDip - 2.0f * leftPaddingDip;
         if (scrollbarHeight < 0.0f) scrollbarHeight = 0.0f;
         // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
         //

@@ -1750,6 +1750,29 @@ void PaintOnce(HWND hwnd, WindowState* state) {
     }
 }
 
+// 窗口进入后台(最小化,或失去前台激活态/被完全遮住)时主动把内存压到
+// 最低:D2D 渲染目标 + 全部图片位图 + 虚拟化文本布局全部释放,只留
+// Document/Arena 那份最小常驻状态;恢复前台后下一帧 WM_PAINT 会照常惰性
+// 重建(EnsureTarget/UpdateVisibleRange),用一次可感知的渲染延迟换取后台
+// 内存下降到最低——产品决策:内存优先,渲染延迟可接受。触发点见 WM_SIZE/
+// WM_ACTIVATE 分支;最小化会连带触发 WM_ACTIVATE(WA_INACTIVE),那边用
+// IsIconic 排掉这种情况以免同一次最小化重复调用本函数两遍。
+void TrimMemoryForBackground(WindowState* state) {
+    if (!state) return;
+    if (state->layout && state->fonts) {
+        // 传一个不与任何块几何相交的区间,等效于"整份文档都不可见"——复用
+        // UpdateVisibleRange 现成的淘汰逻辑(见 layout.cpp),不新写一套遍历。
+        float farY = state->layout->TotalHeight() + 1.0f;
+        state->layout->UpdateVisibleRange(farY, farY, *state->fonts, state->residency);
+    }
+    if (state->renderer) {
+        state->renderer->ReleaseForBackground();
+    }
+    // 强制把进程工作集压下去,让任务管理器数字立刻反映释放结果——只影响
+    // working set 汇报,不影响正确性,恢复前台后照常缺页调入。
+    SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+}
+
 // 客户区尺寸变化:同步渲染目标尺寸、按新视口宽度重跑布局(不重解析),
 // 并把滚动偏移重新夹到新的合法区间(窗口变高时文档可能已不足以滚那么远)。
 void OnSize(HWND hwnd, WindowState* state, UINT32 width, UINT32 height) {
@@ -2004,8 +2027,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return 0;
 
     case WM_SIZE:
+        // 最小化=后台,不需要绘制:此时 lParam 携带的客户区尺寸恒为 0,
+        // 不能拿去 Relayout,改为直接压内存,跳过 OnSize 的整套布局逻辑。
+        // 恢复前台(SIZE_RESTORED/SIZE_MAXIMIZED)按原有路径正常走 OnSize,
+        // 其末尾的 InvalidateRect 会触发下一帧 WM_PAINT 惰性重建。
+        if (wparam == SIZE_MINIMIZED) {
+            TrimMemoryForBackground(state);
+            return 0;
+        }
         OnSize(hwnd, state, LOWORD(lparam), HIWORD(lparam));
         return 0;
+
+    case WM_ACTIVATE:
+        // 失去前台激活态——切到别的窗口、或被别的窗口完全盖住通常都伴随这个
+        // 消息(真正的"完全遮挡"在 Win32 没有专门的通知,退而求其次用激活态
+        // 当代理信号,与最小化共用同一套压内存函数)。最小化本身也会先触发
+        // 一次 WA_INACTIVE,这里用 IsIconic 让给 WM_SIZE/SIZE_MINIMIZED 分支
+        // 处理,避免同一次最小化重复触发两遍全量淘汰 + SetProcessWorkingSetSize。
+        // 重新激活(WA_ACTIVE/WA_CLICKACTIVE)不需要特殊处理,画面还停留在
+        // 最后一帧,后续任何 WM_PAINT 都会照常懒重建。仍要交回 DefWindowProcW,
+        // 不能吞掉——它负责真正切换激活态/输入焦点。
+        if (LOWORD(wparam) == WA_INACTIVE && !IsIconic(hwnd)) {
+            TrimMemoryForBackground(state);
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
 
     case WM_MOVE:
         // T56:纯移动(不改尺寸)也要去抖后写盘。
@@ -2240,7 +2285,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             } else if (!MaskedSidebarActive(state) && state->layout) {
                 // 不在任何侧栏面板里:文件夹侧栏(挤压模式,无蒙层)开着也照样
                 // 走正文分支,大纲/历史的蒙层则会拦下(见 MaskedSidebarActive)。
-                float viewportHeight = ViewportHeightOf(hwnd);
+                // 滑块几何/命中范围必须用"可用视口高度"(与 SetScrollY 的 Clamp
+                // 口径一致),否则拖到底时滑块已经先到轨道底、但 SetScrollY 还
+                // 允许再往下滚 kContentPaddingDip*2,导致拖不到真正的文档底部。
+                float viewportHeight = UsableViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 ScrollbarMetrics m = CalcScrollbarMetrics(viewportWidth, viewportHeight,
                                                           state->layout->TotalHeight(), state->scrollY);
@@ -2523,7 +2571,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             float dragDelta = dipY - state->scrollbarDragStartMouseYDip;
 
             if (state->scrollbarDragTarget == ScrollbarDragTarget::Main && state->layout) {
-                float viewportHeight = ViewportHeightOf(hwnd);
+                // 与滑块几何/命中判定同一口径,见上面 WM_LBUTTONDOWN 分支的注释。
+                float viewportHeight = UsableViewportHeightOf(hwnd);
                 float newY = ScrollYAfterThumbDrag(state->scrollbarDragStartScrollY, dragDelta,
                                                    viewportHeight, state->layout->TotalHeight());
                 SetScrollY(hwnd, state, newY);
@@ -2651,7 +2700,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 // 能走到这里说明鼠标不在任何已展开侧栏的面板里。文件夹侧栏是
                 // 挤压模式(没有蒙层),它开着也不妨碍正文响应;大纲/历史的
                 // 蒙层则会整块盖住正文,所以还要 MaskedSidebarActive 这一关。
-                float viewportHeight = ViewportHeightOf(hwnd);
+                // 与滑块几何同一口径(UsableViewportHeightOf),否则悬浮高亮区域
+                // 会比实际画出来的轨道多出内边距那一截。
+                float viewportHeight = UsableViewportHeightOf(hwnd);
                 float viewportWidth = ClientWidthDip(hwnd);
                 newMainHover = dipY >= 0.0f && dipY <= viewportHeight &&
                                 IsPointInScrollbarColumn(viewportWidth, dipX);
