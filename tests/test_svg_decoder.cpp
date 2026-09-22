@@ -5,8 +5,6 @@
 #include "../src/assets/svg_decoder.h"
 #include "../src/assets/image.h"
 
-#include <objidl.h>
-#include <gdiplus.h>
 #include <cstring>
 
 using markair::DecodedByteSize;
@@ -51,7 +49,7 @@ MARKAIR_TEST(SvgDecoder_SimpleRectDecodesOk) {
     MARKAIR_CHECK_EQ(img.height, 32u);
     MARKAIR_CHECK(!img.wasDownsampled);
     MARKAIR_CHECK(img.bitmap != nullptr);
-    delete img.bitmap;
+    if (img.bitmap) img.bitmap->Release();
 
     env.Shutdown();
 }
@@ -65,7 +63,7 @@ MARKAIR_TEST(SvgDecoder_ClipPathDecodesOk) {
     MARKAIR_CHECK(img.status == ImageStatus::Ok);
     MARKAIR_CHECK_EQ(img.width, 40u);
     MARKAIR_CHECK_EQ(img.height, 20u);
-    delete img.bitmap;
+    if (img.bitmap) img.bitmap->Release();
 
     env.Shutdown();
 }
@@ -82,7 +80,7 @@ MARKAIR_TEST(SvgDecoder_OversizedIsDownsampledNotRejected) {
     MARKAIR_CHECK(DecodedByteSize(img.width, img.height) <= kMaxDecodedBytes);
     MARKAIR_CHECK_EQ(img.originalWidth, 2048u);
     MARKAIR_CHECK_EQ(img.originalHeight, 1024u);
-    delete img.bitmap;
+    if (img.bitmap) img.bitmap->Release();
 
     env.Shutdown();
 }

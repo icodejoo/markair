@@ -76,7 +76,6 @@ add_executable(markair_tests
     # renderer.cpp:T33 的占位文案/降采样标签文案是纯函数,值得单测;
     # Renderer 本体仍不在测试里构造(需要真实 HWND),只是把这个 TU 链进来。
     ../src/render/renderer.cpp
-    ../src/render/gdi_target.cpp
     ../src/render/theme.cpp
     ../src/hl/languages.cpp
     ../src/hl/lexer.cpp
@@ -132,7 +131,7 @@ target_compile_definitions(markair_tests PRIVATE
 # edit_box.cpp 的 SetWindowTheme 需要 uxtheme(与 markair.exe 主目标同一个库,
 # 测试目标不做 /DELAYLOAD,直接静态导入)。
 target_link_libraries(markair_tests PRIVATE
-    md4c lunasvg dwrite gdiplus psapi ole32 winhttp shell32 pathcch uxtheme)
+    md4c lunasvg dwrite psapi d2d1 ole32 winhttp shell32 pathcch uxtheme)
 
 enable_testing()
 add_test(NAME markair_tests COMMAND markair_tests)

@@ -3,7 +3,6 @@
 #include <cstring>
 #include <cwchar>
 #include <cstdio>
-#include <new>
 
 #include "../assets/data_uri.h"
 #include "../assets/svg_decoder.h"
@@ -356,7 +355,7 @@ void ImageResidencyManager::Init(Renderer* renderer, ImageCache* cache, Arena* s
 ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
     if (!cache_) return ImageStatus::Failed;
 
-    GdiRenderTarget* target = renderer_ ? renderer_->Target() : nullptr;
+    ID2D1RenderTarget* target = renderer_ ? renderer_->Target() : nullptr;
     DecodedImage decoded{nullptr, 0, 0, ImageStatus::Failed, false};
     bool isSvg = IsSvgImageRef(box.href);  // SVG 走 lunasvg 离线栅格化,不进 WIC
 
@@ -433,26 +432,26 @@ void ImageResidencyManager::ReleaseResident(const ImageBox* boxes, u32 count) {
 
 // 构造一个未绑定工厂、未创建渲染目标的渲染器。
 Renderer::Renderer()
-    : zoomInIconGeometry_(nullptr), zoomOutIconGeometry_(nullptr), dwriteFactory_(nullptr),
+    : zoomInIconGeometry_(nullptr), zoomOutIconGeometry_(nullptr), factory_(nullptr),
       fonts_(nullptr), images_(nullptr), target_(nullptr), dpi_(0.0f),
       overlay_(nullptr), frameViewportHeight_(0.0f), palette_(&kLightPalette),
       outlineScratchInited_(false) {}
 
-// 析构时释放渲染目标本体;DirectWrite 工厂/字体子系统均不归本对象所有,不在此释放。
-// 放大/缩小图标几何是设备无关的纯几何路径,本对象持有,这里一并释放。
+// 析构时释放渲染目标本体;工厂/字体子系统均不归本对象所有,不在此释放。
+// 放大/缩小图标几何挂在 factory_(设备无关资源),本对象持有引用,这里一并释放。
 Renderer::~Renderer() {
     ReleaseRenderTarget();
-    delete zoomInIconGeometry_;
-    delete zoomOutIconGeometry_;
+    if (zoomInIconGeometry_) zoomInIconGeometry_->Release();
+    if (zoomOutIconGeometry_) zoomOutIconGeometry_->Release();
 }
 
-void Renderer::Init(IDWriteFactory* dwriteFactory, FontSubsystem* fonts, ImageCache* images) {
-    dwriteFactory_ = dwriteFactory;
+void Renderer::Init(ID2D1Factory* factory, FontSubsystem* fonts, ImageCache* images) {
+    factory_ = factory;
     fonts_ = fonts;
     images_ = images;
 }
 
-GdiRenderTarget* Renderer::Target() const { return target_; }
+ID2D1RenderTarget* Renderer::Target() const { return target_; }
 
 // 切换调色板:只改指针,不拷贝 Palette、不碰渲染目标/布局(T46,为 T49 打基础)。
 void Renderer::SetPalette(const Palette* palette) {
@@ -476,29 +475,45 @@ void Renderer::OnDpiChanged(float dpi) {
 
 void Renderer::ReleaseRenderTarget() {
     if (target_) {
-        delete target_;
+        target_->Release();
         target_ = nullptr;
     }
-    // 缓存里的解码位图设备无关,理论上不必跟着渲染目标一起丢——但统一走
-    // ReleaseAllBitmaps 保持与迁移前同一条"渲染目标重建即整体重解码"路径,
-    // 不为这一点内存收益引入新的特殊分支。
+    // 缓存里的 ID2D1Bitmap 是绑在刚刚释放掉的渲染目标上的,必须一并丢弃;
+    // 尺寸/状态信息由 ImageCache 保留下来,重建后重新解码不会改变几何,
+    // 因此不会造成滚动位置跳动。
     if (images_) images_->ReleaseAllBitmaps();
 }
 
 bool Renderer::EnsureRenderTarget(HWND hwnd) {
-    if (target_ || !dwriteFactory_) return target_ != nullptr;
+    if (target_ || !factory_) return target_ != nullptr;
 
-    target_ = GdiRenderTarget::Create(hwnd, dwriteFactory_, dpi_);
-    // 创建渲染目标失败(极端情况,如系统内存不足):容错,保持 target_ 为空,
-    // 调用方(RenderFrame)会静默跳过本帧绘制,不崩溃,下次绘制会重试。
-    return target_ != nullptr;
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    D2D1_SIZE_U size = D2D1::SizeU(static_cast<UINT32>(rc.right - rc.left),
+                                    static_cast<UINT32>(rc.bottom - rc.top));
+
+    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties();
+    rtProps.type = D2D1_RENDER_TARGET_TYPE_SOFTWARE;  // 默认软件渲染(架构决策,见 memory.md)
+    // dpi_ 为 0 时保持 D2D 默认值(跟随系统 DPI);WM_DPICHANGED 后按新 DPI 重建。
+    rtProps.dpiX = dpi_;
+    rtProps.dpiY = dpi_;
+
+    HRESULT hr = factory_->CreateHwndRenderTarget(
+        rtProps, D2D1::HwndRenderTargetProperties(hwnd, size), &target_);
+    if (FAILED(hr)) {
+        // 创建渲染目标失败(极端情况,如系统内存不足):容错,保持 target_ 为空,
+        // 调用方(RenderFrame)会静默跳过本帧绘制,不崩溃,下次绘制会重试。
+        target_ = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void Renderer::DrawTableChrome(const BlockGeometry& g, float scrollY,
-                                GdiBrush* tableHeaderBrush,
-                                GdiBrush* tableGridBrush,
-                                GdiBrush* tableZebraBrush,
-                                GdiBrush* tableRowHoverBrush,
+                                ID2D1SolidColorBrush* tableHeaderBrush,
+                                ID2D1SolidColorBrush* tableGridBrush,
+                                ID2D1SolidColorBrush* tableZebraBrush,
+                                ID2D1SolidColorBrush* tableRowHoverBrush,
                                 u32 hoverRow) {
     if (g.tableColWidths.len == 0 || g.tableRowTops.len < 2) return;
 
@@ -547,7 +562,7 @@ void Renderer::DrawTableChrome(const BlockGeometry& g, float scrollY,
     }
 }
 
-void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, GdiBrush* linkBrush) {
+void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* linkBrush) {
     if (!g.textLayout || g.linkBoxes.len == 0 || !linkBrush) return;
 
     constexpr UINT32 kMaxHitTestMetrics = 8;  // 链接 run 通常只跨 1~2 行,8 条足够
@@ -583,7 +598,7 @@ void Renderer::DrawLinkOverlays(const BlockGeometry& g, float scrollY, GdiBrush*
 }
 
 void Renderer::DrawCodeHighlights(const BlockGeometry& g, float scrollY,
-                                    GdiBrush* const* hlBrushes) {
+                                    ID2D1SolidColorBrush* const* hlBrushes) {
     if (!g.textLayout || g.codeHighlights.len == 0 || !hlBrushes) return;
 
     constexpr UINT32 kMaxHitTestMetrics = 8;  // 单个 token 通常不跨行,8 条足够兜底
@@ -591,7 +606,7 @@ void Renderer::DrawCodeHighlights(const BlockGeometry& g, float scrollY,
     float drawTop = TextDrawTop(g) - scrollY;
     for (u32 i = 0; i < g.codeHighlights.len; ++i) {
         const CodeHighlightRun& run = g.codeHighlights[i];
-        GdiBrush* brush = hlBrushes[run.tokenType];
+        ID2D1SolidColorBrush* brush = hlBrushes[run.tokenType];
         if (!brush) continue;
 
         DWRITE_HIT_TEST_METRICS metrics[kMaxHitTestMetrics];
@@ -621,8 +636,8 @@ void Renderer::DrawCodeHighlights(const BlockGeometry& g, float scrollY,
 }
 
 void Renderer::DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                                   GdiBrush* fillBrush,
-                                   GdiBrush* currentFillBrush) {
+                                   ID2D1SolidColorBrush* fillBrush,
+                                   ID2D1SolidColorBrush* currentFillBrush) {
     if (!overlay_ || !overlay_->doc || !overlay_->matches || overlay_->matchCount == 0) return;
     if (!g.textLayout || !fillBrush) return;
 
@@ -642,7 +657,7 @@ void Renderer::DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float 
                                                      metrics, kMaxFindHitMetrics, &actualCount);
         if (FAILED(hr)) continue;
 
-        GdiBrush* brush =
+        ID2D1SolidColorBrush* brush =
             (i == overlay_->currentMatch && currentFillBrush) ? currentFillBrush : fillBrush;
         UINT32 count = actualCount < kMaxFindHitMetrics ? actualCount : kMaxFindHitMetrics;
         for (UINT32 k = 0; k < count; ++k) {
@@ -656,7 +671,7 @@ void Renderer::DrawFindHighlights(const BlockGeometry& g, u32 blockIndex, float 
 }
 
 void Renderer::DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLen,
-                               GdiBrush* bgBrush, GdiBrush* textBrush,
+                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                                float topOffset) {
     if (!fonts_ || !bgBrush || !textBrush || !text || textLen == 0) return;
 
@@ -690,7 +705,7 @@ void Renderer::DrawOverlayBar(float targetWidth, const wchar_t* text, u32 textLe
 }
 
 void Renderer::DrawFindBar(float targetWidth, const wchar_t* statusText, u32 statusTextLen,
-                            GdiBrush* bgBrush, GdiBrush* textBrush) {
+                            ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush) {
     if (!target_ || !fonts_ || !bgBrush) return;
 
     // 几何口径必须跟 shell/find_bar.h::ComputeFindBarLayout 算出同一个矩形,
@@ -782,7 +797,7 @@ void Renderer::DrawFindBar(float targetWidth, const wchar_t* statusText, u32 sta
 }
 
 void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
-                                       GdiBrush* maskBrush) {
+                                       ID2D1SolidColorBrush* maskBrush) {
     // 与 DrawOutlinePanel 同一个"侧栏是否打开"判断依据,侧栏关闭时本函数
     // 直接返回,不产生任何额外绘制(维持 T63"关闭时开销为 0"的设计)。
     // 注意:不能拿 outlineItemCount == 0 当"侧栏未打开"的判据——大纲为空的
@@ -811,8 +826,8 @@ void Renderer::DrawOutlineOverlayMask(float targetWidth, float targetHeight,
 // 内容不超过一屏时不画。几何公式与 shell/scrollbar.h::CalcScrollbarMetrics
 // 保持一致(纯数字,那边可单测;这里只负责按结果画一个直角轨道与圆角滑块)。
 void Renderer::DrawScrollbar(float viewportWidth, float viewportHeight, float totalHeight,
-                              float scrollY, GdiBrush* trackBrush,
-                              GdiBrush* thumbBrush) {
+                              float scrollY, ID2D1SolidColorBrush* trackBrush,
+                              ID2D1SolidColorBrush* thumbBrush) {
     if (!target_ || !thumbBrush) return;
     if (viewportHeight <= 0.0f || totalHeight <= viewportHeight) return;
 
@@ -845,11 +860,11 @@ void Renderer::DrawScrollbar(float viewportWidth, float viewportHeight, float to
 }
 
 void Renderer::DrawOutlinePanel(float targetHeight,
-                                GdiBrush* bgBrush, GdiBrush* textBrush,
-                                GdiBrush* highlightBgBrush,
-                                GdiBrush* highlightTextBrush,
-                                GdiBrush* scrollbarTrackBrush,
-                                GdiBrush* scrollbarThumbBrush) {
+                                ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                                ID2D1SolidColorBrush* highlightBgBrush,
+                                ID2D1SolidColorBrush* highlightTextBrush,
+                                ID2D1SolidColorBrush* scrollbarTrackBrush,
+                                ID2D1SolidColorBrush* scrollbarThumbBrush) {
     // 同上:不能拿 itemCount == 0 当"侧栏未打开"判据(空大纲/欢迎屏空状态)。
     // overlay_->doc 同理放宽——itemCount == 0 时下面循环体不会执行,不会
     // 解引用 doc,doc 为空并不妨碍画出空侧栏的背景/边框。
@@ -1020,7 +1035,7 @@ void Renderer::DrawOutlinePanel(float targetHeight,
 }
 
 void Renderer::DrawHistoryOverlayMask(float targetWidth, float targetHeight,
-                                      GdiBrush* maskBrush) {
+                                      ID2D1SolidColorBrush* maskBrush) {
     // 2026-09-19 修复:历史记录为空(count==0)时也要能打开侧栏显示"No Records"
     // 提示,不能在这里直接 return——之前把"entries 指针为空"(功能未接入)
     // 和"entries 非空但条目数为 0"(功能已接入,只是暂无记录)混为一谈,
@@ -1042,7 +1057,7 @@ void Renderer::DrawHistoryOverlayMask(float targetWidth, float targetHeight,
 // 侧栏行内"关闭"按钮图标(X 两条交叉线)。userData 是 textBrush。
 void Renderer::PaintSidebarCloseIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* brush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !brush) return;
     float pad = kSidebarCloseButtonGlyphPaddingDip;
     self->target_->DrawLine(D2D1::Point2F(rect.left + pad, rect.top + pad),
@@ -1054,9 +1069,9 @@ void Renderer::PaintSidebarCloseIcon(void* renderCtx, const ButtonRectDip& rect,
 // 侧栏行内"打开所在文件夹"按钮图标(文件夹矩形轮廓 + 左上角标签)。
 void Renderer::PaintSidebarFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* brush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !brush) return;
-    GdiRenderTarget* target_ = self->target_;
+    ID2D1HwndRenderTarget* target_ = self->target_;
     float pad = kSidebarCloseButtonGlyphPaddingDip;
     float bodyLeft = rect.left + pad;
     float bodyRight = rect.right - pad;
@@ -1073,9 +1088,9 @@ void Renderer::PaintSidebarFolderIcon(void* renderCtx, const ButtonRectDip& rect
 // 侧栏行内"新窗口打开"按钮图标(小方框 + 右上角引出箭头)。
 void Renderer::PaintSidebarNewWindowIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* brush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* brush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !brush) return;
-    GdiRenderTarget* target_ = self->target_;
+    ID2D1HwndRenderTarget* target_ = self->target_;
     float pad = kSidebarCloseButtonGlyphPaddingDip;
     float bodyLeft = rect.left + pad;
     float bodyRight = rect.right - pad - 2.5f;
@@ -1090,10 +1105,10 @@ void Renderer::PaintSidebarNewWindowIcon(void* renderCtx, const ButtonRectDip& r
 }
 
 void Renderer::DrawSidebarListItem(const SidebarListItemParams& params,
-                                  GdiBrush* textBrush,
-                                  GdiBrush* highlightBgBrush,
-                                  GdiBrush* currentItemBrush,
-                                  GdiBrush* buttonBgBrush) {
+                                  ID2D1SolidColorBrush* textBrush,
+                                  ID2D1SolidColorBrush* highlightBgBrush,
+                                  ID2D1SolidColorBrush* currentItemBrush,
+                                  ID2D1SolidColorBrush* buttonBgBrush) {
     if (!target_) return;
 
     // 1. 行背景（当前激活项或鼠标悬浮项圆角底色）
@@ -1195,11 +1210,11 @@ void Renderer::DrawSidebarListItem(const SidebarListItemParams& params,
 }
 
 void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
-                                GdiBrush* bgBrush, GdiBrush* textBrush,
-                                GdiBrush* highlightBgBrush,
-                                GdiBrush* buttonBgBrush,
-                                GdiBrush* scrollbarTrackBrush,
-                                GdiBrush* scrollbarThumbBrush) {
+                                ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                                ID2D1SolidColorBrush* highlightBgBrush,
+                                ID2D1SolidColorBrush* buttonBgBrush,
+                                ID2D1SolidColorBrush* scrollbarTrackBrush,
+                                ID2D1SolidColorBrush* scrollbarThumbBrush) {
     // 同上:count==0 不再直接 return,空历史也要能画出侧栏骨架 + "No Records"。
     if (!overlay_ || !overlay_->historyEntries) return;
     if (!fonts_ || !bgBrush || !textBrush || !target_) return;
@@ -1300,7 +1315,7 @@ void Renderer::DrawHistoryPanel(float targetWidth, float targetHeight,
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
 }
 
-void Renderer::DrawEditBoxBorder(D2D1_RECT_F rect, GdiBrush* borderBrush,
+void Renderer::DrawEditBoxBorder(D2D1_RECT_F rect, ID2D1SolidColorBrush* borderBrush,
                                   EditBoxBorderStyle style, float strokeWidth) {
     if (!target_ || !borderBrush) return;
     if (style == EditBoxBorderStyle::Borderless) {
@@ -1321,9 +1336,9 @@ void Renderer::DrawEditBoxBorder(D2D1_RECT_F rect, GdiBrush* borderBrush,
 // 绘制函数,不套用 PaintSidebarFolderIcon(避免为了共用而扭曲既有视觉)。
 void Renderer::PaintSidebarHeaderFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* textBrush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !textBrush) return;
-    GdiRenderTarget* target_ = self->target_;
+    ID2D1HwndRenderTarget* target_ = self->target_;
     // 按钮热区仍是24x24，图标视觉再缩小到12px((24-12)/2=6.0)，在按钮内居中
     float hPad = 6.0f;
     float hBodyLeft = rect.left + hPad;
@@ -1340,14 +1355,14 @@ void Renderer::PaintSidebarHeaderFolderIcon(void* renderCtx, const ButtonRectDip
 }
 
 void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
-                               GdiBrush* bgBrush, GdiBrush* textBrush,
-                               GdiBrush* highlightBgBrush,
-                               GdiBrush* currentItemBrush,
-                               GdiBrush* buttonBgBrush,
-                               GdiBrush* scrollbarTrackBrush,
-                               GdiBrush* scrollbarThumbBrush,
-                               GdiBrush* tooltipBgBrush,
-                               GdiBrush* tooltipTextBrush) {
+                               ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
+                               ID2D1SolidColorBrush* highlightBgBrush,
+                               ID2D1SolidColorBrush* currentItemBrush,
+                               ID2D1SolidColorBrush* buttonBgBrush,
+                               ID2D1SolidColorBrush* scrollbarTrackBrush,
+                               ID2D1SolidColorBrush* scrollbarThumbBrush,
+                               ID2D1SolidColorBrush* tooltipBgBrush,
+                               ID2D1SolidColorBrush* tooltipTextBrush) {
     // 注意:folderEntries 为空文件夹时可能是 nullptr,不能拿它当"侧栏是否
     // 打开"的判据,否则空文件夹侧栏本身也画不出来(真实 bug 教训)。
     if (!overlay_) return;
@@ -1665,15 +1680,21 @@ void Renderer::DrawFolderPanel(float targetWidth, float targetHeight,
 // 图标的填充几何。三个子轮廓(字母 "A" 外形 + "A" 内部三角镂空 + 右下角
 // "+"/"-" 号)按 SVG 原始点序原样搬入,镂空子轮廓的绕向与外轮廓相反,
 // nonzero 缠绕规则下天然抠出镂空,不需要额外布尔运算。
-Gdiplus::GraphicsPath* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
-    Gdiplus::GraphicsPath* geo = new Gdiplus::GraphicsPath(Gdiplus::FillModeWinding);
-    if (!geo) return nullptr;
+ID2D1PathGeometry* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
+    if (!factory_) return nullptr;
+    ID2D1PathGeometry* geo = nullptr;
+    if (FAILED(factory_->CreatePathGeometry(&geo)) || !geo) return nullptr;
+    ID2D1GeometrySink* sink = nullptr;
+    if (FAILED(geo->Open(&sink)) || !sink) {
+        geo->Release();
+        return nullptr;
+    }
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);
 
     auto figure = [&](const D2D1_POINT_2F* pts, u32 count) {
-        Gdiplus::PointF gdiPts[16];
-        u32 n = count < 16 ? count : 16;
-        for (u32 i = 0; i < n; ++i) gdiPts[i] = Gdiplus::PointF(pts[i].x, pts[i].y);
-        geo->AddPolygon(gdiPts, static_cast<INT>(n));
+        sink->BeginFigure(pts[0], D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLines(pts + 1, count - 1);
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     };
 
     if (zoomIn) {
@@ -1712,6 +1733,8 @@ Gdiplus::GraphicsPath* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
         figure(minus, static_cast<u32>(sizeof(minus) / sizeof(minus[0])));
     }
 
+    sink->Close();
+    sink->Release();
     return geo;
 }
 
@@ -1721,8 +1744,8 @@ Gdiplus::GraphicsPath* Renderer::BuildZoomFontIconGeometry(bool zoomIn) {
 struct BottomBarIconPaintCtx {
     u32 index;
     bool pathCopied;
-    GdiBrush* iconBrush;
-    GdiBrush* bgBrush;
+    ID2D1SolidColorBrush* iconBrush;
+    ID2D1SolidColorBrush* bgBrush;
 };
 
 // 底部栏各按钮图标内容(手绘矢量图形,零图标字体零位图)。renderCtx 固定是
@@ -1733,9 +1756,9 @@ void Renderer::PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, vo
     auto* ctx = static_cast<BottomBarIconPaintCtx*>(userData);
     if (!self || !self->target_ || !ctx || !ctx->iconBrush) return;
 
-    GdiRenderTarget* target_ = self->target_;  // 复用下面搬过来的原始代码,变量名保持一致
-    GdiBrush* iconBrush = ctx->iconBrush;
-    GdiBrush* bgBrush = ctx->bgBrush;
+    ID2D1HwndRenderTarget* target_ = self->target_;  // 复用下面搬过来的原始代码,变量名保持一致
+    ID2D1SolidColorBrush* iconBrush = ctx->iconBrush;
+    ID2D1SolidColorBrush* bgBrush = ctx->bgBrush;
     bool pathCopied = ctx->pathCopied;
     u32 i = ctx->index;
     float centerX = (rect.left + rect.right) * 0.5f;
@@ -1836,7 +1859,7 @@ void Renderer::PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, vo
                // 首次用到才建、按角色缓存复用(见 zoomInIconGeometry_ /
                // zoomOutIconGeometry_ 的注释)。
         bool isZoomIn = (i == 6);
-        Gdiplus::GraphicsPath*& cached = isZoomIn ? self->zoomInIconGeometry_ : self->zoomOutIconGeometry_;
+        ID2D1PathGeometry*& cached = isZoomIn ? self->zoomInIconGeometry_ : self->zoomOutIconGeometry_;
         if (!cached) cached = self->BuildZoomFontIconGeometry(isZoomIn);
         if (cached && iconBrush) {
             // 原 SVG viewBox 是 24x24,换算到本图标的正方形绘制区(用
@@ -1847,7 +1870,7 @@ void Renderer::PaintBottomBarIcon(void* renderCtx, const ButtonRectDip& rect, vo
             float iconTop = iconCenterY - iconBoxSize * 0.5f;
             target_->SetTransform(D2D1::Matrix3x2F::Scale(svgScale, svgScale) *
                                   D2D1::Matrix3x2F::Translation(iconLeft, iconTop));
-            target_->FillPathIcon(cached, iconBrush);
+            target_->FillGeometry(cached, iconBrush);
             target_->SetTransform(D2D1::Matrix3x2F::Identity());
         }
         break;
@@ -1916,8 +1939,8 @@ float BottomBarButtonLeftDip(u32 index, float targetWidth) {
 // 32px 高的带,左侧 5 个固定宽度的纯图标按钮紧贴左边排列,右侧最右边是历史按钮,
 // 中间是状态文字(当前文档路径 + 大小)。
 void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
-                              GdiBrush* bgBrush, GdiBrush* iconBrush,
-                              GdiBrush* textBrush, GdiBrush* dividerBrush,
+                              ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* iconBrush,
+                              ID2D1SolidColorBrush* textBrush, ID2D1SolidColorBrush* dividerBrush,
                               const wchar_t* documentPath, u64 documentSizeBytes,
                               bool pathCopied) {
     if (!target_ || !bgBrush) return;
@@ -1996,7 +2019,7 @@ void Renderer::DrawBottomBar(float targetWidth, float targetHeight,
 }
 
 void Renderer::DrawBottomBarTooltip(float targetWidth, float targetHeight,
-                                     GdiBrush* bgBrush, GdiBrush* textBrush,
+                                     ID2D1SolidColorBrush* bgBrush, ID2D1SolidColorBrush* textBrush,
                                      u32 hoverButtonIndex, bool hasDocument) {
     if (!target_ || !fonts_ || !bgBrush || !textBrush) return;
     if (hoverButtonIndex >= kBottomBarButtonCount) return;
@@ -2032,8 +2055,8 @@ void Renderer::DrawBottomBarTooltip(float targetWidth, float targetHeight,
 }
 
 void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
-                                 GdiBrush* borderBrush,
-                                 GdiBrush* checkBrush) {
+                                 ID2D1SolidColorBrush* borderBrush,
+                                 ID2D1SolidColorBrush* checkBrush) {
     if (g.taskCheckbox.width <= 0.0f) return;
 
     D2D1_RECT_F rect = D2D1::RectF(
@@ -2059,8 +2082,8 @@ void Renderer::DrawTaskCheckbox(const BlockGeometry& g, float scrollY,
 
 // 传给 Renderer::PaintCodeCopySheetsIcon 的 userData。
 struct CodeCopyIconPaintCtx {
-    GdiBrush* strokeBrush;
-    GdiBrush* paperBrush;
+    ID2D1SolidColorBrush* strokeBrush;
+    ID2D1SolidColorBrush* paperBrush;
 };
 
 // 代码块复制按钮默认态图标:两张叠压纸(复用 DrawCopySheetsGlyph,与底部栏
@@ -2073,10 +2096,10 @@ void Renderer::PaintCodeCopySheetsIcon(void* renderCtx, const ButtonRectDip& rec
 }
 
 void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                                   GdiBrush* iconBrush,
-                                   GdiBrush* hoverBgBrush,
-                                   GdiBrush* paperBrush,
-                                   GdiBrush* doneBrush) {
+                                   ID2D1SolidColorBrush* iconBrush,
+                                   ID2D1SolidColorBrush* hoverBgBrush,
+                                   ID2D1SolidColorBrush* paperBrush,
+                                   ID2D1SolidColorBrush* doneBrush) {
     if (g.codeCopyButton.width <= 0.0f) return;
 
     bool hovered = overlay_ && overlay_->copyButtonHoverBlock == blockIndex;
@@ -2124,8 +2147,8 @@ void Renderer::DrawCodeCopyButton(const BlockGeometry& g, u32 blockIndex, float 
 // 两张叠压的圆角纸——后面那张只露出左上一角,前面那张先用纸面色填实再描边,
 // 叠压关系因此清晰可辨(纯几何,不依赖任何字体字形)。
 void Renderer::DrawCopySheetsGlyph(float left, float top, float size,
-                                    GdiBrush* strokeBrush,
-                                    GdiBrush* paperBrush) {
+                                    ID2D1SolidColorBrush* strokeBrush,
+                                    ID2D1SolidColorBrush* paperBrush) {
     if (!target_ || !strokeBrush || size <= 0.0f) return;
 
     float stroke = size * kCopyStrokeWidthRatio;
@@ -2146,7 +2169,7 @@ void Renderer::DrawCopySheetsGlyph(float left, float top, float size,
     target_->DrawRoundedRectangle(frontSheet, strokeBrush, stroke);
 }
 
-void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, GdiBrush* markerBrush) {
+void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* markerBrush) {
     if (g.listMarker.width <= 0.0f || !markerBrush) return;
 
     D2D1_RECT_F rect = D2D1::RectF(
@@ -2202,7 +2225,7 @@ void Renderer::DrawListMarker(const BlockGeometry& g, float scrollY, GdiBrush* m
     labelLayout->Release();
 }
 
-void Renderer::DrawFootnoteLabel(const BlockGeometry& g, float scrollY, GdiBrush* textBrush) {
+void Renderer::DrawFootnoteLabel(const BlockGeometry& g, float scrollY, ID2D1SolidColorBrush* textBrush) {
     if (g.footnoteId == 0 || !fonts_ || !textBrush) return;
 
     wchar_t label[16];
@@ -2233,9 +2256,9 @@ void Renderer::DrawFootnoteLabel(const BlockGeometry& g, float scrollY, GdiBrush
 }
 
 void Renderer::DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text, u32 textLen,
-                                     GdiBrush* bgBrush,
-                                     GdiBrush* borderBrush,
-                                     GdiBrush* textBrush) {
+                                     ID2D1SolidColorBrush* bgBrush,
+                                     ID2D1SolidColorBrush* borderBrush,
+                                     ID2D1SolidColorBrush* textBrush) {
     D2D1_ROUNDED_RECT rounded =
         D2D1::RoundedRect(rect, kImagePlaceholderCornerRadiusDip, kImagePlaceholderCornerRadiusDip);
     if (bgBrush) target_->FillRoundedRectangle(rounded, bgBrush);
@@ -2257,7 +2280,7 @@ void Renderer::DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text
         float iconTop = centerY - iconSize * 0.5f;
         iconBottom = iconTop + iconSize;
 
-        GdiBrush* iconBrush = nullptr;
+        ID2D1SolidColorBrush* iconBrush = nullptr;
         target_->CreateSolidColorBrush(palette_->imagePlaceholderIcon, &iconBrush);
         if (iconBrush) {
             // 相框:圆角矩形描边。
@@ -2304,8 +2327,8 @@ void Renderer::DrawImagePlaceholder(const D2D1_RECT_F& rect, const wchar_t* text
 }
 
 void Renderer::DrawDownsampledBadge(const D2D1_RECT_F& imageRect,
-                                     GdiBrush* badgeBgBrush,
-                                     GdiBrush* badgeTextBrush) {
+                                     ID2D1SolidColorBrush* badgeBgBrush,
+                                     ID2D1SolidColorBrush* badgeTextBrush) {
     if (!fonts_ || !badgeBgBrush || !badgeTextBrush) return;
 
     const wchar_t* text = DownsampledBadgeText();
@@ -2342,11 +2365,11 @@ void Renderer::DrawDownsampledBadge(const D2D1_RECT_F& imageRect,
 }
 
 void Renderer::DrawImages(const BlockGeometry& g, float scrollY,
-                           GdiBrush* textBrush,
-                           GdiBrush* placeholderBgBrush,
-                           GdiBrush* placeholderBorderBrush,
-                           GdiBrush* badgeBgBrush,
-                           GdiBrush* badgeTextBrush) {
+                           ID2D1SolidColorBrush* textBrush,
+                           ID2D1SolidColorBrush* placeholderBgBrush,
+                           ID2D1SolidColorBrush* placeholderBorderBrush,
+                           ID2D1SolidColorBrush* badgeBgBrush,
+                           ID2D1SolidColorBrush* badgeTextBrush) {
     for (u32 i = 0; i < g.imageBoxes.len; ++i) {
         const ImageBox& box = g.imageBoxes[i];
         D2D1_RECT_F rect = D2D1::RectF(box.rect.x, box.rect.y - scrollY,
@@ -2356,10 +2379,7 @@ void Renderer::DrawImages(const BlockGeometry& g, float scrollY,
         const ImageCacheEntry* entry = images_ ? images_->Find(box.href) : nullptr;
         if (entry && entry->bitmap && entry->status == ImageStatus::Ok) {
             // 有位图:按布局算好的矩形拉伸绘制(矩形本身已按真实尺寸等比算过)。
-            // 源尺寸传 entry->width/height(内容真实尺寸),不能用
-            // entry->bitmap->GetWidth/GetHeight(那两个带 MakeOwnedBgraBitmap
-            // 分配的 1 像素安全边距,见该函数 doc-comment)。
-            target_->DrawBitmap(entry->bitmap, entry->width, entry->height, rect, 1.0f,
+            target_->DrawBitmap(entry->bitmap, rect, 1.0f,
                                  D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             // 降采样提示标签画在位图之上(顺序:位图 -> 标签),未降采样不画。
             if (entry->wasDownsampled) {
@@ -2394,7 +2414,7 @@ void Renderer::DrawImages(const BlockGeometry& g, float scrollY,
 }
 
 void Renderer::DrawSelectionHighlights(const BlockGeometry& g, u32 blockIndex, float scrollY,
-                                        GdiBrush* fillBrush) {
+                                        ID2D1SolidColorBrush* fillBrush) {
     if (!overlay_ || !overlay_->selectionActive || !fillBrush) return;
     if (!g.textLayout) return;
     if (blockIndex < overlay_->selStartBlock || blockIndex > overlay_->selEndBlock) return;
@@ -2436,30 +2456,30 @@ void Renderer::DrawSelectionHighlights(const BlockGeometry& g, u32 blockIndex, f
 }
 
 void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, float targetWidth,
-                          GdiBrush* textBrush,
-                          GdiBrush* quoteBrush,
-                          GdiBrush* codeBgBrush,
-                          GdiBrush* codeBorderBrush,
-                          GdiBrush* hrBrush,
-                          GdiBrush* linkBrush,
-                          GdiBrush* tableHeaderBrush,
-                          GdiBrush* tableGridBrush,
-                          GdiBrush* tableZebraBrush,
-                          GdiBrush* tableRowHoverBrush,
-                          GdiBrush* checkboxBorderBrush,
-                          GdiBrush* checkboxCheckBrush,
-                          GdiBrush* placeholderBgBrush,
-                          GdiBrush* placeholderBorderBrush,
-                          GdiBrush* badgeBgBrush,
-                          GdiBrush* badgeTextBrush,
-                          GdiBrush* findHighlightBrush,
-                          GdiBrush* findCurrentBrush,
-                          GdiBrush* selectionBrush,
-                          GdiBrush* copyIconBrush,
-                          GdiBrush* copyHoverBgBrush,
-                          GdiBrush* copyPaperBrush,
-                          GdiBrush* copyDoneBrush,
-                          GdiBrush* const* hlBrushes) {
+                          ID2D1SolidColorBrush* textBrush,
+                          ID2D1SolidColorBrush* quoteBrush,
+                          ID2D1SolidColorBrush* codeBgBrush,
+                          ID2D1SolidColorBrush* codeBorderBrush,
+                          ID2D1SolidColorBrush* hrBrush,
+                          ID2D1SolidColorBrush* linkBrush,
+                          ID2D1SolidColorBrush* tableHeaderBrush,
+                          ID2D1SolidColorBrush* tableGridBrush,
+                          ID2D1SolidColorBrush* tableZebraBrush,
+                          ID2D1SolidColorBrush* tableRowHoverBrush,
+                          ID2D1SolidColorBrush* checkboxBorderBrush,
+                          ID2D1SolidColorBrush* checkboxCheckBrush,
+                          ID2D1SolidColorBrush* placeholderBgBrush,
+                          ID2D1SolidColorBrush* placeholderBorderBrush,
+                          ID2D1SolidColorBrush* badgeBgBrush,
+                          ID2D1SolidColorBrush* badgeTextBrush,
+                          ID2D1SolidColorBrush* findHighlightBrush,
+                          ID2D1SolidColorBrush* findCurrentBrush,
+                          ID2D1SolidColorBrush* selectionBrush,
+                          ID2D1SolidColorBrush* copyIconBrush,
+                          ID2D1SolidColorBrush* copyHoverBgBrush,
+                          ID2D1SolidColorBrush* copyPaperBrush,
+                          ID2D1SolidColorBrush* copyDoneBrush,
+                          ID2D1SolidColorBrush* const* hlBrushes) {
     // 围栏代码块背景:先画背景,再画文本,避免文本被背景矩形盖住。
     // 4 DIP 圆角,与常见 Markdown 渲染器的代码块风格保持一致。
     if (g.type == BlockType::CodeBlock && codeBgBrush) {
@@ -2562,9 +2582,9 @@ void Renderer::DrawBlock(const BlockGeometry& g, u32 blockIndex, float scrollY, 
 // 见方),userData 是文字/图标共用的 textBrush。
 void Renderer::PaintWelcomeFileIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* textBrush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !textBrush) return;
-    GdiRenderTarget* target_ = self->target_;
+    ID2D1HwndRenderTarget* target_ = self->target_;
     float contentLeft = rect.left;
     float iconTop = rect.top;
     float size = rect.Width();
@@ -2579,9 +2599,9 @@ void Renderer::PaintWelcomeFileIcon(void* renderCtx, const ButtonRectDip& rect, 
 // 欢迎屏"打开文件夹"按钮图标:文件夹轮廓(带顶端标签)。
 void Renderer::PaintWelcomeFolderIcon(void* renderCtx, const ButtonRectDip& rect, void* userData) {
     Renderer* self = static_cast<Renderer*>(renderCtx);
-    GdiBrush* textBrush = static_cast<GdiBrush*>(userData);
+    ID2D1SolidColorBrush* textBrush = static_cast<ID2D1SolidColorBrush*>(userData);
     if (!self || !self->target_ || !textBrush) return;
-    GdiRenderTarget* target_ = self->target_;
+    ID2D1HwndRenderTarget* target_ = self->target_;
     float contentLeft = rect.left;
     float iconTop = rect.top;
     float size = rect.Width();
@@ -2597,10 +2617,10 @@ void Renderer::PaintWelcomeFolderIcon(void* renderCtx, const ButtonRectDip& rect
 
 void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight,
                                   bool buttonHover, bool folderButtonHover,
-                                  GdiBrush* textBrush,
-                                  GdiBrush* buttonFillBrush,
-                                  GdiBrush* buttonHoverFillBrush,
-                                  GdiBrush* buttonBorderBrush) {
+                                  ID2D1SolidColorBrush* textBrush,
+                                  ID2D1SolidColorBrush* buttonFillBrush,
+                                  ID2D1SolidColorBrush* buttonHoverFillBrush,
+                                  ID2D1SolidColorBrush* buttonBorderBrush) {
     float buttonTop = targetHeight * kWelcomeButtonTopRatio;
     float totalButtonsWidth = kWelcomeButtonWidthDip * 2.0f + kWelcomeButtonGapDip;
     float startX = (targetWidth - totalButtonsWidth) * 0.5f;
@@ -2639,7 +2659,7 @@ void Renderer::DrawWelcomeScreen(float targetWidth, float targetHeight,
         ButtonRectDip rect = ButtonRectFromCenterDip(btn, centerX, buttonCenterY);
         D2D1_RECT_F buttonRect = D2D1::RectF(rect.left, rect.top, rect.right, rect.bottom);
         D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(buttonRect, btn.radius, btn.radius);
-        GdiBrush* fillBrush = isHover ? buttonHoverFillBrush : buttonFillBrush;
+        ID2D1SolidColorBrush* fillBrush = isHover ? buttonHoverFillBrush : buttonFillBrush;
         if (fillBrush) target_->FillRoundedRectangle(rounded, fillBrush);
         if (buttonBorderBrush) target_->DrawRoundedRectangle(rounded, buttonBorderBrush, 1.0f);
 
@@ -2704,47 +2724,47 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 叠加层视图只在本帧内有效,画完立刻置空,避免留下悬空引用。
     overlay_ = overlay;
 
-    GdiBrush* textBrush = nullptr;
-    GdiBrush* quoteBrush = nullptr;
-    GdiBrush* codeBgBrush = nullptr;
-    GdiBrush* codeBorderBrush = nullptr;
-    GdiBrush* hrBrush = nullptr;
-    GdiBrush* linkBrush = nullptr;
-    GdiBrush* tableHeaderBrush = nullptr;
-    GdiBrush* tableGridBrush = nullptr;
-    GdiBrush* tableZebraBrush = nullptr;
-    GdiBrush* tableRowHoverBrush = nullptr;
-    GdiBrush* checkboxBorderBrush = nullptr;
-    GdiBrush* checkboxCheckBrush = nullptr;
-    GdiBrush* placeholderBgBrush = nullptr;
-    GdiBrush* placeholderBorderBrush = nullptr;
-    GdiBrush* badgeBgBrush = nullptr;
-    GdiBrush* badgeTextBrush = nullptr;
-    GdiBrush* findHighlightBrush = nullptr;
-    GdiBrush* findCurrentBrush = nullptr;
-    GdiBrush* selectionBrush = nullptr;
-    GdiBrush* overlayBarBgBrush = nullptr;
-    GdiBrush* overlayBarTextBrush = nullptr;
-    GdiBrush* findBarBgBrush = nullptr;
-    GdiBrush* findBarTextBrush = nullptr;
-    GdiBrush* outlineHighlightBgBrush = nullptr;
-    GdiBrush* outlineHighlightTextBrush = nullptr;
-    GdiBrush* outlineOverlayMaskBrush = nullptr;
-    GdiBrush* historyRowButtonBgBrush = nullptr;
+    ID2D1SolidColorBrush* textBrush = nullptr;
+    ID2D1SolidColorBrush* quoteBrush = nullptr;
+    ID2D1SolidColorBrush* codeBgBrush = nullptr;
+    ID2D1SolidColorBrush* codeBorderBrush = nullptr;
+    ID2D1SolidColorBrush* hrBrush = nullptr;
+    ID2D1SolidColorBrush* linkBrush = nullptr;
+    ID2D1SolidColorBrush* tableHeaderBrush = nullptr;
+    ID2D1SolidColorBrush* tableGridBrush = nullptr;
+    ID2D1SolidColorBrush* tableZebraBrush = nullptr;
+    ID2D1SolidColorBrush* tableRowHoverBrush = nullptr;
+    ID2D1SolidColorBrush* checkboxBorderBrush = nullptr;
+    ID2D1SolidColorBrush* checkboxCheckBrush = nullptr;
+    ID2D1SolidColorBrush* placeholderBgBrush = nullptr;
+    ID2D1SolidColorBrush* placeholderBorderBrush = nullptr;
+    ID2D1SolidColorBrush* badgeBgBrush = nullptr;
+    ID2D1SolidColorBrush* badgeTextBrush = nullptr;
+    ID2D1SolidColorBrush* findHighlightBrush = nullptr;
+    ID2D1SolidColorBrush* findCurrentBrush = nullptr;
+    ID2D1SolidColorBrush* selectionBrush = nullptr;
+    ID2D1SolidColorBrush* overlayBarBgBrush = nullptr;
+    ID2D1SolidColorBrush* overlayBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* findBarBgBrush = nullptr;
+    ID2D1SolidColorBrush* findBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* outlineHighlightBgBrush = nullptr;
+    ID2D1SolidColorBrush* outlineHighlightTextBrush = nullptr;
+    ID2D1SolidColorBrush* outlineOverlayMaskBrush = nullptr;
+    ID2D1SolidColorBrush* historyRowButtonBgBrush = nullptr;
     // 大纲侧栏底色改跟正文背景同色(浅色主题白底黑字、深色主题黑底白字),
     // 不再借用查找条那套固定深色浮出条配色——蒙层已经把侧栏之外的正文
     // 压暗,侧栏本身用主题背景色天然就能在视觉上分离出来。
-    GdiBrush* outlinePanelBgBrush = nullptr;
-    GdiBrush* copyIconBrush = nullptr;
-    GdiBrush* copyHoverBgBrush = nullptr;
-    GdiBrush* copyPaperBrush = nullptr;
-    GdiBrush* copyDoneBrush = nullptr;
-    GdiBrush* scrollbarTrackIdleBrush = nullptr;
-    GdiBrush* scrollbarTrackActiveBrush = nullptr;
-    GdiBrush* scrollbarThumbIdleBrush = nullptr;
-    GdiBrush* scrollbarThumbActiveBrush = nullptr;
+    ID2D1SolidColorBrush* outlinePanelBgBrush = nullptr;
+    ID2D1SolidColorBrush* copyIconBrush = nullptr;
+    ID2D1SolidColorBrush* copyHoverBgBrush = nullptr;
+    ID2D1SolidColorBrush* copyPaperBrush = nullptr;
+    ID2D1SolidColorBrush* copyDoneBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarTrackIdleBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarTrackActiveBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarThumbIdleBrush = nullptr;
+    ID2D1SolidColorBrush* scrollbarThumbActiveBrush = nullptr;
     // T53:代码语法着色的 7 支画笔,下标与 hl/lexer.h::TokenType 取值一一对应。
-    GdiBrush* hlBrushes[7] = {nullptr, nullptr, nullptr, nullptr,
+    ID2D1SolidColorBrush* hlBrushes[7] = {nullptr, nullptr, nullptr, nullptr,
                                             nullptr, nullptr, nullptr};
     target_->CreateSolidColorBrush(palette_->text, &textBrush);
     target_->CreateSolidColorBrush(palette_->quoteBar, &quoteBrush);
@@ -2896,8 +2916,8 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
         // 滚动条背景不跟随鼠标悬浮高亮 (保持常驻 Idle 颜色)。
         //
         // Scrollbar track background does not highlight on mouse hover (remains idle color).
-        GdiBrush* trackBrush = scrollbarTrackIdleBrush;
-        GdiBrush* thumbBrush =
+        ID2D1SolidColorBrush* trackBrush = scrollbarTrackIdleBrush;
+        ID2D1SolidColorBrush* thumbBrush =
             mainScrollbarActive ? scrollbarThumbActiveBrush : scrollbarThumbIdleBrush;
         DrawScrollbar(targetSize.width, scrollbarHeight, layout.TotalHeight(),
                       scrollY + leftPaddingDip, trackBrush, thumbBrush);
@@ -2907,7 +2927,7 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // 不新增调色板字段。画在正文/滚动条之后、蒙层与查找条/侧栏之前——
     // 侧栏蒙层/查找条打开时盖住这条线是合理的(蒙层本该盖住正文所有内容)。
     {
-        GdiBrush* topDividerBrush = nullptr;
+        ID2D1SolidColorBrush* topDividerBrush = nullptr;
         target_->CreateSolidColorBrush(palette_->bottomBarDivider, &topDividerBrush);
         if (topDividerBrush) {
             target_->DrawLine(D2D1::Point2F(0.0f, 0.0f), D2D1::Point2F(targetSize.width, 0.0f),
@@ -2922,11 +2942,11 @@ bool Renderer::RenderFrame(HWND hwnd, const BlockLayoutEngine& layout, float scr
     // bottomBarBgBrush/bottomBarTextBrush 的生命周期要跨过下面的侧栏叠加层
     // 一直留到函数末尾——悬浮提示气泡(DrawBottomBarTooltip)由下面那段 z 序
     // 分发决定什么时候画,可能排在所有侧栏之后,这两支笔那时才用得上。
-    GdiBrush* bottomBarBgBrush = nullptr;
-    GdiBrush* bottomBarTextBrush = nullptr;
+    ID2D1SolidColorBrush* bottomBarBgBrush = nullptr;
+    ID2D1SolidColorBrush* bottomBarTextBrush = nullptr;
     {
-        GdiBrush* bottomBarIconBrush = nullptr;
-        GdiBrush* bottomBarDividerBrush = nullptr;
+        ID2D1SolidColorBrush* bottomBarIconBrush = nullptr;
+        ID2D1SolidColorBrush* bottomBarDividerBrush = nullptr;
         target_->CreateSolidColorBrush(palette_->bottomBarBackground, &bottomBarBgBrush);
         target_->CreateSolidColorBrush(palette_->bottomBarIcon, &bottomBarIconBrush);
         target_->CreateSolidColorBrush(palette_->bottomBarText, &bottomBarTextBrush);

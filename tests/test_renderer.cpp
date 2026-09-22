@@ -1,21 +1,25 @@
-// T11 覆盖测试:渲染模块里唯一能脱离真实设备单独测的逻辑——
+// T11 覆盖测试:D2D 渲染模块里唯一能脱离真实设备单独测的逻辑——
 // "根据 HRESULT 判断是否需要重建渲染目标"这条纯函数(markair::ShouldRecreateRenderTarget)。
 //
-// Renderer 本体(EnsureRenderTarget/RenderFrame)强依赖真实 HWND + 渲染设备上下文,
+// Renderer 本体(EnsureRenderTarget/RenderFrame)强依赖真实 HWND + D2D 设备上下文,
 // 在无窗口/无显示的 CI 环境下无法可靠构造,因此不为其编造假测试;这条纯函数
 // 判断逻辑是本模块里唯一不依赖真实设备、值得写单元测试的部分。
 #include "markair_test.h"
 #include "../src/render/renderer.h"
 
-// 用例:2026-09-22 GDI+ 迁移后,GDI 路径没有"设备丢失"概念,恒不判定为需要重建
-// (旧的 D2DERR_RECREATE_TARGET 分支随 D2D 一起移除)。
-MARKAIR_TEST(Renderer_GdiPathNeverTriggersRecreate) {
+// 用例:D2DERR_RECREATE_TARGET 应判定为需要重建。
+MARKAIR_TEST(Renderer_RecreateTargetErrorTriggersRecreate) {
+    MARKAIR_CHECK(markair::ShouldRecreateRenderTarget(D2DERR_RECREATE_TARGET));
+}
+
+// 用例:成功码(S_OK)与其他失败码不应触发重建。
+MARKAIR_TEST(Renderer_OtherResultsDoNotTriggerRecreate) {
     MARKAIR_CHECK(!markair::ShouldRecreateRenderTarget(S_OK));
     MARKAIR_CHECK(!markair::ShouldRecreateRenderTarget(E_FAIL));
     MARKAIR_CHECK(!markair::ShouldRecreateRenderTarget(E_OUTOFMEMORY));
 }
 
-// ---- T33:占位块文案与降采样提示标签(纯函数,可脱离渲染设备测)----
+// ---- T33:占位块文案与降采样提示标签(纯函数,可脱离 D2D 测)----
 
 #include <cwchar>
 

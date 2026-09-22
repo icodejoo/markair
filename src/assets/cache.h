@@ -25,6 +25,8 @@
 #include "../util/types.h"
 #include "image.h"
 
+struct ID2D1Bitmap;
+
 namespace markair {
 
 /**
@@ -37,7 +39,7 @@ namespace markair {
 struct ImageCacheEntry {
     StrSlice key;        // 图片来源 key(零拷贝引用调用方保证存活的 href 缓冲)
     u64 keyHash;         // key 的 FNV-1a 哈希,避免比较时反复扫字符串
-    Gdiplus::Bitmap* bitmap; // 解码位图;跟随块虚拟化生灭,滚出可见范围即为 nullptr
+    ID2D1Bitmap* bitmap; // 解码位图;跟随块虚拟化生灭,滚出可见范围即为 nullptr
     const u8* remoteBytes; // 网络图片已下载的原始压缩字节(arena 拥有);非网络图恒为 nullptr
     u32 remoteLen;       // remoteBytes 的字节数
     u32 width;           // 解码(按体积预算降采样)后的像素宽;从未解码成功过时为 0
@@ -59,7 +61,7 @@ struct ImageCacheEntry {
  *   // 块进入"可见 ± 1 屏":
  *   const markair::ImageCacheEntry* e = cache.Find(href);
  *   if (!e || !e->bitmap) {
- *       markair::DecodedImage img = decoder.DecodeFromFile(path, true);
+ *       markair::DecodedImage img = decoder.DecodeFromFile(path, renderTarget);
  *       cache.Put(href, img.bitmap, img.width, img.height, img.status, img.wasDownsampled);
  *   }
  *   // 块滚出"可见 ± 1 屏":
@@ -70,7 +72,7 @@ public:
     // 构造一个未初始化的缓存,需先调用 Init。
     ImageCache();
 
-    // 释放所有仍持有的解码位图(条目数组本身随 Arena 一起消亡)。
+    // 释放所有仍持有的 D2D 位图(条目数组本身随 Arena 一起消亡)。
     ~ImageCache();
 
     ImageCache(const ImageCache&) = delete;
@@ -108,12 +110,12 @@ public:
      *        不关心原始尺寸的旧用法)时退化为与 width 相同。
      * @param originalHeight 降采样前的原始像素高,语义同上,默认退化为 height。
      * @return 写入后的条目指针;Arena 耗尽导致写入失败时返回 nullptr(此时会
-     *         直接 delete 传入的 bitmap,避免泄漏)。
+     *         直接 Release 传入的 bitmap,避免泄漏)。
      * @example
      *   cache.Put(href, img.bitmap, img.width, img.height, img.status, img.wasDownsampled,
      *             img.originalWidth, img.originalHeight);
      */
-    const ImageCacheEntry* Put(StrSlice key, Gdiplus::Bitmap* bitmap, u32 width, u32 height,
+    const ImageCacheEntry* Put(StrSlice key, ID2D1Bitmap* bitmap, u32 width, u32 height,
                                 ImageStatus status, bool wasDownsampled = false,
                                 u32 originalWidth = 0, u32 originalHeight = 0);
 
@@ -167,9 +169,8 @@ public:
     const ImageCacheEntry& At(u32 index) const { return entries_[index]; }
 
     /**
-     * 释放全部解码位图但保留条目(尺寸/状态/网络原始字节仍在)。用于渲染目标重建
-     * (DPI 变化)——位图不跟随渲染目标本身(GDI+ 位图设备无关),但仍统一走
-     * 这条路径与既有的"重建即整体丢位图"约定保持一致,避免遗留特殊分支。
+     * 释放全部 D2D 位图但保留条目(尺寸/状态/网络原始字节仍在)。用于渲染目标重建
+     * (D2DERR_RECREATE_TARGET / DPI 变化)——位图绑定在旧渲染目标上,必须丢弃,
      * 但布局依赖的尺寸信息保留下来,重新解码后几何不变,不会造成滚动跳动。
      * @example renderer 在 ReleaseRenderTarget 时调用 cache.ReleaseAllBitmaps();
      */

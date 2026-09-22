@@ -1,4 +1,4 @@
-# markair 主程序目标：把窗口 + GDI+/DirectWrite + Arena + md4c 链接到一起。
+# markair 主程序目标：把窗口 + D2D + DirectWrite + Arena + md4c 链接到一起。
 add_executable(markair WIN32
     app/main.cpp
     app/bench.cpp
@@ -25,7 +25,6 @@ add_executable(markair WIN32
     layout/layout.cpp
     layout/table.cpp
     render/renderer.cpp
-    render/gdi_target.cpp
     render/theme.cpp
     hl/languages.cpp
     hl/lexer.cpp
@@ -55,7 +54,7 @@ add_executable(markair WIN32
 # uxtheme:T48 追加,原生滚动条深浅色(SetWindowTheme),同样走 /DELAYLOAD,
 # 链接期仍需要 uxtheme.lib。
 target_link_libraries(markair PRIVATE
-    md4c lunasvg gdiplus dwrite imm32 shell32 psapi ole32 winhttp pathcch dwmapi uxtheme delayimp)
+    md4c lunasvg d2d1 dwrite imm32 shell32 psapi ole32 winhttp pathcch dwmapi uxtheme delayimp)
 
 # 主代码在所有配置下都要求 /W4 零警告；Release 追加体积/速度优化选项。
 target_compile_options(markair PRIVATE

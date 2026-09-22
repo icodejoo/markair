@@ -1,7 +1,6 @@
 #include "cache.h"
 
-#include <objidl.h>
-#include <gdiplus.h>
+#include <d2d1.h>
 
 namespace markair {
 
@@ -115,11 +114,11 @@ const ImageCacheEntry* ImageCache::Find(StrSlice key) const {
     return &entries_[idx];
 }
 
-const ImageCacheEntry* ImageCache::Put(StrSlice key, Gdiplus::Bitmap* bitmap, u32 width, u32 height,
+const ImageCacheEntry* ImageCache::Put(StrSlice key, ID2D1Bitmap* bitmap, u32 width, u32 height,
                                         ImageStatus status, bool wasDownsampled,
                                         u32 originalWidth, u32 originalHeight) {
     if (!arena_ || !buckets_ || !entries_) {
-        if (bitmap) delete bitmap;  // 缓存不可用时也不能泄漏位图
+        if (bitmap) bitmap->Release();  // 缓存不可用时也不能泄漏位图
         return nullptr;
     }
 
@@ -131,7 +130,7 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, Gdiplus::Bitmap* bitmap, u3
     u64 hash = HashImageKey(key);
     u32 slot = ProbeSlot(key, hash);
     if (slot == kEmptySlot) {
-        if (bitmap) delete bitmap;
+        if (bitmap) bitmap->Release();
         return nullptr;
     }
 
@@ -141,7 +140,7 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, Gdiplus::Bitmap* bitmap, u3
         ImageCacheEntry& e = entries_[idx];
         if (e.bitmap) {
             totalBytes_ -= DecodedByteSize(e.width, e.height);
-            delete e.bitmap;
+            e.bitmap->Release();
         }
         e.bitmap = bitmap;
         e.status = status;
@@ -159,13 +158,13 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, Gdiplus::Bitmap* bitmap, u3
     }
 
     if (!GrowIfNeeded()) {
-        if (bitmap) delete bitmap;
+        if (bitmap) bitmap->Release();
         return nullptr;
     }
     // 扩容后桶位置变了,重新定位一次。
     slot = ProbeSlot(key, hash);
     if (slot == kEmptySlot) {
-        if (bitmap) delete bitmap;
+        if (bitmap) bitmap->Release();
         return nullptr;
     }
 
@@ -174,7 +173,7 @@ const ImageCacheEntry* ImageCache::Put(StrSlice key, Gdiplus::Bitmap* bitmap, u3
         ImageCacheEntry* newEntries = static_cast<ImageCacheEntry*>(
             arena_->Alloc(sizeof(ImageCacheEntry) * newCapacity, alignof(ImageCacheEntry)));
         if (!newEntries) {
-            if (bitmap) delete bitmap;
+            if (bitmap) bitmap->Release();
             return nullptr;
         }
         for (u32 i = 0; i < entryCount_; ++i) newEntries[i] = entries_[i];
@@ -210,7 +209,7 @@ bool ImageCache::ReleaseBitmap(StrSlice key) {
     if (!e.bitmap) return false;
     u64 bytes = DecodedByteSize(e.width, e.height);
     totalBytes_ = (totalBytes_ >= bytes) ? (totalBytes_ - bytes) : 0ull;
-    delete e.bitmap;
+    e.bitmap->Release();
     e.bitmap = nullptr;
     // width/height/status/remoteBytes 刻意保留:布局尺寸常驻,滚回来重新解码后几何不变。
     return true;
@@ -252,7 +251,7 @@ const u8* ImageCache::FindRemoteBytes(StrSlice key, u32* outLen) const {
 void ImageCache::ReleaseAllBitmaps() {
     for (u32 i = 0; i < entryCount_; ++i) {
         if (entries_[i].bitmap) {
-            delete entries_[i].bitmap;
+            entries_[i].bitmap->Release();
             entries_[i].bitmap = nullptr;
         }
     }
