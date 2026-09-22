@@ -1,6 +1,9 @@
-// T46 覆盖测试:调色板(Palette)体积、槽位是否显式赋值、light/dark 主背景与
+// T46 覆盖测试:调色板(Palette)槽位是否显式赋值、light/dark 主背景与
 // 正文对比度是否达标(WCAG 相对亮度公式)。ContrastRatio 本身也顺带单测覆盖。
 // T49 追加:验证"切换主题不触发 Relayout"——见文件末尾。
+// 2026-09-22:原本这里还有一条 sizeof(Palette) 体积硬线门禁,因为长期被
+// CI 缓存 bug 掩盖导致失效、期间字段数已实际超标,用户裁决直接去掉这条
+// 门禁,不再对 Palette 体积设硬性上限。
 #include "markair_test.h"
 #include "../src/render/theme.h"
 #include "../src/render/renderer.h"
@@ -62,15 +65,6 @@ int FirstUnassignedSlot(const Palette& p) {
 }
 
 }  // namespace
-
-// 用例:sizeof(Palette) 不超过验收给的字节上限——2026-09-19 代码块对齐 GitHub
-// 样式新增 codeBorder 槽位,由 720 上调到 736
-// (46 个 D2D1_COLOR_F * 16 字节 = 736,刚好顶格),防止后续再无节制地
-// 往里堆槏位。
-MARKAIR_TEST(Theme_PaletteSizeWithinBudget) {
-    size_t paletteSize = sizeof(Palette);
-    MARKAIR_CHECK(paletteSize <= 736);
-}
 
 // 用例:浅色调色板每个槽位都已显式赋值,不残留透明黑默认值。
 MARKAIR_TEST(Theme_LightPaletteFullyAssigned) {
