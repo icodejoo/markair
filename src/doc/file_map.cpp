@@ -9,7 +9,20 @@ namespace markair {
 FileMap::FileMap() : file_(nullptr), mapping_(nullptr), view_(nullptr), size_(0) {}
 
 FileMapError FileMap::Open(const wchar_t* path) {
-    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+    // 只读打开: 允许其他进程同时读/写/重命名/删除这个文件——本类只是把它映射进来
+    // 查看,不需要独占。此前只给 FILE_SHARE_READ,导致外部编辑器/工具在文件被
+    // markair 打开查看期间既不能保存修改也不能重命名覆盖(重命名需要对方持有
+    // FILE_SHARE_DELETE),对一个纯阅读器来说是不必要的独占锁。
+    //
+    // Read-only open: allow other processes to concurrently read/write/rename/
+    // delete this file — this class only memory-maps it for viewing and needs
+    // no exclusivity. Previously only FILE_SHARE_READ was granted, which meant
+    // external editors/tools couldn't save or rename-over the file while
+    // markair had it open for viewing (rename requires the other handle to
+    // have granted FILE_SHARE_DELETE) — unnecessary exclusivity for a
+    // read-only viewer.
+    HANDLE file = CreateFileW(path, GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return FileMapError::NotFound;
