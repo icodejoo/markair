@@ -390,7 +390,7 @@ ImageStatus ImageResidencyManager::DecodeNow(const ImageBox& box) {
             return ImageStatus::Failed;
         }
         if (isSvg) {
-            // SVG 走只读文件映射零拷贝取字节,再喂给 lunasvg——不复用 WIC 那条
+            // SVG 走 FileMap 只读取字节,再喂给 lunasvg——不复用 WIC 那条
             // CreateDecoderFromFilename 路径(WIC 本身不认识 svg)。
             FileMap fm;
             if (fm.Open(path) == FileMapError::None) {

@@ -3647,7 +3647,7 @@ HWND FindAnyMainWindow() {
     return found;
 }
 
-void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item) {
+bool ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item) {
     // MB_DEFBUTTON2:把默认焦点放在"否"上——这是一个删除确认框,误按回车/
     // 空格不应该触发删除这个有损操作,只有显式选"是"才删除。
     //
@@ -3656,15 +3656,16 @@ void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item
     // action; only an explicit "Yes" choice removes the entry.
     int choice = MessageBoxW(hwnd, L"文件不存在，是否从历史记录中删除？", L"提示",
                              MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
-    if (choice == IDYES) {
-        RemoveRecentFileAt(state->recentFiles, item);
-        // 走去抖写盘(与 AddRecentFile 一致),而不是每次删除都同步落盘。
-        //
-        // Route through the debounced save (consistent with AddRecentFile)
-        // instead of synchronously hitting disk on every delete.
-        RequestRecentFilesSave(hwnd, state);
-        InvalidateRect(hwnd, nullptr, FALSE);
-    }
+    if (choice != IDYES) return false;
+
+    RemoveRecentFileAt(state->recentFiles, item);
+    // 走去抖写盘(与 AddRecentFile 一致),而不是每次删除都同步落盘。
+    //
+    // Route through the debounced save (consistent with AddRecentFile)
+    // instead of synchronously hitting disk on every delete.
+    RequestRecentFilesSave(hwnd, state);
+    InvalidateRect(hwnd, nullptr, FALSE);
+    return true;
 }
 
 bool EnablePerMonitorV2DpiAwareness() {

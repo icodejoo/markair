@@ -212,13 +212,15 @@ HANDLE AcquireFileMutexAndMaybeFocusExisting(uint64_t pathHash) {
     return mutex;
 }
 
-// 从磁盘映射文件加载并解析为文档模型:编码嗅探 -> (必要时)解码为 UTF-16
-// 再转回 UTF-8 -> md4c 解析。UTF-8(含 BOM)文件直接复用映射内存,不绕一圈
-// UTF-16,减少一次转换。
+// 从磁盘加载文件并解析为文档模型:编码嗅探 -> (必要时)解码为 UTF-16
+// 再转回 UTF-8 -> md4c 解析。UTF-8(含 BOM)文件直接复用 fileMap 读入的
+// 缓冲区,不绕一圈 UTF-16,减少一次转换。
 //
-// `fileMap` 的映射视图与返回的 Document::source 可能共享同一段内存,调用方
+// `fileMap` 自有缓冲区与返回的 Document::source 可能共享同一段内存,调用方
 // 须保证 `fileMap` 的生命周期覆盖 Document 的整个使用期(本文件里通过让
-// fileMap 与 docArena 一样活到 wWinMain 结尾来满足这一点)。
+// fileMap 与 docArena 一样活到 wWinMain 结尾来满足这一点)。FileMap::Open
+// 内部只在读取期间短暂内存映射文件,不会让这段映射存活到这里——不影响
+// markair 打开文件查看期间外部程序对该文件的保存/替换。
 markair::Document LoadMarkdownFile(markair::FileMap* fileMap, markair::Arena* arena) {
     markair::StrSlice raw = fileMap->Data();
     markair::EncodingDetection detection = markair::DetectEncoding(raw);
@@ -877,13 +879,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     bool autoOpenedFromHistory = false;
     const wchar_t* effectiveFilePath = benchArgs.filePath;
     // 无命令行参数时,依次尝试历史记录里的条目,直到找到一个真正能打开的
-    // 文件(裁决 1.3):打不开的条目弹窗询问是否删除,与手动点击该条目失败
-    // 时完全相同的确认框(见 window.cpp::ConfirmAndRemoveMissingHistoryEntry),
-    // 用户选择保留则停止尝试,退化为欢迎屏(1.1)。此刻窗口尚未创建,
-    // MessageBoxW 用 nullptr 属主(合法,只是不会居中在某个窗口上)。
+    // 文件(裁决 1.3),找不到就退化为欢迎屏(1.1)。这里只做"探测"——不弹
+    // 任何确认框、不删除任何条目,纯粹为了决定 effectiveFilePath/hasTarget,
+    // 因为窗口还没创建,过早弹 MessageBoxW 会导致应用在完全启动之前就先
+    // 冒出一个弹窗(用户反馈:提示太早了)。前面(pendingMissingHistoryCount
+    // 条)真正跳过的缺失条目,留到窗口创建并显示之后再统一走
+    // ConfirmAndRemoveMissingHistoryEntry 补问,与手动点击该条目失败时完全
+    // 相同的确认框——只是问的时机推迟,不是不问。
+    markair::u32 pendingMissingHistoryCount = 0;
     if (!hasTarget && !benchArgs.benchEnabled) {
-        while (g_recentFiles.count > 0) {
-            const wchar_t* candidate = g_recentFiles.entries[0].path;
+        for (markair::u32 i = 0; i < g_recentFiles.count; ++i) {
+            const wchar_t* candidate = g_recentFiles.entries[i].path;
             markair::FileMap probe;
             bool candidateOpenable = probe.Open(candidate) == markair::FileMapError::None;
             if (candidateOpenable) {
@@ -891,14 +897,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
                 effectiveFilePath = candidate;
                 hasTarget = true;
                 autoOpenedFromHistory = true;
+                pendingMissingHistoryCount = i;
                 break;
             }
-            int choice = MessageBoxW(nullptr, L"文件不存在，是否从历史记录中删除？", L"提示",
-                                     MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
-            if (choice != IDYES) break;  // 用户选择保留,不继续尝试下一条
-            markair::RemoveRecentFileAt(&g_recentFiles, 0);
-            markair::SaveRecentFiles(g_recentFiles);  // 窗口尚未创建,直接同步落盘
         }
+        if (!hasTarget) pendingMissingHistoryCount = g_recentFiles.count;
     }
 
     // T13:同一文件路径的命名互斥体 + 尽力而为的"前置已有窗口"。每个文件
@@ -1259,6 +1262,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     }
     if (needsRecentFilesSave) {
         markair::RequestRecentFilesSave(hwnd, &windowState);
+    }
+
+    // 窗口已创建并显示(CreateMainWindow 内部已 ShowWindow+UpdateWindow),
+    // 现在才补问前面探测阶段静默跳过的缺失历史条目——与手动点击该条目失败
+    // 时完全相同的确认框(见 ConfirmAndRemoveMissingHistoryEntry),只是把
+    // 弹出时机从"窗口创建之前"挪到"应用完整打开之后"。用户选择保留(返回
+    // false)则立即停止,不再追问剩下的条目,退化为欢迎屏/仅移除已确认的
+    // 那几条。
+    if (windowState.recentFiles) {
+        for (markair::u32 i = 0; i < pendingMissingHistoryCount; ++i) {
+            if (!markair::ConfirmAndRemoveMissingHistoryEntry(hwnd, &windowState, 0)) break;
+        }
     }
 
     // 未带文件参数、自动打开历史记录第一条时的收尾(1.2):目标文件在上面

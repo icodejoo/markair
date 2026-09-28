@@ -469,8 +469,17 @@ void ToggleFolderPanel(HWND hwnd, WindowState* state);
  * @param item History entry index whose file is missing.
  *
  *   目标文件已不存在的历史记录条目下标。
+ *
+ * @return true if the user chose Yes and the entry was removed; false if the
+ *         user chose to keep it. Callers that retry over several leading
+ *         entries (e.g. startup auto-open) use this to stop at the first
+ *         "keep" answer instead of asking about every remaining one.
+ *
+ *   用户选"是"并成功删除该条目时返回 true;用户选择保留时返回 false。
+ *   需要连续对多条前导条目重试的调用方(如启动时自动打开历史第一条)靠这个
+ *   返回值在第一次"保留"应答处停止,不继续追问剩下的条目。
  */
-void ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item);
+bool ConfirmAndRemoveMissingHistoryEntry(HWND hwnd, WindowState* state, u32 item);
 
 /**
  * Request a debounced (500ms) write of the recent-files history to disk.
